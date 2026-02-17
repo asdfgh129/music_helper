@@ -3,11 +3,17 @@
 网易云音乐API客户端
 """
 import requests
-from time import time
+import time
 from random import randint
 
 from ..crypto import weEncrypt, linuxEncrypt
-from ..utils import timestamp_to_dt
+
+
+def timestamp_to_dt(timestamp, format_type="%Y-%m-%d %H:%M:%S"):
+    """时间戳转日期时间字符串"""
+    time_local = time.localtime(timestamp)
+    dt = time.strftime(format_type, time_local)
+    return dt
 
 
 userAgents = [

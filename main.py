@@ -30,7 +30,7 @@ try:
     from mutagen.wave import WAVE as _wave
     from mutagen.apev2 import APEv2File as _apev2file
     from mutagen.oggvorbis import OggVorbis as _oggvorbis
-    from mutagen.id3 import TIT2 as _tit2, TPE1 as _tpe1, TALB as _talb, TDRC as _tdrc, TCON as _tcon
+    from mutagen.id3._frames import TIT2 as _tit2, TPE1 as _tpe1, TALB as _talb, TDRC as _tdrc, TCON as _tcon
     mutagen_available = True
 except ImportError:
     pass
@@ -48,10 +48,31 @@ TDRC = _tdrc
 TCON = _tcon
 
 try:
-    from source_finder import guess_song_url
+    from Decrypto.source_finder import guess_song_url
 except ImportError:
     def guess_song_url(file_basename: str) -> str | None:
         return None
+
+# 尝试导入声纹匹配和音乐标签更新模块
+fingerprint_matcher_available = False
+music_tagger_available = False
+FingerprintMatcher: Any = None
+QQMusicApi: Any = None
+NetEaseMusicClient: Any = None
+MusicTagger: Any = None
+try:
+    from Fingerprint.musicbrainz_matcher import FingerprintMatcher, format_recording_info
+    from music_tagger.platforms.qqmusic import QQMusicApi
+    from music_tagger.platforms.netease import NetEaseMusicClient
+    fingerprint_matcher_available = True
+except ImportError:
+    pass
+
+try:
+    from music_tagger.core import MusicTagger
+    music_tagger_available = True
+except ImportError:
+    pass
 
 # ==================== 目录配置 ====================
 # 主目录
@@ -336,6 +357,182 @@ def has_lrc_file(music_filepath):
     lrc_path = os.path.splitext(music_filepath)[0] + '.lrc'
     return os.path.exists(lrc_path)
 
+def parse_musicbrainz_recording(recording, filename):
+    """解析MusicBrainz录音记录为标签字典"""
+    tags = {}
+
+    try:
+        # 歌曲标题
+        title = recording.get('title', '')
+        if title:
+            tags['title'] = title
+
+        # 艺术家
+        artist_credit = recording.get('artist-credit', [])
+        if artist_credit:
+            artists = []
+            for credit in artist_credit:
+                artist = credit.get('artist', {})
+                artists.append(artist.get('name', ''))
+            tags['artist'] = '; '.join(artists)
+
+        # 专辑
+        releases = recording.get('releases', [])
+        if releases:
+            # 选择第一个发行的专辑
+            album = releases[0].get('title', '')
+            if album:
+                tags['album'] = album
+
+        # 年份
+        if releases:
+            date = releases[0].get('date', '')
+            if date:
+                # 提取年份（日期格式可能是YYYY-MM-DD或YYYY）
+                year_match = re.search(r'(\d{4})', date)
+                if year_match:
+                    tags['year'] = year_match.group(1)
+
+        # 流派（MusicBrainz不一定有）
+        genre = recording.get('genre', '')
+        if genre:
+            tags['genre'] = genre
+
+        return tags if tags else None
+
+    except Exception as e:
+        main_logger.error(f'解析MusicBrainz记录失败: {e}')
+        return None
+
+def fetch_qq_music_tags(qq_api, title, artist, filename):
+    """从QQ音乐获取标签信息"""
+    try:
+        # 构建搜索关键词
+        query = f"{artist} {title}".strip() if artist else title
+
+        # 搜索歌曲
+        search_result = qq_api.getQQMusicSearch(query, page=1, size=5)
+
+        if search_result and search_result.get('data'):
+            songs = search_result['data']
+
+            # 查找最佳匹配
+            for song in songs:
+                song_title = song.get('name', '')
+                song_artists = song.get('singer', [])
+                song_artist_names = ','.join([s.get('name', '') for s in song_artists])
+
+                # 简单匹配逻辑
+                title_match = title.lower() in song_title.lower() or song_title.lower() in title.lower()
+
+                artist_match = True
+                if artist:
+                    artist_lower = artist.lower()
+                    song_artist_lower = song_artist_names.lower()
+                    # 检查是否有艺术家名称匹配
+                    artist_match = any(a.lower() in song_artist_lower or song_artist_lower in a.lower()
+                                     for a in artist.replace(';', ',').split(','))
+
+                if title_match and (not artist or artist_match):
+                    # 获取详细信息
+                    album = song.get('album', {}).get('title', '')
+                    mid = song.get('mid', '')
+
+                    # 构建标签信息
+                    tags = {
+                        'title': song_title,
+                        'artist': song_artist_names,
+                        'album': album,
+                        'year': '',
+                        'genre': ''
+                    }
+
+                    # 获取封面URL
+                    if mid:
+                        tags['album_img'] = f"http://y.qq.com/music/photo_new/T002R300x300M000{mid}.jpg"
+
+                    return tags
+
+        return None
+
+    except Exception as e:
+        main_logger.error(f'从QQ音乐获取标签失败: {e}')
+        return None
+
+def fetch_netease_tags(netease_api, title, artist, filename):
+    """从网易云音乐获取标签信息"""
+    try:
+        # 搜索歌曲
+        songs = netease_api.fetch_id3_by_title(title)
+
+        if songs:
+            # 查找最佳匹配
+            for song in songs:
+                song_title = song.get('name', '')
+                song_artist = song.get('artist', '')
+                song_album = song.get('album', '')
+                song_year = song.get('year', '')
+                song_album_img = song.get('album_img', '')
+
+                # 简单匹配逻辑
+                title_match = title.lower() in song_title.lower() or song_title.lower() in title.lower()
+
+                artist_match = True
+                if artist:
+                    artist_lower = artist.lower()
+                    song_artist_lower = song_artist.lower()
+                    # 检查是否有艺术家名称匹配
+                    artist_match = any(a.lower() in song_artist_lower or song_artist_lower in a.lower()
+                                     for a in artist.replace(';', ',').split(','))
+
+                if title_match and (not artist or artist_match):
+                    # 构建标签信息
+                    tags = {
+                        'title': song_title,
+                        'artist': song_artist,
+                        'album': song_album,
+                        'year': song_year,
+                        'genre': ''
+                    }
+
+                    # 添加封面
+                    if song_album_img:
+                        tags['album_img'] = song_album_img
+
+                    return tags
+
+        return None
+
+    except Exception as e:
+        main_logger.error(f'从网易云音乐获取标签失败: {e}')
+        return None
+
+def fetch_album_cover(qq_api, netease_api, title, artist, album):
+    """从音乐平台获取专辑封面"""
+    try:
+        # 先尝试QQ音乐
+        if qq_api:
+            search_result = qq_api.getQQMusicSearch(f"{artist} {title}".strip(), page=1, size=1)
+            if search_result and search_result.get('data'):
+                song = search_result['data'][0]
+                mid = song.get('mid', '')
+                if mid:
+                    return f"http://y.qq.com/music/photo_new/T002R300x300M000{mid}.jpg"
+
+        # 再尝试网易云音乐
+        if netease_api:
+            songs = netease_api.fetch_id3_by_title(title)
+            if songs:
+                album_img = songs[0].get('album_img', '')
+                if album_img:
+                    return album_img
+
+        return None
+
+    except Exception as e:
+        main_logger.error(f'获取专辑封面失败: {e}')
+        return None
+
 # ==================== 核心功能 ====================
 def scan_music_files(directories, month=None):
     """扫描指定目录中的音乐文件"""
@@ -466,56 +663,39 @@ def decrypt_qq_vip(month=None):
     """解密QQ音乐VIP文件"""
     main_logger.info('开始处理QQ音乐VIP文件')
     op_logger, log_path = create_operation_log('QQ')
-    
+
     # 扫描VIP目录
     vip_files = scan_music_files([QQ_VIP_DIR], month)
-    
+
     if not vip_files:
         main_logger.info('没有找到需要处理的QQ VIP文件')
         return 0
-    
+
     # 移动VIP文件到临时目录
     main_logger.info(f'移动 {len(vip_files)} 个VIP文件到临时目录')
     move_files_to_temp(vip_files, QQ_TMP_DIR)
-    
-    # 运行qq.py进行解密
+
+    # 直接导入qq.py的run_decrypt函数并调用
     main_logger.info('运行qq.py解密QQ音乐文件')
     op_logger.info(f'开始解密，输入目录: {QQ_TMP_DIR}，输出目录: {TEMP_COMPLETED_DIR}')
-    
+
     try:
-        # 构建命令
-        cmd = [sys.executable, QQ_PY, '-i', QQ_TMP_DIR, '-o', TEMP_COMPLETED_DIR]
-        main_logger.info(f'执行命令: {" ".join(cmd)}')
-        
-        # 执行解密程序
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='ignore'
-        )
-        
-        # 记录输出
-        if result.stdout:
-            op_logger.info(f'标准输出:\n{result.stdout}')
-        if result.stderr:
-            op_logger.warning(f'标准错误:\n{result.stderr}')
-        
-        op_logger.info(f'返回码: {result.returncode}')
-        
+        # 导入Decrypto/qq.py模块
+        import Decrypto.qq as qq
+        qq.run_decrypt(QQ_TMP_DIR, TEMP_COMPLETED_DIR)
+
         # 统计完成的文件
         completed_count = 0
         for root, dirs, files in os.walk(TEMP_COMPLETED_DIR):
             for file in files:
                 if os.path.splitext(file)[1].lower() in AUDIO_EXTENSIONS:
                     completed_count += 1
-        
+
         op_logger.info(f'解密完成，共处理 {completed_count} 个文件')
         main_logger.info(f'QQ VIP解密完成: {completed_count} 个文件')
-        
+
         return completed_count
-        
+
     except Exception as e:
         error_msg = f'解密QQ音乐失败: {e}'
         main_logger.error(error_msg)
@@ -562,26 +742,47 @@ def update_tags_from_fingerprint():
     """根据声纹信息从在线数据库更新标签"""
     main_logger.info('开始从声纹信息更新标签')
     op_logger, log_path = create_operation_log('UpdateTags')
-    
+
     if not mutagen_available:
         main_logger.error('mutagen库未安装，无法更新标签')
-        return 0, 0
-    
+        return 0, 0, 0
+
     success_count = 0
     fail_count = 0
     incomplete_tags = []
     failed_files = []
-    
+    fingerprint_success_count = 0
+    online_success_count = 0
+
+    # 初始化指纹匹配器
+    fingerprint_matcher = None
+    if fingerprint_matcher_available:
+        fingerprint_matcher = FingerprintMatcher()
+        main_logger.info('声纹匹配器已初始化')
+    else:
+        main_logger.warning('声纹匹配模块不可用，将跳过指纹查询')
+
+    # 初始化音乐API客户端
+    qq_api = None
+    netease_api = None
+    if fingerprint_matcher_available:
+        try:
+            qq_api = QQMusicApi()
+            netease_api = NetEaseMusicClient()
+            main_logger.info('音乐API客户端已初始化')
+        except Exception as e:
+            main_logger.warning(f'音乐API客户端初始化失败: {e}')
+
     # 扫描临时完成目录
     for root, dirs, files in os.walk(TEMP_COMPLETED_DIR):
         for file in files:
             ext = os.path.splitext(file)[1].lower()
             if ext not in AUDIO_EXTENSIONS:
                 continue
-            
+
             filepath = os.path.join(root, file)
             op_logger.info(f'处理文件: {filepath}')
-            
+
             try:
                 # 获取当前标签
                 current_tags = get_music_metadata(filepath)
@@ -595,16 +796,113 @@ def update_tags_from_fingerprint():
                         'year': '',
                         'genre': ''
                     }
-                
+
+                # 第一步：尝试使用声纹查询MusicBrainz
+                tag_updated = False
+                if fingerprint_matcher and fingerprint_matcher_available:
+                    try:
+                        op_logger.info(f'  尝试声纹查询: {file}')
+                        result = fingerprint_matcher.match_file(filepath)
+
+                        if result.success and result.recordings:
+                            # 选择最佳匹配（分数最高的）
+                            best_recording = max(result.recordings, key=lambda x: x.get('score', 0))
+                            score = best_recording.get('score', 0)
+
+                            if score >= 50:  # 分数阈值
+                                op_logger.info(f'  声纹匹配成功 (分数: {score:.1f}%)')
+
+                                # 解析MusicBrainz记录
+                                new_tags = parse_musicbrainz_recording(best_recording, file)
+
+                                if new_tags:
+                                    # 更新标签
+                                    set_music_metadata(filepath, new_tags)
+                                    tag_updated = True
+                                    fingerprint_success_count += 1
+                                    op_logger.info(f'  标签已从MusicBrainz更新: {new_tags.get("artist")} - {new_tags.get("title")}')
+
+                                # 尝试下载封面
+                                if music_tagger_available and new_tags.get('album'):
+                                    try:
+                                        tagger = MusicTagger(filepath)
+                                        album_artists = []
+                                        for artist_credit in best_recording.get('artist-credit', []):
+                                            album_artists.append(artist_credit.get('artist', {}).get('name', ''))
+
+                                        # 从QQ音乐或网易云音乐获取封面
+                                        cover_url = fetch_album_cover(
+                                            qq_api, netease_api,
+                                            new_tags.get('title', ''),
+                                            new_tags.get('artist', ''),
+                                            new_tags.get('album', '')
+                                        )
+
+                                        if cover_url:
+                                            op_logger.info(f'  已下载封面: {cover_url[:50]}...')
+                                    except Exception as e:
+                                        op_logger.warning(f'  下载封面失败: {e}')
+                            else:
+                                op_logger.info(f'  声纹匹配分数较低 ({score:.1f}%)，尝试其他方式')
+                        else:
+                            op_logger.info(f'  声纹查询无结果，尝试其他方式')
+                    except Exception as e:
+                        op_logger.warning(f'  声纹查询失败: {e}')
+
+                # 第二步：如果声纹查询失败，使用歌曲名和歌手从音乐网站查询
+                if not tag_updated and qq_api and netease_api:
+                    try:
+                        op_logger.info(f'  尝试在线音乐平台查询: {file}')
+
+                        # 获取查询信息（优先使用标签信息，否则使用文件名）
+                        title = current_tags.get('title', '')
+                        artist = current_tags.get('artist', '')
+
+                        if not title:
+                            artist, title = parse_filename(file)
+
+                        if title:
+                            # 优先尝试QQ音乐
+                            tag_info = fetch_qq_music_tags(qq_api, title, artist, file)
+                            source = 'QQ音乐'
+
+                            # 如果QQ音乐失败，尝试网易云音乐
+                            if not tag_info:
+                                tag_info = fetch_netease_tags(netease_api, title, artist, file)
+                                source = '网易云音乐'
+
+                            if tag_info:
+                                # 更新标签
+                                set_music_metadata(filepath, tag_info)
+                                tag_updated = True
+                                online_success_count += 1
+                                op_logger.info(f'  标签已从{source}更新: {tag_info.get("artist")} - {tag_info.get("title")}')
+
+                                # 尝试下载封面
+                                if music_tagger_available and tag_info.get('album_img'):
+                                    try:
+                                        tagger = MusicTagger(filepath)
+                                        tagger.update_tags({
+                                            'album_img': tag_info['album_img']
+                                        }, is_raw_thumbnail=False)
+                                        op_logger.info(f'  已从{source}下载封面')
+                                    except Exception as e:
+                                        op_logger.warning(f'  下载封面失败: {e}')
+                        else:
+                            op_logger.warning(f'  无法确定歌曲名称，跳过在线查询')
+                    except Exception as e:
+                        op_logger.warning(f'  在线查询失败: {e}')
+
                 # 检查标签完整性
+                updated_tags = get_music_metadata(filepath) if tag_updated else current_tags
                 missing_fields = []
-                if not current_tags.get('title'):
+                if updated_tags is not None and not updated_tags.get('title'):
                     missing_fields.append('歌曲名')
-                if not current_tags.get('artist'):
+                if updated_tags is not None and not updated_tags.get('artist'):
                     missing_fields.append('歌手')
-                if not current_tags.get('year'):
+                if updated_tags is not None and not updated_tags.get('year'):
                     missing_fields.append('年份')
-                
+
                 # 检查封面（仅对MP3和FLAC）
                 has_cover = False
                 if ext == '.mp3':
@@ -621,48 +919,48 @@ def update_tags_from_fingerprint():
                             has_cover = True
                     except Exception:
                         pass
-                
+
                 if not has_cover:
                     missing_fields.append('封面')
-                
+
                 if missing_fields:
                     incomplete_tags.append({
                         'filepath': filepath,
                         'filename': file,
                         'missing': missing_fields,
-                        'current_tags': current_tags
+                        'current_tags': updated_tags
                     })
                     op_logger.warning(f'标签不完整: {file} - 缺少: {", ".join(missing_fields)}')
-                
-                # TODO: 实现在线数据库查询逻辑
-                # 这里预留接口，可以根据声纹信息查询MusicBrainz或其他数据库
-                
+
                 success_count += 1
-                op_logger.info(f'标签更新成功: {file}')
-                
+                op_logger.info(f'处理完成: {file}')
+
             except Exception as e:
                 fail_count += 1
                 failed_files.append({'filepath': filepath, 'error': str(e)})
                 op_logger.error(f'标签更新失败 {file}: {e}')
-    
+
     # 记录统计信息
     op_logger.info(f'\n{"="*50}')
     op_logger.info(f'标签更新统计:')
+    op_logger.info(f'处理总数: {success_count + fail_count}')
     op_logger.info(f'成功: {success_count}')
     op_logger.info(f'失败: {fail_count}')
-    
+    op_logger.info(f'  - 声纹匹配成功: {fingerprint_success_count}')
+    op_logger.info(f'  - 在线查询成功: {online_success_count}')
+
     if incomplete_tags:
         op_logger.info(f'\n标签不完整的文件 ({len(incomplete_tags)} 个):')
         for item in incomplete_tags:
             op_logger.info(f"  - {item['filename']}: 缺少 {', '.join(item['missing'])}")
-    
+
     if failed_files:
         op_logger.info(f'\n更新失败的文件 ({len(failed_files)} 个):')
         for item in failed_files:
             op_logger.info(f"  - {item['filepath']}: {item['error']}")
-    
-    main_logger.info(f'标签更新完成: 成功 {success_count}, 失败 {fail_count}')
-    return success_count, fail_count
+
+    main_logger.info(f'标签更新完成: 成功 {success_count}, 失败 {fail_count}, 声纹 {fingerprint_success_count}, 在线 {online_success_count}')
+    return success_count, fail_count, fingerprint_success_count + online_success_count
 
 def check_filename_consistency(check_master=True, check_temp=True):
     """检查文件名与标签的一致性"""
@@ -1104,7 +1402,8 @@ def main():
         main_logger.info('\n' + '='*60)
         main_logger.info('步骤 3/7: 更新标签信息')
         main_logger.info('='*60)
-        update_tags_from_fingerprint()
+        success, fail, tag_success = update_tags_from_fingerprint()
+        main_logger.info(f'标签更新汇总: 成功 {success}, 失败 {fail}, 标签更新 {tag_success}')
     
     # 步骤4: 检查文件
     if not args.skip_check:

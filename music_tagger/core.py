@@ -4,21 +4,43 @@
 """
 import os
 import base64
-import time
-from concurrent.futures import ThreadPoolExecutor
 
-# 假设music_tag模块已安装，或从原项目component目录引用
+# music_tag模块用于支持多种音乐格式的标签读写
 try:
-    from component.music_tag import load_file
+    from music_tag import load_file
 except ImportError:
     raise ImportError(
-        "需要安装 music_tag 模块。请从原项目复制 component/music_tag 目录到 Python 路径中，"
-        "或安装相应的音乐标签处理库。"
+        "需要安装 music_tag 模块。请运行: pip install music-tag"
     )
 
 from .platforms import MusicResource
 from .matcher import match_score, match_artist
-from .utils import ConstantTemplate, timestamp_to_dt
+
+
+def resolve_template(template_str, var_dict):
+    """
+    解析模板字符串，替换 ${变量} 为实际值
+    
+    Args:
+        template_str: 模板字符串，如 "${title} - ${artist}"
+        var_dict: 变量字典，如 {"title": "歌名", "artist": "艺术家"}
+    
+    Returns:
+        解析后的字符串
+    """
+    import re
+    
+    if not isinstance(template_str, str):
+        return template_str
+    
+    # 匹配 ${variable} 格式
+    pattern = r'\$\{([^${}]+)\}'
+    
+    def replace_var(match):
+        key = match.group(1).strip()
+        return str(var_dict.get(key, match.group(0)))
+    
+    return re.sub(pattern, replace_var, template_str)
 
 
 class MusicTagger:
@@ -32,25 +54,35 @@ class MusicTagger:
             file_path: 音乐文件路径
         """
         self.file_path = file_path
-        self._file = load_file(file_path)
+        self._file = load_file(file_path, err='ignore')
         self._artwork_w = 0
         self._artwork_h = 0
         self._artwork_size = 0
 
+    def _get_tag(self, key, default=''):
+        """安全获取标签值"""
+        if self._file is None:
+            return default
+        try:
+            val = self._file[key]
+            return val.value if val is not None else default
+        except Exception:
+            return default
+
     @property
     def title(self):
         """歌曲标题"""
-        return self._file['title'].value
+        return self._get_tag('title')
 
     @property
     def artist(self):
         """艺术家"""
-        return self._file['artist'].value
+        return self._get_tag('artist')
 
     @property
     def album(self):
         """专辑"""
-        album_name = self._file['album'].value
+        album_name = self._get_tag('album')
         if not album_name:
             album_name = "未知专辑"
         return album_name
@@ -58,19 +90,19 @@ class MusicTagger:
     @property
     def albumartist(self):
         """专辑艺术家"""
-        return self._file['albumartist'].value
+        return self._get_tag('albumartist')
 
     @property
     def year(self):
         """年份"""
         try:
-            year = self._file['year'].value
+            year = self._get_tag('year', 0)
         except Exception:
             return 0
         try:
             year = int(year)
         except Exception:
-            year_list = year.split("-")
+            year_list = str(year).split("-")
             if year_list and year_list[0]:
                 try:
                     return int(year_list[0].replace(" ", ""))
@@ -81,7 +113,7 @@ class MusicTagger:
     @property
     def genre(self):
         """流派/类型"""
-        genre = self._file['genre'].value
+        genre = self._get_tag('genre')
         if genre:
             genre = genre.upper()
         else:
@@ -91,17 +123,22 @@ class MusicTagger:
     @property
     def comment(self):
         """评论"""
-        return self._file['comment'].value
+        return self._get_tag('comment')
 
     @property
     def lyrics(self):
         """歌词"""
-        return self._file['lyrics'].value
+        return self._get_tag('lyrics')
 
     @property
     def duration(self):
         """时长(秒)"""
-        return round(self._file['#length'].value, 2)
+        if self._file is None:
+            return 0.0
+        try:
+            return round(self._file['#length'].value, 2)
+        except Exception:
+            return 0.0
 
     @property
     def size(self):
@@ -111,12 +148,22 @@ class MusicTagger:
     @property
     def suffix(self):
         """文件格式"""
-        return self._file['#codec'].value
+        if self._file is None:
+            return "unknown"
+        try:
+            return self._file['#codec'].value
+        except Exception:
+            return "unknown"
 
     @property
     def bit_rate(self):
         """比特率"""
-        return int(self._file['#bitrate'].value / 1000)
+        if self._file is None:
+            return 0
+        try:
+            return int(self._file['#bitrate'].value / 1000)
+        except Exception:
+            return 0
 
     @property
     def track_number(self):
@@ -216,14 +263,14 @@ class MusicTagger:
         # 标题
         if tag_info.get("title"):
             if "${" in tag_info["title"]:
-                self._file["title"] = ConstantTemplate(tag_info["title"]).resolve_data(var_dict)
+                self._file["title"] = resolve_template(tag_info["title"], var_dict)
             else:
                 self._file["title"] = tag_info["title"]
 
         # 艺术家
         if tag_info.get("artist") is not None:
             if "${" in tag_info["artist"]:
-                artist = ConstantTemplate(tag_info["artist"]).resolve_data(var_dict)
+                artist = resolve_template(tag_info["artist"], var_dict)
             else:
                 artist = tag_info["artist"]
             artists = artist.split(",") if isinstance(artist, str) else [artist]
@@ -232,21 +279,21 @@ class MusicTagger:
         # 专辑
         if tag_info.get("album") is not None:
             if "${" in tag_info["album"]:
-                self._file["album"] = ConstantTemplate(tag_info["album"]).resolve_data(var_dict)
+                self._file["album"] = resolve_template(tag_info["album"], var_dict)
             else:
                 self._file["album"] = tag_info["album"]
 
         # 专辑艺术家
         if tag_info.get("albumartist"):
             if "${" in tag_info["albumartist"]:
-                self._file["albumartist"] = ConstantTemplate(tag_info["albumartist"]).resolve_data(var_dict)
+                self._file["albumartist"] = resolve_template(tag_info["albumartist"], var_dict)
             else:
                 self._file["albumartist"] = tag_info["albumartist"]
 
         # 碟片号
         if tag_info.get("discnumber"):
             if "${" in tag_info["discnumber"]:
-                discnumber = ConstantTemplate(tag_info["discnumber"]).resolve_data(var_dict)
+                discnumber = resolve_template(tag_info["discnumber"], var_dict)
             else:
                 discnumber = tag_info["discnumber"]
             try:
@@ -257,7 +304,7 @@ class MusicTagger:
         # 音轨号
         if tag_info.get("tracknumber"):
             if "${" in tag_info["tracknumber"]:
-                tracknumber = ConstantTemplate(tag_info["tracknumber"]).resolve_data(var_dict)
+                tracknumber = resolve_template(tag_info["tracknumber"], var_dict)
             else:
                 tracknumber = tag_info["tracknumber"]
             try:
@@ -379,7 +426,7 @@ class MusicTagger:
         # 重命名文件
         if tag_info.get("filename"):
             if "${" in tag_info["filename"]:
-                tag_info["filename"] = ConstantTemplate(tag_info["filename"]).resolve_data(var_dict)
+                tag_info["filename"] = resolve_template(tag_info["filename"], var_dict)
             if not tag_info["filename"].endswith(file_ext):
                 tag_info["filename"] = f"{tag_info['filename']}.{file_ext}"
             parent_path = os.path.dirname(self.file_path)
