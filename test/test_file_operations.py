@@ -12,6 +12,10 @@ import shutil
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# 初始化日志系统
+from utils import setup_logging
+setup_logging()
+
 from file_operations import (
     scan_music_files,
     move_files_to_temp,

@@ -7,7 +7,7 @@ import sys
 import argparse
 import time
 
-from utils import setup_logging, get_current_month, main_logger, log_file
+from utils import setup_logging, get_current_month, validate_month_format, main_logger, log_file
 from vip_decrypt import decrypt_netease_vip, decrypt_qq_vip
 from soundalike import run_soundalike_fingerprinting, check_database_consistency
 from tag_updater import update_tags_from_fingerprint
@@ -15,6 +15,7 @@ from file_operations import (
     check_filename_consistency, organize_by_year,
     move_netease_normal_files, move_qq_normal_files
 )
+from config import MAIN_DIR, TEMP_COMPLETED_DIR
 
 
 def main():
@@ -114,6 +115,9 @@ def main():
         month = get_current_month()
         main_logger.info(f'使用当前月份: {month}')
     else:
+        if not validate_month_format(month):
+            main_logger.error(f'月份格式错误: {month}，应为YYYYMM格式（如202406）')
+            sys.exit(1)
         main_logger.info(f'使用指定月份: {month}')
 
     # 记录开始时间
@@ -122,8 +126,16 @@ def main():
     main_logger.info('音乐文件管理系统 - 开始处理')
     main_logger.info('='*60)
 
-    # 步骤1: 处理VIP文件
-    if not args.skip_vip:
+    # 确定处理目录
+    if args.check_master:
+        target_dir = MAIN_DIR
+        main_logger.info(f'使用 check-master 模式，只处理主目录: {target_dir}')
+    else:
+        target_dir = TEMP_COMPLETED_DIR
+        main_logger.info(f'使用默认模式，只处理临时目录: {target_dir}')
+
+    # 步骤1: 解密VIP文件和移动普通文件（check-master模式下跳过）
+    if not args.skip_vip and not args.check_master:
         main_logger.info('\n' + '='*60)
         main_logger.info('步骤 1/7: 处理VIP文件')
         main_logger.info('='*60)
@@ -141,19 +153,29 @@ def main():
         main_logger.info(f'VIP处理完成: 网易 {netease_count} 个, QQ {qq_count} 个')
         main_logger.info(f'普通文件: 网易 {netease_normal_count} 个, QQ {qq_normal_count} 个')
 
+    if args.check_master:
+        main_logger.info('\n' + '='*60)
+        main_logger.info('check-master 模式: 跳过VIP文件解密和移动')
+        main_logger.info('='*60)
+
     # 步骤2: 声纹识别去重
     if not args.skip_fingerprint:
         main_logger.info('\n' + '='*60)
         main_logger.info('步骤 2/7: 声纹识别去重')
         main_logger.info('='*60)
-        run_soundalike_fingerprinting()
+        # check-master模式下不带--temp参数
+        if args.check_master:
+            from soundalike import run_soundalike_fingerprinting_without_temp
+            run_soundalike_fingerprinting_without_temp()
+        else:
+            run_soundalike_fingerprinting()
 
     # 步骤3: 更新标签
     if not args.skip_tag_update:
         main_logger.info('\n' + '='*60)
         main_logger.info('步骤 3/7: 更新标签信息')
         main_logger.info('='*60)
-        success, fail, tag_success = update_tags_from_fingerprint()
+        success, fail, tag_success = update_tags_from_fingerprint(target_dir=target_dir)
         main_logger.info(f'标签更新汇总: 成功 {success}, 失败 {fail}, 标签更新 {tag_success}')
 
     # 步骤4: 检查文件
@@ -163,7 +185,7 @@ def main():
         main_logger.info('='*60)
         check_filename_consistency(
             check_master=args.check_master,
-            check_temp=not args.uncheck_temp
+            check_temp=not args.uncheck_temp and not args.check_master
         )
 
     # 步骤5: 年份分类

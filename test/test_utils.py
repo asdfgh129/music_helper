@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils import (
     get_current_month,
+    validate_month_format,
     parse_filename,
     split_artist,
     normalize_text,
@@ -28,6 +29,22 @@ class TestUtils(unittest.TestCase):
         month = get_current_month()
         self.assertEqual(len(month), 6)
         self.assertTrue(month.isdigit())
+
+    def test_validate_month_format_valid(self):
+        """测试有效的月份格式"""
+        self.assertTrue(validate_month_format("202406"))
+        self.assertTrue(validate_month_format("202001"))
+        self.assertTrue(validate_month_format("199912"))
+
+    def test_validate_month_format_invalid(self):
+        """测试无效的月份格式"""
+        self.assertFalse(validate_month_format("2024"))  # 长度不够
+        self.assertFalse(validate_month_format("20240607"))  # 长度过长
+        self.assertFalse(validate_month_format("2024ab"))  # 非数字
+        self.assertFalse(validate_month_format("202400"))  # 无效月份
+        self.assertFalse(validate_month_format("202413"))  # 无效月份
+        self.assertFalse(validate_month_format("189906"))  # 年份太小
+        self.assertFalse(validate_month_format("220006"))  # 年份太大
 
     def test_parse_filename_standard(self):
         """测试标准文件名解析"""

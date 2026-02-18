@@ -100,6 +100,7 @@ def check_filename_consistency(check_master=True, check_temp=True):
     inconsistent_files = []
     duplicate_files = []
     missing_lrc_files = []
+    orphan_lrc_files = []
 
     # 收集所有音乐文件信息
     music_info_list = []
@@ -123,6 +124,94 @@ def check_filename_consistency(check_master=True, check_temp=True):
                         'filename': file,
                         'tags': tags
                     })
+
+    # 检查只有"-"分隔符的文件名，修改为" - "
+    main_logger.info('检查只有"-"分隔符的文件名')
+    files_renamed = []
+    for directory in directories:
+        if not os.path.exists(directory):
+            continue
+
+        for root, _, files in os.walk(directory):
+            for file in files:
+                ext = os.path.splitext(file)[1].lower()
+                if ext not in AUDIO_EXTENSIONS:
+                    continue
+
+                filepath = os.path.join(root, file)
+                name = os.path.splitext(file)[0]
+
+                # 检查是否只有"-"分隔符
+                if ' - ' not in name and '-' in name:
+                    # 检查是否有多个"-"（避免误判如歌曲名中包含-）
+                    if name.count('-') == 1:
+                        # 只有单个"-"，需要改为" - "
+                        new_name = name.replace('-', ' - ')
+                        new_filename = new_name + ext
+                        new_filepath = os.path.join(root, new_filename)
+
+                        # 检查重名
+                        if os.path.exists(new_filepath):
+                            # 重名，删除原文件
+                            op_logger.warning(f'发现重名文件，删除: {file}')
+                            try:
+                                os.remove(filepath)
+                                files_renamed.append({'file': file, 'action': 'deleted (duplicate)'})
+
+                                # 删除对应的LRC文件（如果存在）
+                                lrc_path = os.path.splitext(filepath)[0] + '.lrc'
+                                if os.path.exists(lrc_path):
+                                    os.remove(lrc_path)
+                                    op_logger.warning(f'删除对应的LRC文件: {os.path.basename(lrc_path)}')
+                            except Exception as e:
+                                op_logger.error(f'删除文件失败 {file}: {e}')
+                        else:
+                            # 不重名，重命名文件
+                            op_logger.warning(f'重命名文件: {file} -> {new_filename}')
+                            try:
+                                os.rename(filepath, new_filepath)
+                                files_renamed.append({'file': file, 'new_name': new_filename, 'action': 'renamed'})
+
+                                # 重命名对应的LRC文件（如果存在）
+                                lrc_path = os.path.splitext(filepath)[0] + '.lrc'
+                                if os.path.exists(lrc_path):
+                                    new_lrc_filename = new_name + '.lrc'
+                                    new_lrc_path = os.path.join(root, new_lrc_filename)
+                                    os.rename(lrc_path, new_lrc_path)
+                                    op_logger.warning(f'重命名LRC文件: {os.path.basename(lrc_path)} -> {new_lrc_filename}')
+                            except Exception as e:
+                                op_logger.error(f'重命名文件失败 {file}: {e}')
+
+    if files_renamed:
+        main_logger.info(f'文件名分隔符处理完成: {len(files_renamed)} 个文件')
+        for item in files_renamed:
+            op_logger.info(f"  - {item['file']}: {item['action']}")
+
+    # 检查孤立的LRC文件（只有LRC文件，没有对应音乐文件）
+    main_logger.info('检查孤立LRC文件')
+    for directory in directories:
+        if not os.path.exists(directory):
+            continue
+
+        for root, _, files in os.walk(directory):
+            for file in files:
+                if not file.lower().endswith('.lrc'):
+                    continue
+
+                lrc_path = os.path.join(root, file)
+                # 去掉.lrc扩展名，尝试匹配音乐文件
+                name_without_ext = os.path.splitext(file)[0]
+
+                has_music_file = False
+                for ext in AUDIO_EXTENSIONS:
+                    music_path = os.path.join(root, name_without_ext + ext)
+                    if os.path.exists(music_path):
+                        has_music_file = True
+                        break
+
+                if not has_music_file:
+                    orphan_lrc_files.append(lrc_path)
+                    op_logger.warning(f'发现孤立LRC文件: {file}')
 
     # 检查文件名一致性
     main_logger.info('检查文件名与标签一致性')
@@ -197,11 +286,13 @@ def check_filename_consistency(check_master=True, check_temp=True):
     # 记录统计
     op_logger.info(f'\n{"="*50}')
     op_logger.info(f'检查结果统计:')
+    op_logger.info(f'文件名分隔符处理: {len(files_renamed)} 个')
     op_logger.info(f'文件名不一致: {len(inconsistent_files)} 个')
     op_logger.info(f'重复文件组: {len(duplicate_files)} 组')
     op_logger.info(f'缺少歌词: {len(missing_lrc_files)} 个')
+    op_logger.info(f'孤立LRC: {len(orphan_lrc_files)} 个')
 
-    main_logger.info(f'文件检查完成: 不一致 {len(inconsistent_files)}, 重复 {len(duplicate_files)}, 缺歌词 {len(missing_lrc_files)}')
+    main_logger.info(f'文件检查完成: 分隔符处理 {len(files_renamed)}, 不一致 {len(inconsistent_files)}, 重复 {len(duplicate_files)}, 缺歌词 {len(missing_lrc_files)}, 孤立LRC {len(orphan_lrc_files)}')
 
     return len(inconsistent_files), len(duplicate_files), len(missing_lrc_files)
 

@@ -13,7 +13,8 @@ from config import MAIN_DIR
 
 
 # ==================== 日志系统 ====================
-main_logger: logging.Logger = logging.getLogger('music_manager_init')
+# 声明全局变量以便其他模块导入，初始化在 setup_logging 中完成
+main_logger: logging.Logger = logging.getLogger('music_manager')
 log_file: str | None = None
 
 
@@ -72,6 +73,13 @@ def create_operation_log(operation_name):
     file_handler.setFormatter(formatter)
     op_logger.addHandler(file_handler)
 
+    # 添加控制台处理器（warning级别）
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.WARNING)
+    console_formatter = logging.Formatter('WARNING: %(message)s')
+    console_handler.setFormatter(console_formatter)
+    op_logger.addHandler(console_handler)
+
     return op_logger, log_path
 
 
@@ -82,9 +90,20 @@ def get_file_modification_month(filepath):
         dt = datetime.fromtimestamp(mtime)
         return dt.strftime('%Y%m')
     except Exception as e:
-        if main_logger and main_logger.handlers:
+        if main_logger is not None and main_logger.handlers:
             main_logger.error(f'获取文件修改时间失败 {filepath}: {e}')
         return None
+
+
+def validate_month_format(month_str):
+    """验证月份格式是否正确（YYYYMM）"""
+    if not month_str or len(month_str) != 6:
+        return False
+    if not month_str.isdigit():
+        return False
+    year = int(month_str[:4])
+    month = int(month_str[4:6])
+    return 1900 <= year < 2100 and 1 <= month <= 12
 
 
 def get_current_month():

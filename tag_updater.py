@@ -18,10 +18,17 @@ from tag_fetcher import (
 )
 
 
-def update_tags_from_fingerprint():
-    """根据声纹信息从在线数据库更新标签"""
-    main_logger.info('开始从声纹信息更新标签')
-    create_operation_log('UpdateTags')
+def update_tags_from_fingerprint(target_dir=None):
+    """根据声纹信息从在线数据库更新标签
+
+    Args:
+        target_dir: 要扫描的目录，默认为TEMP_COMPLETED_DIR
+    """
+    if target_dir is None:
+        target_dir = TEMP_COMPLETED_DIR
+
+    main_logger.info(f'开始从声纹信息更新标签，目标目录: {target_dir}')
+    op_logger = create_operation_log('UpdateTags')
 
     if not mutagen_available:
         main_logger.error('mutagen库未安装，无法更新标签')
@@ -53,8 +60,8 @@ def update_tags_from_fingerprint():
         except Exception as e:
             main_logger.warning(f'音乐API客户端初始化失败: {e}')
 
-    # 扫描临时完成目录
-    for root, _, files in os.walk(TEMP_COMPLETED_DIR):
+    # 扫描目标目录
+    for root, _, files in os.walk(target_dir):
         for file in files:
             ext = os.path.splitext(file)[1].lower()
             if ext not in AUDIO_EXTENSIONS:

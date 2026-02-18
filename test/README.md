@@ -72,6 +72,7 @@ python -m unittest discover -vv
 
 ### test_utils.py
 - 月份格式获取
+- 月份格式验证
 - 文件名解析（标准格式、无分隔符、多分隔符）
 - 艺术家名称拆分（多种分隔符）
 - 文本标准化

@@ -10,6 +10,10 @@ import os
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# 初始化日志系统，避免main_logger为None
+from utils import setup_logging
+setup_logging()
+
 
 class TestTagFetcher(unittest.TestCase):
     """标签获取模块测试"""

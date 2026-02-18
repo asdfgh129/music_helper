@@ -77,8 +77,20 @@ TEMP_MOVE_DIR = r'G:\Tmp'
 ### 3. 基本使用
 
 ```bash
-# 运行主程序
+# 运行主程序（默认处理当前月份和临时目录）
 python main.py
+
+# 处理指定月份
+python main.py --month 202406
+
+# 仅检查主目录（跳过VIP解密，只处理主目录D:\music）
+python main.py --check-master
+
+# 不检查临时目录
+python main.py --uncheck-temp
+
+# 检查数据库一致性
+python main.py --checkdb
 
 # 或使用独立工具
 python archive.py        # 文件归档
@@ -515,6 +527,24 @@ AUTO_DOWNLOAD_COVER = True
 # 封面尺寸限制
 MAX_COVER_SIZE = 1024 * 1024  # 1MB
 ```
+
+**命令行参数**:
+```bash
+--month YYYYMM          # 指定扫描的月份 (格式: YYYYMM，默认: 当前月份)
+--check-master          # 检查主目录D:\music的文件
+--uncheck-temp          # 不检查临时已完成目录G:\Temp
+--checkdb               # 仅检查数据库和目录文件的一致性状态
+--skip-vip              # 跳过VIP文件解密步骤
+--skip-fingerprint      # 跳过声纹识别步骤
+--skip-tag-update       # 跳过标签更新步骤
+--skip-check            # 跳过文件检查步骤
+--skip-organize         # 跳过年份分类步骤
+```
+
+**check-master 模式**:
+- 跳过步骤1: VIP文件解密和移动
+- 步骤2: 声纹识别不带 --temp 参数
+- 步骤3、4: 只更新和检查主目录，不处理临时目录
 
 **依赖检查**: 自动检测各模块是否可用，跳过不可用功能。
 
