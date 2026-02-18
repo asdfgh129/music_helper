@@ -48,7 +48,7 @@ TDRC = _tdrc
 TCON = _tcon
 
 try:
-    from Decrypto.source_finder import guess_song_url
+    from Decrypto import guess_song_url
 except ImportError:
     def guess_song_url(file_basename: str) -> str | None:
         return None
@@ -57,11 +57,12 @@ except ImportError:
 fingerprint_matcher_available = False
 music_tagger_available = False
 FingerprintMatcher: Any = None
+format_recording_info: Any = None
 QQMusicApi: Any = None
 NetEaseMusicClient: Any = None
 MusicTagger: Any = None
 try:
-    from Fingerprint.musicbrainz_matcher import FingerprintMatcher, format_recording_info
+    from Fingerprint import FingerprintMatcher, format_recording_info
     from music_tagger.platforms.qqmusic import QQMusicApi
     from music_tagger.platforms.netease import NetEaseMusicClient
     fingerprint_matcher_available = True
@@ -94,7 +95,7 @@ TEMP_MOVE_DIR = r'G:\Tmp'
 
 # 外部程序路径
 UM_EXE = r'um.exe'
-QQ_PY = r'qq.py'
+# QQ_PY = r'qq.py'
 SOUNDALIKE_EXE = r'soundalike.exe'
 
 # 支持的文件扩展名
@@ -681,8 +682,8 @@ def decrypt_qq_vip(month=None):
 
     try:
         # 导入Decrypto/qq.py模块
-        import Decrypto.qq as qq
-        qq.run_decrypt(QQ_TMP_DIR, TEMP_COMPLETED_DIR)
+        from Decrypto import run_decrypt
+        run_decrypt(QQ_TMP_DIR, TEMP_COMPLETED_DIR)
 
         # 统计完成的文件
         completed_count = 0

@@ -42,7 +42,7 @@ pip install frida requests
 
 # 声纹识别
 pip install acoustid
-# 安装fpcalc工具 (请参考 Doc/README.md)
+# 安装fpcalc工具 (详见下方 fpcalc 安装说明)
 
 # 音乐标签管理
 pip install music-tag mutagen
@@ -83,32 +83,104 @@ python duplicate.py      # 重复检测
 python lrc.py           # 歌词管理
 ```
 
+## 项目结构
+
+```
+music_helper/
+├── main.py                 # 主程序入口
+├── archive.py              # 音乐文件归档工具
+├── duplicate.py            # 重复文件检测工具
+├── lrc.py                  # 歌词文件管理工具
+├── requirements.txt        # 项目依赖
+├── Decrypto/               # 解密模块
+│   ├── __init__.py
+│   ├── qq.py              # QQ音乐解密(Frida)
+│   ├── source_finder.py   # 歌曲URL查找
+│   ├── hook_qq_music.js   # Frida注入脚本
+│   ├── qq.bat            # Windows快捷启动
+│   └── um.bat            # Windows快捷启动
+├── Fingerprint/            # 声纹识别模块
+│   ├── __init__.py
+│   ├── musicbrainz_matcher.py  # MusicBrainz声纹匹配
+│   └── soundalike.exe    # 声纹对比工具
+├── music_tagger/          # 音乐标签管理模块
+│   ├── __init__.py
+│   ├── core.py            # 核心标签读写
+│   ├── matcher.py         # 智能匹配算法
+│   ├── encrypt.py        # 加密模块
+│   └── platforms/         # 音乐平台API
+│       ├── __init__.py
+│       ├── netease.py    # 网易云音乐
+│       ├── qqmusic.py    # QQ音乐
+│       ├── migu.py       # 咪咕音乐
+│       ├── kugou.py      # 酷狗音乐
+│       ├── kuwo.py       # 酷我音乐
+│       └── acoustid.py   # AcoustID声纹识别
+└── Doc/                  # 文档目录
+    ├── FEATURES.md       # 功能详细说明
+    ├── FINGERPRINT_MATCHER_README.md  # 声纹匹配文档
+    ├── TAG_UPDATE_README.md          # 标签更新文档
+    ├── QUICKSTART.md       # 快速开始指南
+    └── EXTRACTION_SUMMARY.md        # 公钥提取总结
+```
+
 ## 模块说明
 
 ### 1. QQ音乐解密 (Decrypto/)
 
-解密QQ音乐VIP下载的加密音频文件 (.mflac, .mgg)。
+**功能**: 解密QQ音乐VIP下载的加密音频文件 (.mflac, .mgg)
 
 **使用方法**:
 ```bash
 # Windows快捷启动
 Decrypto\qq.bat
 
-# 命令行
+# 命令行 - 列出默认目录歌曲
+python Decrypto/qq.py -l
+
+# 命令行 - 解密指定目录
 python Decrypto/qq.py -i <input_dir> -o <output_dir>
 ```
 
-**技术原理**: 使用Frida动态注入Hook脚本到QQMusic.exe进程
+**模块化导入**:
+```python
+from Decrypto import run_decrypt, list_download_songs, guess_song_url
 
-**依赖**: `frida`, `requests`
+# 解密文件
+run_decrypt(
+    input_dir="G:\\QQMusic\\VipSOngsDownload",
+    output_dir="G:\\QQMusic\\Decrypted"
+)
+
+# 列出默认下载目录歌曲
+list_download_songs()
+
+# 猜测歌曲URL
+url = guess_song_url("周杰伦 - 晴.flac")
+```
+
+**技术原理**:
+- 使用Frida动态注入Hook脚本到QQMusic.exe进程
+- 解密 `.mflac` 和 `.mgg` 加密格式
+- 自动识别和转换为标准 `.flac` 和 `.ogg` 格式
+- 自动查找和记录歌曲来源链接
+
+**依赖**:
+- `frida`: 动态二进制插桩框架
+- `requests`: HTTP请求库
+
+**注意事项**:
+- 必须先启动QQMusic.exe进程
+- Windows系统需要管理员权限
+- 仅支持Windows平台的QQ音乐客户端
 
 ### 2. 声纹识别 (Fingerprint/)
 
-通过音频指纹在MusicBrainz数据库中查找音乐元数据。
+**功能**: 通过音频指纹在MusicBrainz数据库中查找音乐元数据
 
-**使用方法**:
+**模块化导入**:
 ```python
-from Fingerprint.musicbrainz_matcher import FingerprintMatcher
+from Fingerprint import FingerprintMatcher, format_recording_info
 
 matcher = FingerprintMatcher()
 result = matcher.match_file('song.mp3')
@@ -116,13 +188,87 @@ result = matcher.match_file('song.mp3')
 if result.success:
     for recording in result.recordings:
         print(f"{recording['title']} - {recording['artist']}")
+
+# 格式化录音信息
+info = format_recording_info(recording)
+print(info)
 ```
 
-**依赖**: `fpcalc`, `acoustid`, `requests`
+**API**:
+```python
+class FingerprintMatcher:
+    def match_file(self, audio_path: str) -> MatchResult:
+        """通过音频文件匹配MusicBrainz录音"""
+
+    def match_recording(self, track_id: str) -> MatchResult:
+        """通过MusicBrainz track ID查询录音信息"""
+
+    def format_recording_info(self, recording: dict) -> str:
+        """格式化录音信息为易读字符串"""
+```
+
+**返回数据格式**:
+```python
+{
+    "id": "MusicBrainz录音ID",
+    "title": "歌曲标题",
+    "artist": "艺术家",
+    "artist_credit": ["艺术家1", "艺术家2"],  # 多艺术家
+    "album": "专辑名称",
+    "year": "发行年份",
+    "duration": "时长(秒)",
+    "score": 95.5,  # 匹配分数 0-100
+    "releases": [
+        {
+            "id": "发行ID",
+            "title": "专辑标题",
+            "date": "发行日期",
+            "country": "发行国家",
+            "format": "格式"
+        }
+    ]
+}
+```
+
+**依赖**:
+- `fpcalc`: Chromaprint声纹计算工具(需单独安装)
+- `requests`: API请求
+
+**安装fpcalc**:
+
+**Windows**:
+```bash
+# 使用chocolatey
+choco install chromaprint
+
+# 或下载预编译二进制: https://acoustid.org/chromaprint
+```
+
+**macOS**:
+```bash
+brew install chromaprint
+```
+
+**Linux (Debian/Ubuntu)**:
+```bash
+sudo apt-get install libchromaprint-tools
+```
+
+**Linux (CentOS/RHEL)**:
+```bash
+sudo yum install chromaprint-tools
+```
+
+**API密钥**:
+本项目使用的AcoustID API密钥: `v8pQ6oyB`
+
+**注意**: 此密钥仅供个人学习使用，请勿用于商业用途或滥用API。
 
 ### 3. 音乐标签管理 (music_tagger/)
 
 #### 3.1 核心标签读写 (core.py)
+
+**类**: `MusicTagger`
 
 ```python
 from music_tagger.core import MusicTagger
@@ -138,11 +284,32 @@ tagger.update_tags({
     'artist': '新艺术家',
     'year': '2024'
 })
+
+# 支持模板语法
+tagger.update_tags({
+    'title': '${artist} - ${title}',  # 使用现有标签值
+    'filename': '${year} - ${artist} - ${title}'  # 文件名模板
+})
 ```
+
+**支持的标签字段**:
+- title: 歌曲标题
+- artist: 艺术家
+- album: 专辑
+- year: 年份
+- genre: 流派
+- tracknumber: 音轨号
+- discnumber: 碟片号
+- lyrics: 歌词
+- comment: 评论
+- artwork: 封面图片
+- album_img: 封面URL(会自动下载)
 
 #### 3.2 智能匹配 (matcher.py)
 
-并行搜索多个音乐平台，智能评分排序。
+**类**: `SmartTagClient`
+
+并行搜索多个音乐平台，智能评分排序返回最佳匹配。
 
 ```python
 from music_tagger.matcher import SmartTagClient
@@ -153,11 +320,30 @@ results = client.fetch_id3_by_title({
     'artist': '艺术家',
     'full_path': '文件路径'
 })
+
+for song in results:
+    print(f"{song['name']} - {song['artist']}")
 ```
+
+**评分算法**:
+- 标题匹配度: 2(完全匹配) | 1(包含匹配) | 0(不匹配)
+- 艺术家匹配度: 相同算法
+- 支持繁简体中文转换
 
 #### 3.3 音乐平台API (platforms/)
 
-统一接口:
+支持以下音乐平台:
+
+| 平台 | 模块 | 特殊要求 |
+|------|--------|---------|
+| 网易云音乐 | `netease.py` | AES+RSA加密 |
+| QQ音乐 | `qqmusic.py` | 无 |
+| 咪咕音乐 | `migu.py` | 无 |
+| 酷狗音乐 | `kugou.py` | MD5签名 |
+| 酷我音乐 | `kuwo.py` | 无 |
+| AcoustID | `acoustid.py` | 声纹识别 |
+
+**统一接口**:
 ```python
 # 网易云音乐
 from music_tagger.platforms.netease import NetEaseMusicClient
@@ -170,19 +356,42 @@ api = QQMusicApi()
 songs = api.search("歌曲名")
 ```
 
+**返回格式**:
+```python
+{
+    "id": "歌曲ID",
+    "name": "歌曲标题",
+    "artist": "艺术家",
+    "album": "专辑",
+    "year": "年份",
+    "album_img": "封面URL",
+    "lyrics": "歌词",
+}
+```
+
 #### 3.4 加密模块 (crypto/)
 
 用于网易云音乐API请求加密:
 
 ```python
-from music_tagger.crypto import weEncrypt, linuxEncrypt
+from music_tagger.crypto import weEncrypt, linuxEncrypt, eEncrypt
 
-# AES+RSA混合加密
+# 网易云网页API加密
 data = weEncrypt({"s": "搜索关键词"})
 
-# AES-ECB加密
+# 网易云Linux API加密
 data = linuxEncrypt({"id": "123"})
+
+# 网易云E-API加密
+data = eEncrypt("url", "params")
 ```
+
+**加密方式**:
+- `weEncrypt`: AES + RSA混合加密(2048位)
+- `linuxEncrypt`: AES-ECB加密
+- `eEncrypt`: MD5 + AES加密
+
+**公钥来源**: 从网易云音乐 core.js 中提取(详见 Doc/EXTRACTION_SUMMARY.md)
 
 ### 4. 主程序 (main.py)
 
@@ -191,65 +400,97 @@ data = linuxEncrypt({"id": "123"})
 **标签更新策略**:
 ```
 1. 声纹匹配 (MusicBrainz)
-   └─ 成功? → 更新标签 → 下载封面
+   └─ 成功且分数≥50%? → 更新标签 → 下载封面
 
 2. 在线查询 (QQ音乐/网易云音乐)
    └─ 找到? → 更新标签 → 下载封面
+
+3. 检查标签完整性
+   └─ 记录缺失信息
+```
+
+**配置选项**:
+```python
+# 声纹匹配阈值 (0-100)
+FINGERPRINT_THRESHOLD = 50
+
+# 在线查询优先级
+PLATFORM_PRIORITY = ['qq', 'netease']
+
+# 是否自动下载封面
+AUTO_DOWNLOAD_COVER = True
+
+# 封面尺寸限制
+MAX_COVER_SIZE = 1024 * 1024  # 1MB
 ```
 
 **依赖检查**: 自动检测各模块是否可用，跳过不可用功能。
 
 ### 5. 其他工具
 
-- **archive.py**: 按年份组织音乐文件目录
-- **duplicate.py**: 查找重复的音乐文件
-- **lrc.py**: 检测缺失或孤立的歌词文件
+#### archive.py - 文件归档
 
-## 项目结构
+**功能**: 按年份组织音乐文件目录结构
 
+```bash
+python archive.py
 ```
-music_helper/
-├── main.py                 # 主程序入口
-├── archive.py              # 音乐文件归档工具
-├── duplicate.py             # 重复文件检测工具
-├── lrc.py                  # 歌词文件管理工具
-├── requirements.txt          # 项目依赖
-├── Decrypto/               # 解密模块
-│   ├── qq.py              # QQ音乐解密(Frida)
-│   ├── source_finder.py     # 歌曲URL查找
-│   └── hook_qq_music.js    # Frida注入脚本
-├── Fingerprint/            # 声纹识别模块
-│   └── musicbrainz_matcher.py  # MusicBrainz声纹匹配
-├── music_tagger/          # 音乐标签管理模块
-│   ├── __init__.py
-│   ├── core.py            # 核心标签读写
-│   ├── matcher.py         # 智能匹配算法
-│   ├── platforms/         # 音乐平台API
-│   │   ├── netease.py
-│   │   ├── qqmusic.py
-│   │   ├── migu.py
-│   │   ├── kugou.py
-│   │   ├── kuwo.py
-│   │   └── acoustid.py
-│   └── crypto/           # 加密模块
-│       └── encrypt.py
-└── Doc/                  # 文档目录
-    ├── README.md           # 主文档
-    ├── FEATURES.md         # 功能详细说明
-    ├── FINGERPRINT_MATCHER_README.md
-    ├── TAG_UPDATE_README.md
-    └── QUICKSTART.md
+
+**归档规则**:
 ```
+输入目录/
+    ├── song1.mp3  (年份: 2020)
+    ├── song2.flac (年份: 2019)
+    └── song3.wav  (无年份)
+
+输出目录/
+    ├── 2019/
+    │   └── song2.flac
+    ├── 2020/
+    │   └── song1.mp3
+    └── Unknown/
+        └── song3.wav
+```
+
+**功能**:
+- 从音乐文件元数据提取年份
+- 按年份创建子目录
+- 移动文件到对应年份目录
+- 生成归档日志
+
+#### duplicate.py - 重复检测
+
+**功能**: 查找重复的音乐文件
+
+```bash
+python duplicate.py
+```
+
+**检测规则**:
+- 文件名包含 `(1)`, `(2)`, `(3)` 等数字标记
+- 例如: `song.mp3`, `song (1).mp3`, `song (2).mp3`
+
+#### lrc.py - 歌词管理
+
+**功能**: 查找缺失或孤立的 `.lrc` 歌词文件
+
+```bash
+python lrc.py
+```
+
+**功能**:
+- 检测没有歌词的音频文件
+- 检测没有对应音频的歌词文件
+- 生成报告
 
 ## 模块化导入
 
 ```
 Decrypto模块:
-    from Decrypto.qq import run_decrypt, guess_song_url
-    from Decrypto.source_finder import guess_song_url
+    from Decrypto import run_decrypt, guess_song_url, list_download_songs, parse_filename_to_artist_title
 
 Fingerprint模块:
-    from Fingerprint.musicbrainz_matcher import FingerprintMatcher, format_recording_info
+    from Fingerprint import FingerprintMatcher, format_recording_info
 
 music_tagger模块:
     from music_tagger.core import MusicTagger
@@ -260,22 +501,94 @@ music_tagger模块:
     from music_tagger.crypto import weEncrypt, linuxEncrypt
 ```
 
-## 文档
+## 模块依赖关系
 
-- **[Doc/README.md](Doc/README.md)** - 详细项目结构和API文档
-- **[Doc/FEATURES.md](Doc/FEATURES.md)** - 功能详细说明
-- **[Doc/FINGERPRINT_MATCHER_README.md](Doc/FINGERPRINT_MATCHER_README.md)** - 声纹匹配文档
-- **[Doc/TAG_UPDATE_README.md](Doc/TAG_UPDATE_README.md)** - 标签更新文档
-- **[Doc/QUICKSTART.md](Doc/QUICKSTART.md)** - 快速开始指南
+```
+main.py
+    ├── Decrypto (QQ解密)
+    ├── Fingerprint (声纹匹配)
+    └── music_tagger (标签管理)
+            ├── platforms (音乐平台API)
+            ├── encrypt (加密)
+            ├── matcher (智能匹配)
+            └── core (标签读写)
+```
+
+## 使用示例
+
+### 示例1: 解密QQ音乐VIP歌曲
+
+```bash
+# Windows: 直接运行bat文件
+Decrypto\qq.bat
+
+# 手动指定目录
+python main.py -d qq -i G:\QQMusic\VipSOngsDownload -o G:\QQMusic\Decrypted
+```
+
+### 示例2: 智能更新音乐标签
+
+```python
+from music_tagger.core import MusicTagger
+from music_tagger.matcher import SmartTagClient
+
+# 读取标签
+tagger = MusicTagger('song.mp3')
+print(f"当前标签: {tagger.artist} - {tagger.title}")
+
+# 在线查询
+client = SmartTagClient()
+results = client.fetch_id3_by_title(tagger.to_dict())
+
+if results:
+    # 更新最佳匹配
+    tagger.update_tags(results[0])
+    print(f"已更新标签: {tagger.artist} - {tagger.title}")
+```
+
+### 示例3: 声纹匹配
+
+```python
+from Fingerprint import FingerprintMatcher
+
+matcher = FingerprintMatcher()
+result = matcher.match_file('unknown_song.mp3')
+
+if result.success:
+    recording = result.recordings[0]
+    print(f"匹配成功!")
+    print(f"歌曲: {recording['title']}")
+    print(f"艺术家: {recording['artist']}")
+    print(f"专辑: {recording['album']}")
+    print(f"年份: {recording['year']}")
+```
 
 ## 注意事项
 
-1. **QQ音乐解密**: 需要先启动QQMusic.exe进程，需管理员/root权限
-2. **声纹识别**: 需要安装fpcalc工具，API有频率限制
-3. **音乐标签**: 更新前建议备份文件
-4. **平台API**: 注意控制请求频率，避免被封
-5. **编码问题**: 统一使用UTF-8编码
-6. **Python版本**: 需要Python 3.7+
+### 1. QQ音乐解密
+- 必须先启动QQMusic.exe进程
+- Frida需要管理员/root权限
+- 仅支持Windows平台的QQ音乐客户端
+
+### 2. 声纹识别
+- 需要安装 `fpcalc` 命令行工具
+- AcoustID API有请求频率限制
+- 指纹匹配准确率受音频质量影响
+
+### 3. 音乐标签
+- `music_tag` 库需要正确安装
+- 更新标签前建议备份文件
+- 封面下载需要网络连接
+
+### 4. 平台API
+- 网易云需要正确的加密公钥
+- 注意控制请求频率避免被封
+- API接口可能随时变化
+
+### 5. 编码问题
+- 统一使用 UTF-8 编码
+- 文件名建议避免特殊字符
+- 歌词文件使用 `.lrc` 扩展名
 
 ## 扩展开发
 
@@ -291,13 +604,42 @@ music_tagger模块:
 2. 遵循命名规范: `xxxEncrypt`
 3. 在 `crypto/__init__.py` 中导出
 
+## 故障排除
+
+### 常见问题
+
+**Q: QQ音乐解密失败**
+A: 检查QQMusic.exe是否运行，Frida是否正确安装
+
+**Q: 声纹匹配无结果**
+A: 确认fpcalc已安装，音频质量是否良好
+
+**Q: 标签更新无效**
+A: 检查文件权限，music_tag库是否正确安装
+
+**Q: 网易云API请求失败**
+A: 检查加密公钥是否正确，网络连接是否正常
+
+## 文档
+
+- **[Doc/FEATURES.md](Doc/FEATURES.md)** - 功能详细说明
+- **[Doc/FINGERPRINT_MATCHER_README.md](Doc/FINGERPRINT_MATCHER_README.md)** - 声纹匹配详细文档
+- **[Doc/TAG_UPDATE_README.md](Doc/TAG_UPDATE_README.md)** - 标签更新详细文档
+- **[Doc/QUICKSTART.md](Doc/QUICKSTART.md)** - 快速开始指南
+- **[Doc/EXTRACTION_SUMMARY.md](Doc/EXTRACTION_SUMMARY.md)** - 公钥提取总结
+
 ## 许可证
 
 本项目仅供学习和个人使用。使用音乐平台API请遵守相应平台的服务条款。
 
 ## 更新日志
 
-### v2.0.0 (当前版本)
+### v2.1.0 (当前版本)
+- 添加 Decrypto 和 Fingerprint 模块的 `__init__.py` 文件
+- 优化模块导入路径，支持简洁导入方式
+- 合并文档，统一在根目录 README.md
+
+### v2.0.0
 - 重构项目结构，模块化设计
 - 集成声纹匹配功能
 - 优化QQ音乐解密为直接模块导入

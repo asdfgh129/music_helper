@@ -47,7 +47,7 @@ python Decrypto/qq.py -i "G:\QQMusic\VipSOngsDownload" -o "G:\QQMusic\Decrypted"
 #### 方法2: 作为模块调用
 
 ```python
-from Decrypto.qq import run_decrypt
+from Decrypto import run_decrypt
 
 run_decrypt(
     input_dir="G:\QQMusic\VipSOngsDownload",
@@ -103,7 +103,7 @@ python main.py -d qq
 #### 基本使用
 
 ```python
-from Fingerprint.musicbrainz_matcher import FingerprintMatcher
+from Fingerprint import FingerprintMatcher
 
 # 初始化匹配器
 matcher = FingerprintMatcher()
@@ -288,7 +288,7 @@ sudo yum install chromaprint-tools
 
 ```python
 # 声纹匹配模块
-from Fingerprint.musicbrainz_matcher import FingerprintMatcher
+from Fingerprint import FingerprintMatcher
 
 # 音乐平台API
 from music_tagger.platforms.qqmusic import QQMusicApi

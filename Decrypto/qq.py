@@ -12,7 +12,7 @@ import csv
 from datetime import datetime
 
 try:
-    from Decrypto.source_finder import guess_song_url
+    from .source_finder import guess_song_url
 except Exception:
     def guess_song_url(_):
         return None
