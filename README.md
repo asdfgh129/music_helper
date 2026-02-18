@@ -53,7 +53,7 @@ pip install pycryptodome
 
 ### 2. 配置路径
 
-编辑 `main.py` 中的目录配置:
+编辑 `config.py` 中的目录配置:
 
 ```python
 # 主目录
@@ -67,6 +67,9 @@ QQ_TMP_DIR = r'G:\QQTmp'
 # 网易云音乐目录
 NETEASE_DIR = r'G:\Neteasymusic'
 NETEASE_VIP_DIR = r'G:\Neteasymusic\VipSOngsDownload'
+NETEASE_TMP_DIR = r'G:\NeTmp'
+TEMP_COMPLETED_DIR = r'G:\Temp'
+TEMP_MOVE_DIR = r'G:\Tmp'
 ```
 
 **重要**: 根据您的实际环境修改这些路径!
@@ -88,40 +91,42 @@ python lrc.py           # 歌词管理
 ```
 music_helper/
 ├── main.py                 # 主程序入口
-├── archive.py              # 音乐文件归档工具
-├── duplicate.py            # 重复文件检测工具
-├── lrc.py                  # 歌词文件管理工具
+├── config.py              # 配置文件
+├── utils.py               # 工具函数
+├── metadata.py            # 元数据读写
+├── soundalike.py          # 声纹去重
+├── tag_fetcher.py         # 标签获取
+├── vip_decrypt.py         # VIP解密
+├── tag_updater.py         # 标签更新
+├── file_operations.py      # 文件操作
+├── archive.py             # 音乐文件归档工具
+├── duplicate.py           # 重复文件检测工具
+├── lrc.py                # 歌词文件管理工具
 ├── requirements.txt        # 项目依赖
-├── Decrypto/               # 解密模块
+├── Decrypto/             # QQ音乐解密模块
 │   ├── __init__.py
-│   ├── qq.py              # QQ音乐解密(Frida)
-│   ├── source_finder.py   # 歌曲URL查找
-│   ├── hook_qq_music.js   # Frida注入脚本
-│   ├── qq.bat            # Windows快捷启动
-│   └── um.bat            # Windows快捷启动
-├── Fingerprint/            # 声纹识别模块
+│   ├── qq.py            # QQ音乐解密(Frida)
+│   └── source_finder.py  # 歌曲URL查找
+├── Fingerprint/          # 声纹识别模块
 │   ├── __init__.py
-│   ├── musicbrainz_matcher.py  # MusicBrainz声纹匹配
-│   └── soundalike.exe    # 声纹对比工具
-├── music_tagger/          # 音乐标签管理模块
+│   └── musicbrainz_matcher.py  # MusicBrainz声纹匹配
+├── music_tagger/         # 音乐标签管理模块
 │   ├── __init__.py
-│   ├── core.py            # 核心标签读写
-│   ├── matcher.py         # 智能匹配算法
-│   ├── encrypt.py        # 加密模块
-│   └── platforms/         # 音乐平台API
+│   ├── core.py          # 核心标签读写
+│   ├── matcher.py       # 智能匹配算法
+│   ├── encrypt.py      # 加密模块
+│   └── platforms/      # 音乐平台API
 │       ├── __init__.py
-│       ├── netease.py    # 网易云音乐
-│       ├── qqmusic.py    # QQ音乐
-│       ├── migu.py       # 咪咕音乐
-│       ├── kugou.py      # 酷狗音乐
-│       ├── kuwo.py       # 酷我音乐
-│       └── acoustid.py   # AcoustID声纹识别
-└── Doc/                  # 文档目录
-    ├── FEATURES.md       # 功能详细说明
-    ├── FINGERPRINT_MATCHER_README.md  # 声纹匹配文档
-    ├── TAG_UPDATE_README.md          # 标签更新文档
-    ├── QUICKSTART.md       # 快速开始指南
-    └── EXTRACTION_SUMMARY.md        # 公钥提取总结
+│       ├── netease.py   # 网易云音乐
+│       ├── qqmusic.py   # QQ音乐
+│       ├── migu.py      # 咪咕音乐
+│       ├── kugou.py     # 酷狗音乐
+│       ├── kuwo.py      # 酷我音乐
+│       └── acoustid.py  # AcoustID声纹识别
+├── Fingerprint/         # 外部工具目录
+│   └── soundalike.exe   # 声纹对比工具
+└── Doc/                 # 文档目录
+    └── FEATURES.md      # 功能详细说明
 ```
 
 ## 模块说明
@@ -264,7 +269,94 @@ sudo yum install chromaprint-tools
 
 **注意**: 此密钥仅供个人学习使用，请勿用于商业用途或滥用API。
 
-### 3. 音乐标签管理 (music_tagger/)
+### 3. 网易云解密 (vip_decrypt.py)
+
+**功能**: 解密网易云音乐VIP下载的加密音频文件
+
+**模块化导入**:
+```python
+from vip_decrypt import decrypt_netease_vip
+
+# 解密网易云VIP文件
+count = decrypt_netease_vip(month=None)
+print(f"解密了 {count} 个文件")
+```
+
+**处理流程**:
+1. 扫描网易云VIP目录中的音乐文件
+2. 将文件移动到临时目录
+3. 运行um.exe进行解密
+4. 解密后的文件输出到完成目录
+
+**配置** (在 `config.py` 中):
+```python
+# 网易云音乐目录
+NETEASE_VIP_DIR = r'G:\Neteasemusic\VipSOngsDownload'
+NETEASE_TMP_DIR = r'G:\NeTmp'
+TEMP_COMPLETED_DIR = r'G:\Temp'
+UM_EXE = r'um.exe'  # 解密工具路径
+```
+
+**依赖**:
+- `um.exe`: 网易云解密工具（需单独配置）
+- `pycryptodome`: 加密算法库
+
+**注意事项**:
+- 需要配置um.exe的路径
+- 确保有足够的临时存储空间
+
+### 4. 声纹去重 (soundalike.py)
+
+**功能**: 使用 Soundalike 工具进行声纹识别，自动检测和移动重复的音乐文件
+
+**模块化导入**:
+```python
+from soundalike import run_soundalike_fingerprinting, check_database_consistency
+
+# 运行声纹识别去重
+success = run_soundalike_fingerprinting()
+if success:
+    print("声纹去重完成")
+else:
+    print("声纹去重失败")
+
+# 检查数据库一致性
+success = check_database_consistency()
+```
+
+**工作原理**:
+1. 扫描主目录中的所有音乐文件
+2. 使用soundalike.exe计算声纹
+3. 对比声纹特征，识别重复文件
+4. 将重复文件移动到TEMP_MOVE_DIR（交互式确认）
+5. 使用TEMP_COMPLETED_DIR作为临时工作目录
+
+**配置** (在 `config.py` 中):
+```python
+# 主目录（扫描目标）
+MAIN_DIR = r'D:\music'
+
+# 临时目录（工作目录）
+TEMP_COMPLETED_DIR = r'G:\Temp'
+
+# 重复文件移动目录（交互式确认）
+TEMP_MOVE_DIR = r'G:\Move'
+```
+
+**依赖**:
+- `soundalike.exe`: 声纹对比工具
+
+**返回值**:
+- `True`: 声纹识别成功完成
+- `False`: 声纹识别失败
+
+**注意事项**:
+- 必须确保 `soundalike.exe` 在系统PATH中或放在项目根目录
+- 声纹识别需要一定时间，取决于文件数量和大小
+- 交互模式下需要手动确认文件移动操作
+- 建议在操作前备份重要文件
+
+### 5. 音乐标签管理 (music_tagger/)
 
 #### 3.1 核心标签读写 (core.py)
 
@@ -492,6 +584,31 @@ Decrypto模块:
 Fingerprint模块:
     from Fingerprint import FingerprintMatcher, format_recording_info
 
+核心模块（根目录）:
+    # 配置
+    from config import MAIN_DIR, QQ_DIR, QQ_VIP_DIR, NETEASE_VIP_DIR, TEMP_COMPLETED_DIR
+
+    # 工具函数
+    from utils import setup_logging, create_operation_log, get_current_month, main_logger
+
+    # 元数据操作
+    from metadata import get_music_metadata, set_music_metadata
+
+    # VIP解密
+    from vip_decrypt import decrypt_netease_vip, decrypt_qq_vip
+
+    # 声纹去重
+    from soundalike import run_soundalike_fingerprinting, check_database_consistency
+
+    # 标签获取
+    from tag_fetcher import parse_musicbrainz_recording, fetch_qq_music_tags, fetch_netease_tags, fetch_album_cover
+
+    # 标签更新
+    from tag_updater import update_tags_from_fingerprint
+
+    # 文件操作
+    from file_operations import scan_music_files, move_files_to_temp, organize_by_year, check_filename_consistency
+
 music_tagger模块:
     from music_tagger.core import MusicTagger
     from music_tagger.matcher import SmartTagClient, match_score, match_artist
@@ -505,6 +622,14 @@ music_tagger模块:
 
 ```
 main.py
+    ├── config.py (配置)
+    ├── utils.py (工具函数)
+    ├── metadata.py (元数据读写)
+    ├── soundalike.py (声纹去重)
+    ├── tag_fetcher.py (标签获取)
+    ├── vip_decrypt.py (VIP解密)
+    ├── tag_updater.py (标签更新)
+    ├── file_operations.py (文件操作)
     ├── Decrypto (QQ解密)
     ├── Fingerprint (声纹匹配)
     └── music_tagger (标签管理)

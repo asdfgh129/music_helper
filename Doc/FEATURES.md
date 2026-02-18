@@ -2,7 +2,9 @@
 
 ## 目录
 - [QQ音乐解密](#qq音乐解密)
+- [网易云解密](#网易云解密)
 - [声纹识别匹配](#声纹识别匹配)
+- [声纹去重](#声纹去重)
 - [音乐标签更新](#音乐标签更新)
 - [文件归档](#文件归档)
 - [重复检测](#重复检测)
@@ -73,6 +75,58 @@ python main.py -d qq
 - Windows系统需要管理员权限
 - 仅支持Windows平台的QQ音乐客户端
 - 解密过程中请勿关闭QQMusic
+
+---
+
+## 网易云解密
+
+### 功能概述
+
+网易云音乐VIP下载的歌曲使用加密格式（如 `.ncm`），需要使用专门的解密工具进行转换。
+
+### 使用方法
+
+#### 方法1: 通过主程序集成
+
+```bash
+python main.py -d netease
+```
+
+#### 方法2: 作为模块调用
+
+```python
+from vip_decrypt import decrypt_netease_vip
+
+# 解密网易云VIP文件
+count = decrypt_netease_vip(month=None)
+print(f"解密了 {count} 个文件")
+```
+
+### 依赖项
+
+- `um.exe`: 网易云解密工具（需单独配置）
+- `pycryptodome`: 加密算法库
+
+### 配置
+
+编辑 `main.py` 中的目录配置：
+
+```python
+# 网易云音乐目录
+NETEASE_VIP_DIR = r'G:\Neteasemusic\VipSOngsDownload'
+NETEASE_TMP_DIR = r'G:\NeteaseTmp'
+TEMP_COMPLETED_DIR = r'G:\Completed'
+UM_EXE = r'um.exe'  # 解密工具路径
+```
+
+### 处理流程
+
+```
+1. 扫描网易云VIP目录中的音乐文件
+2. 将文件移动到临时目录
+3. 运行um.exe进行解密
+4. 解密后的文件输出到完成目录
+```
 
 ---
 
@@ -247,6 +301,84 @@ sudo yum install chromaprint-tools
 - 缓存指纹计算结果
 - 批量处理时重用API连接
 - 限制并发请求数量
+
+---
+
+## 声纹去重
+
+### 功能概述
+
+使用 Soundalike 工具进行声纹识别，自动检测和移动重复的音乐文件。
+
+### 使用方法
+
+#### 方法1: 通过主程序集成
+
+```bash
+python main.py -s
+```
+
+#### 方法2: 作为模块调用
+
+```python
+from soundalike import run_soundalike_fingerprinting
+
+# 运行声纹识别去重
+success = run_soundalike_fingerprinting()
+if success:
+    print("声纹去重完成")
+else:
+    print("声纹去重失败")
+```
+
+### 配置
+
+编辑 `config.py` 中的目录配置：
+
+```python
+# 主目录（扫描目标）
+MAIN_DIR = r'D:\music'
+
+# 临时目录（工作目录）
+TEMP_COMPLETED_DIR = r'G:\Completed'
+
+# 重复文件移动目录（交互式确认）
+TEMP_MOVE_DIR = r'G:\Move'
+```
+
+### 工作原理
+
+```
+1. 扫描主目录中的所有音乐文件
+2. 使用soundalike.exe计算声纹
+3. 对比声纹特征，识别重复文件
+4. 将重复文件移动到TEMP_MOVE_DIR（交互式确认）
+5. 使用TEMP_COMPLETED_DIR作为临时工作目录
+```
+
+### 命令行参数
+
+Soundalike 工具的命令格式：
+
+```bash
+soundalike.exe -move-interactive <移动目录> -temp <临时目录> <扫描目录>
+```
+
+- `-move-interactive`: 交互式移动模式，需要用户确认
+- `-temp`: 临时工作目录
+- `<扫描目录>`: 需要扫描的主目录
+
+### 返回值
+
+- `True`: 声纹识别成功完成
+- `False`: 声纹识别失败
+
+### 注意事项
+
+- 必须确保 `soundalike.exe` 在系统PATH中或放在项目根目录
+- 声纹识别需要一定时间，取决于文件数量和大小
+- 交互模式下需要手动确认文件移动操作
+- 建议在操作前备份重要文件
 
 ---
 
