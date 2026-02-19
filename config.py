@@ -68,6 +68,11 @@ except ImportError:
 # 主目录
 MAIN_DIR = r'D:\music'
 
+# 日志目录（项目目录下）
+import os
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_DIR = os.path.join(PROJECT_DIR, 'log')
+
 # 网易云音乐目录
 NETEASE_DIR = r'G:\Neteasymusic'
 NETEASE_VIP_DIR = r'G:\Neteasymusic\VipSOngsDownload'

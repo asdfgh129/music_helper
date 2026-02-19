@@ -14,6 +14,12 @@
   - 模块函数调用改用 `import module` + `module.func()` 方式
   - 配置变量继续使用 `from config import xxx` 直接导入方式
   - 修改的文件包括: `main.py`, `tag_updater.py`, `vip_decrypt.py`, `soundalike.py`, `tag_fetcher.py`, `file_operations.py`, `archive.py`
+- **日志目录重构**: 将日志文件统一存储到项目目录下的 `log/` 子目录
+  - 在 `config.py` 中添加 `LOG_DIR` 配置项
+  - 修改 `utils.py` 中的 `setup_logging()` 和 `create_operation_log()` 函数
+  - 修改 `archive.py` 中的日志配置
+  - 创建 `log/.gitkeep` 保留目录结构
+  - 所有日志文件不再存储在主目录中
 
 ### 计划中
 - 支持更多音乐平台（Spotify、Apple Music 等）

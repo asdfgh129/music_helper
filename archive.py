@@ -10,7 +10,7 @@ import shutil
 import traceback
 from typing import Any
 
-from config import mutagen_available, MP3, FLAC, WAVE, APEv2File, OggVorbis
+from config import mutagen_available, MP3, FLAC, WAVE, APEv2File, OggVorbis, LOG_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -307,8 +307,9 @@ def main():
     temp_dir = 'G:\\temp\\'
 
     # 配置日志
+    os.makedirs(LOG_DIR, exist_ok=True)
     logging.basicConfig(
-        filename='archive.log',
+        filename=os.path.join(LOG_DIR, 'archive.log'),
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )

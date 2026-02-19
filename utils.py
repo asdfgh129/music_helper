@@ -9,7 +9,7 @@ import re
 from datetime import datetime
 import logging
 
-from config import MAIN_DIR
+from config import LOG_DIR
 
 
 # ==================== 日志系统 ====================
@@ -23,10 +23,10 @@ def setup_logging():
     global main_logger, log_file
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    log_file = os.path.join(MAIN_DIR, f'Music-{timestamp}.log')
+    log_file = os.path.join(LOG_DIR, f'Music-{timestamp}.log')
 
-    # 确保主目录存在
-    os.makedirs(MAIN_DIR, exist_ok=True)
+    # 确保日志目录存在
+    os.makedirs(LOG_DIR, exist_ok=True)
 
     main_logger = logging.getLogger('music_manager')
     main_logger.setLevel(logging.INFO)
@@ -56,7 +56,7 @@ def create_operation_log(operation_name):
     """创建操作专用日志文件"""
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     log_filename = f'{operation_name}-{timestamp}.log'
-    log_path = os.path.join(MAIN_DIR, log_filename)
+    log_path = os.path.join(LOG_DIR, log_filename)
 
     # 创建操作日志记录器
     op_logger = logging.getLogger(f'operation.{operation_name}')
