@@ -4,6 +4,11 @@
 """
 
 from typing import Any
+from datetime import datetime
+
+# ==================== 版本信息 ====================
+__version__ = "0.1-b{}".format(int(datetime.now().timestamp()))
+VERSION = __version__
 
 # ==================== mutagen 导入 ====================
 mutagen_available = False

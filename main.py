@@ -15,14 +15,14 @@ from file_operations import (
     check_filename_consistency, organize_by_year,
     move_netease_normal_files, move_qq_normal_files
 )
-from config import MAIN_DIR, TEMP_COMPLETED_DIR
+from config import MAIN_DIR, TEMP_COMPLETED_DIR, __version__
 
 
 def main():
     """主程序入口"""
     # 设置命令行参数解析
     parser = argparse.ArgumentParser(
-        description='音乐文件管理系统',
+        description=f'音乐文件管理系统 v{__version__}',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 使用示例:
@@ -40,7 +40,16 @@ def main():
 
   # 检查数据库一致性
   python main.py --checkdb
+
+  # 显示版本信息
+  python main.py --version
         '''
+    )
+
+    parser.add_argument(
+        '--version',
+        action='version',
+        version=f'%(prog)s v{__version__}'
     )
 
     parser.add_argument(
