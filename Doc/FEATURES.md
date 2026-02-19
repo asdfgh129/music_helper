@@ -1039,7 +1039,8 @@ INFO: 标签更新完成: 成功 50, 失败 2, 声纹 30, 在线 20
 
 # 二、操作流程
 
-## 1. 主目录检查 --check-master
+## 1. 主目录检查 
+### 参数 --check
 
 ### 概述
 检查主目录中的音乐文件，不进行VIP文件解密和移动操作。
@@ -1093,7 +1094,17 @@ check_filename_consistency(check_master=True, check_temp=False)
 - 重复文件检查
 - 歌词文件检查（缺失LRC、孤立LRC）
 
-### 1.6 生成检查报告
+### 1.6 数据库一致性检查
+
+### 概述
+仅检查soundalike数据库与目录文件的一致性状态。
+
+**执行内容**:
+- 运行 `soundalike.exe -check D:\music`
+- 检查数据库中的记录与实际文件是否一致
+- 发现不一致时生成报告
+
+### 1.7 生成检查报告
 
 **报告内容**:
 - 操作日志文件路径
@@ -1117,7 +1128,8 @@ python main.py --check-master --skip-check
 
 ---
 
-## 2. 临时目录归档 --默认模式
+## 2. 临时目录归档 
+### 参数  --archive
 
 ### 概述
 将指定月份的音乐文件归档到临时目录，进行解密、去重、标签更新、年份分类等处理。
@@ -1180,10 +1192,19 @@ qq_normal_count = move_qq_normal_files(month='202406')
 - 移动文件到 `G:\Temp`
 - 同步移动对应的LRC歌词文件
 
-### 2.5 声纹识别去重
+### 2.5 数据库一致性检查 
+
+ - 仅检查soundalike数据库与目录文件的一致性状态。
+
+**执行内容**:
+- 运行 `soundalike.exe -check D:\music`
+- 检查数据库中的记录与实际文件是否一致
+- 发现不一致时生成报告
+
+### 2.6 声纹识别去重
 
 ```bash
-soundalike.exe -move-interactive G:\Tmp -temp G:\Temp G:\Temp
+soundalike.exe -move-interactive G:\Tmp -temp G:\Temp D:\music
 ```
 
 **执行内容**:
@@ -1192,7 +1213,7 @@ soundalike.exe -move-interactive G:\Tmp -temp G:\Temp G:\Temp
 - 识别并移动重复文件到 `G:\Tmp`
 - 建立数据库记录
 
-### 2.6 更新标签信息
+### 2.7 更新标签信息
 
 ```python
 update_tags_from_fingerprint(target_dir=r'G:\Temp')
@@ -1204,7 +1225,7 @@ update_tags_from_fingerprint(target_dir=r'G:\Temp')
 3. 如果失败，从网易云音乐API查询
 4. 下载缺失的封面图片
 
-### 2.7 检查文件一致性
+### 2.8 检查文件一致性
 
 ```python
 check_filename_consistency(check_master=False, check_temp=True)
@@ -1217,7 +1238,7 @@ check_filename_consistency(check_master=False, check_temp=True)
 - 歌词文件检查
 - 孤立LRC检查
 
-### 2.8 按年份归档
+### 2.9 按年份归档
 
 ```python
 organize_by_year()
@@ -1231,7 +1252,7 @@ organize_by_year()
 - 处理无年份文件，移动到 `G:\Temp\unknown`
 - 同步移动对应的LRC歌词文件
 
-### 2.9 生成检查报告
+### 2.10 生成检查报告
 
 **报告内容**:
 - 操作日志文件路径
@@ -1260,21 +1281,10 @@ python main.py --skip-organize
 
 ---
 
-## 3. 数据库一致性检查 --checkdb
+## 3. 临时目录手动归档
+### 参数 --archive-manual
+ 同 2.5-2.10 的步骤
 
-### 概述
-仅检查soundalike数据库与目录文件的一致性状态。
-
-### 执行内容
-
-```bash
-python main.py --checkdb
-```
-
-**执行内容**:
-- 运行 `soundalike.exe -check D:\music`
-- 检查数据库中的记录与实际文件是否一致
-- 发现不一致时生成报告
 
 ---
 
@@ -1287,8 +1297,9 @@ python main.py --checkdb
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `--month YYYYMM` | 指定扫描的月份 | 当前月份 |
-| `--check-master` | 检查主目录D:\music的文件 | False |
-| `--uncheck-temp` | 不检查临时已完成目录G:\Temp | False |
+| `--check` | 检查主目录D:\music的文件 | False |
+| `--archive` | 归档临时目录G:\Temp | True |
+| `--archive-manual` | 手动归档临时目录G:\Temp | False |
 | `--checkdb` | 仅检查数据库和目录文件的一致性状态 | False |
 | `--skip-vip` | 跳过VIP文件解密步骤 | False |
 | `--skip-fingerprint` | 跳过声纹识别步骤 | False |
@@ -1306,10 +1317,13 @@ python main.py
 python main.py --month 202406
 
 # 仅检查主目录
-python main.py --check-master
+python main.py --check
 
-# 不检查临时目录
-python main.py --uncheck-temp
+# 归档临时目录
+python main.py --archive
+
+# 手动归档临时目录
+python main.py --archive-manual
 
 # 检查数据库一致性
 python main.py --checkdb

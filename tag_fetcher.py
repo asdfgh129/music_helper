@@ -4,14 +4,7 @@
 """
 
 import re
-from utils import main_logger
-
-# 延迟导入以避免条件导入问题
-try:
-    from config import QQMusicApi, NetEaseMusicClient
-except ImportError:
-    QQMusicApi = None
-    NetEaseMusicClient = None
+import utils
 
 
 def parse_musicbrainz_recording(recording):
@@ -58,7 +51,7 @@ def parse_musicbrainz_recording(recording):
         return tags if tags else None
 
     except Exception as e:
-        main_logger.error(f'解析MusicBrainz记录失败: {e}')
+        utils.main_logger.error(f'解析MusicBrainz记录失败: {e}')
         return None
 
 
@@ -113,7 +106,7 @@ def fetch_qq_music_tags(qq_api, title, artist):
         return None
 
     except Exception as e:
-        main_logger.error(f'从QQ音乐获取标签失败: {e}')
+        utils.main_logger.error(f'从QQ音乐获取标签失败: {e}')
         return None
 
 
@@ -161,7 +154,7 @@ def fetch_netease_tags(netease_api, title, artist):
         return None
 
     except Exception as e:
-        main_logger.error(f'从网易云音乐获取标签失败: {e}')
+        utils.main_logger.error(f'从网易云音乐获取标签失败: {e}')
         return None
 
 
@@ -188,5 +181,5 @@ def fetch_album_cover(qq_api, netease_api, title, artist):
         return None
 
     except Exception as e:
-        main_logger.error(f'获取专辑封面失败: {e}')
+        utils.main_logger.error(f'获取专辑封面失败: {e}')
         return None

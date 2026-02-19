@@ -10,10 +10,7 @@ import shutil
 import traceback
 from typing import Any
 
-from config import (
-    mutagen_available,
-    MP3, FLAC, WAVE, APEv2File, OggVorbis
-)
+from config import mutagen_available, MP3, FLAC, WAVE, APEv2File, OggVorbis
 
 logger = logging.getLogger(__name__)
 

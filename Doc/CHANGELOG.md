@@ -9,10 +9,26 @@
 
 ## [Unreleased]
 
+### 改进
+- **导入语句重构**: 统一项目中的导入风格，提升代码可读性
+  - 模块函数调用改用 `import module` + `module.func()` 方式
+  - 配置变量继续使用 `from config import xxx` 直接导入方式
+  - 修改的文件包括: `main.py`, `tag_updater.py`, `vip_decrypt.py`, `soundalike.py`, `tag_fetcher.py`, `file_operations.py`, `archive.py`
+
 ### 计划中
 - 支持更多音乐平台（Spotify、Apple Music 等）
 - Web GUI 界面
 - Docker 部署支持
+
+---
+
+## [0.2-b1771550000] - 2026-02-19
+
+### 改进
+- **导入语句重构**: 统一项目中的导入风格，提升代码可读性
+  - 模块函数调用改用 `import module` + `module.func()` 方式
+  - 配置变量继续使用 `from config import xxx` 直接导入方式
+  - 修改的文件包括: `main.py`, `tag_updater.py`, `vip_decrypt.py`, `soundalike.py`, `tag_fetcher.py`, `file_operations.py`, `archive.py`
 
 ---
 

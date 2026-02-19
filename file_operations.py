@@ -11,34 +11,30 @@ from config import (
     MAIN_DIR, NETEASE_DIR, NETEASE_VIP_DIR, QQ_DIR, QQ_VIP_DIR,
     TEMP_COMPLETED_DIR
 )
-from utils import (
-    main_logger, create_operation_log,
-    get_file_modification_month, get_current_month,
-    parse_filename, split_artist, normalize_text, has_lrc_file
-)
-from metadata import get_music_metadata
+import utils
+import metadata
 
 
 def scan_music_files(directories, month=None):
     """扫描指定目录中的音乐文件"""
     if month is None:
-        month = get_current_month()
+        month = utils.get_current_month()
 
     music_files = []
 
     for directory in directories:
         if not os.path.exists(directory):
-            main_logger.warning(f'目录不存在: {directory}')
+            utils.main_logger.warning(f'目录不存在: {directory}')
             continue
 
-        main_logger.info(f'扫描目录: {directory}')
+        utils.main_logger.info(f'扫描目录: {directory}')
 
         for root, _, files in os.walk(directory):
             for file in files:
                 ext = os.path.splitext(file)[1].lower()
                 if ext in MUSIC_EXTENSIONS:
                     filepath = os.path.join(root, file)
-                    file_month = get_file_modification_month(filepath)
+                    file_month = utils.get_file_modification_month(filepath)
 
                     if file_month == month:
                         music_files.append({
@@ -71,7 +67,7 @@ def move_files_to_temp(files, temp_dir):
 
         try:
             shutil.move(src, dst)
-            main_logger.info(f'移动文件: {src} -> {dst}')
+            utils.main_logger.info(f'移动文件: {src} -> {dst}')
             moved_count += 1
 
             # 同时移动LRC文件（如果存在）
@@ -79,17 +75,17 @@ def move_files_to_temp(files, temp_dir):
             if os.path.exists(src_lrc):
                 dst_lrc = os.path.splitext(dst)[0] + '.lrc'
                 shutil.move(src_lrc, dst_lrc)
-                main_logger.info(f'移动歌词: {src_lrc} -> {dst_lrc}')
+                utils.main_logger.info(f'移动歌词: {src_lrc} -> {dst_lrc}')
         except Exception as e:
-            main_logger.error(f'移动文件失败 {src}: {e}')
+            utils.main_logger.error(f'移动文件失败 {src}: {e}')
 
     return moved_count
 
 
 def check_filename_consistency(check_master=True, check_temp=True):
     """检查文件名与标签的一致性"""
-    main_logger.info('开始检查文件名一致性')
-    op_logger = create_operation_log('Check')
+    utils.main_logger.info('开始检查文件名一致性')
+    op_logger = utils.create_operation_log('Check')
 
     directories = []
     if check_temp:
@@ -116,7 +112,7 @@ def check_filename_consistency(check_master=True, check_temp=True):
                     continue
 
                 filepath = os.path.join(root, file)
-                tags = get_music_metadata(filepath)
+                tags = metadata.get_music_metadata(filepath)
 
                 if tags:
                     music_info_list.append({
@@ -126,7 +122,7 @@ def check_filename_consistency(check_master=True, check_temp=True):
                     })
 
     # 检查只有"-"分隔符的文件名，修改为" - "
-    main_logger.info('检查只有"-"分隔符的文件名')
+    utils.main_logger.info('检查只有"-"分隔符的文件名')
     files_renamed = []
     for directory in directories:
         if not os.path.exists(directory):
@@ -216,13 +212,13 @@ def check_filename_consistency(check_master=True, check_temp=True):
     # 检查文件名一致性
     main_logger.info('检查文件名与标签一致性')
     for info in music_info_list:
-        filename_artist, filename_title = parse_filename(info['filename'])
+        filename_artist, filename_title = utils.parse_filename(info['filename'])
         tag_artist = info['tags'].get('artist', '')
         tag_title = info['tags'].get('title', '')
 
         # 标准化比较
-        filename_artists = set(split_artist(normalize_text(filename_artist)))
-        tag_artists = set(split_artist(normalize_text(tag_artist)))
+        filename_artists = set(utils.split_artist(utils.normalize_text(filename_artist)))
+        tag_artists = set(utils.split_artist(utils.normalize_text(tag_artist)))
 
         consistent = True
 
@@ -232,8 +228,8 @@ def check_filename_consistency(check_master=True, check_temp=True):
                 consistent = False
 
         # 检查歌曲名
-        norm_filename_title = normalize_text(filename_title)
-        norm_tag_title = normalize_text(tag_title)
+        norm_filename_title = utils.normalize_text(filename_title)
+        norm_tag_title = utils.normalize_text(tag_title)
         if norm_filename_title and norm_tag_title:
             if norm_filename_title != norm_tag_title:
                 # 允许部分匹配
@@ -261,7 +257,7 @@ def check_filename_consistency(check_master=True, check_temp=True):
         tag_title = info['tags'].get('title', '')
 
         if tag_artist and tag_title:
-            key = (normalize_text(tag_artist), normalize_text(tag_title))
+            key = (utils.normalize_text(tag_artist), utils.normalize_text(tag_title))
             if key not in artist_title_map:
                 artist_title_map[key] = []
             artist_title_map[key].append(info)
@@ -279,7 +275,7 @@ def check_filename_consistency(check_master=True, check_temp=True):
     # 检查歌词文件
     main_logger.info('检查歌词文件')
     for info in music_info_list:
-        if not has_lrc_file(info['filepath']):
+        if not utils.has_lrc_file(info['filepath']):
             missing_lrc_files.append(info)
             op_logger.warning(f'缺少歌词文件: {info["filename"]}')
 
@@ -300,7 +296,7 @@ def check_filename_consistency(check_master=True, check_temp=True):
 def organize_by_year():
     """按年份分类整理音乐文件"""
     main_logger.info('开始按年份分类整理')
-    op_logger = create_operation_log('Organize')
+    op_logger = utils.create_operation_log('Organize')
 
     success_count = 0
     unknown_count = 0
@@ -322,7 +318,7 @@ def organize_by_year():
             filepath = os.path.join(root, file)
 
             # 获取标签
-            tags = get_music_metadata(filepath)
+            tags = metadata.get_music_metadata(filepath)
 
             if not tags:
                 # 移动到unknown

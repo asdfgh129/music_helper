@@ -86,10 +86,13 @@ python main.py
 python main.py --month 202406
 
 # 仅检查主目录（跳过VIP解密，只处理主目录D:\music）
-python main.py --check-master
+python main.py --check
 
-# 不检查临时目录
-python main.py --uncheck-temp
+# 归档临时目录
+python main.py --archive
+
+# 手动归档临时目录
+python main.py --archive-manual
 
 # 检查数据库一致性
 python main.py --checkdb
@@ -533,8 +536,9 @@ MAX_COVER_SIZE = 1024 * 1024  # 1MB
 **命令行参数**:
 ```bash
 --month YYYYMM          # 指定扫描的月份 (格式: YYYYMM，默认: 当前月份)
---check-master          # 检查主目录D:\music的文件
---uncheck-temp          # 不检查临时已完成目录G:\Temp
+--check                 # 检查主目录D:\music的文件
+--archive               # 归档临时目录G:\Temp到主目录
+--archive-manual        # 手动归档临时目录G:\Temp（同2.5-2.10步骤）
 --checkdb               # 仅检查数据库和目录文件的一致性状态
 --skip-vip              # 跳过VIP文件解密步骤
 --skip-fingerprint      # 跳过声纹识别步骤
@@ -543,7 +547,7 @@ MAX_COVER_SIZE = 1024 * 1024  # 1MB
 --skip-organize         # 跳过年份分类步骤
 ```
 
-**check-master 模式**:
+**check 模式**:
 - 跳过步骤1: VIP文件解密和移动
 - 步骤2: 声纹识别不带 --temp 参数
 - 步骤3、4: 只更新和检查主目录，不处理临时目录
