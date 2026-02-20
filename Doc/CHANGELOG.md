@@ -9,22 +9,29 @@
 
 ## [Unreleased]
 
+### 计划中
+- 支持更多音乐平台（Spotify、Apple Music 等）
+- Web GUI 界面
+- Docker 部署支持
+
+---
+
+## [0.3-b1771562924] - 2026-02-20
+
 ### 改进
-- **导入语句重构**: 统一项目中的导入风格，提升代码可读性
-  - 模块函数调用改用 `import module` + `module.func()` 方式
-  - 配置变量继续使用 `from config import xxx` 直接导入方式
-  - 修改的文件包括: `main.py`, `tag_updater.py`, `vip_decrypt.py`, `soundalike.py`, `tag_fetcher.py`, `file_operations.py`, `archive.py`
 - **日志目录重构**: 将日志文件统一存储到项目目录下的 `log/` 子目录
   - 在 `config.py` 中添加 `LOG_DIR` 配置项
   - 修改 `utils.py` 中的 `setup_logging()` 和 `create_operation_log()` 函数
   - 修改 `archive.py` 中的日志配置
   - 创建 `log/.gitkeep` 保留目录结构
   - 所有日志文件不再存储在主目录中
-
-### 计划中
-- 支持更多音乐平台（Spotify、Apple Music 等）
-- Web GUI 界面
-- Docker 部署支持
+- **VIP解密功能改进**: 优化网易云和QQ音乐文件解密流程
+  - 网易云和QQ音乐普通文件使用拷贝而非移动到临时目录
+  - 网易云加密文件（.ncm）和QQ音乐加密文件（.mflac, .mgg）移动到临时目录
+  - 解密后的文件自动移回原目录，删除对应的加密文件
+  - 在 `config.py` 中添加 `NETEASE_VIP_EXTENSIONS` 和 `QQ_VIP_EXTENSIONS` 配置
+  - 在 `file_operations.py` 中添加 `copy_files_to_temp()` 和 `move_decrypted_files_back()` 函数
+  - 更新 `decrypt_netease_vip()` 和 `decrypt_qq_vip()` 函数支持普通文件处理和文件移回
 
 ---
 

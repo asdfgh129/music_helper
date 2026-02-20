@@ -92,6 +92,8 @@ UM_EXE = r'um.exe'
 SOUNDALIKE_EXE = r'soundalike.exe'
 
 # 支持的文件扩展名
-MUSIC_EXTENSIONS = {'.flac', '.mp3', '.wav', '.ape', '.ogg', '.mflac', '.mgg'}
+MUSIC_EXTENSIONS = {'.flac', '.mp3', '.wav', '.ape', '.ogg', '.mflac', '.mgg', '.ncm'}
 AUDIO_EXTENSIONS = {'.flac', '.mp3', '.wav', '.ape', '.ogg'}  # 解压后的格式
-VIP_EXTENSIONS = {'.mflac', '.mgg'}  # VIP加密格式
+VIP_EXTENSIONS = {'.mflac', '.mgg', '.ncm'}  # VIP加密格式
+NETEASE_VIP_EXTENSIONS = {'.ncm'}  # 网易云加密格式
+QQ_VIP_EXTENSIONS = {'.mflac', '.mgg'}  # QQ音乐加密格式

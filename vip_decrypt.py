@@ -6,8 +6,9 @@ VIP解密模块 - 网易云和QQ音乐VIP文件解密
 import os
 import subprocess
 from config import (
-    NETEASE_VIP_DIR, NETEASE_TMP_DIR, QQ_VIP_DIR, QQ_TMP_DIR,
-    TEMP_COMPLETED_DIR, AUDIO_EXTENSIONS, UM_EXE
+    NETEASE_DIR, NETEASE_VIP_DIR, NETEASE_TMP_DIR,
+    QQ_DIR, QQ_VIP_DIR, QQ_TMP_DIR,
+    TEMP_COMPLETED_DIR, AUDIO_EXTENSIONS, NETEASE_VIP_EXTENSIONS, QQ_VIP_EXTENSIONS, UM_EXE
 )
 import utils
 import file_operations
@@ -15,15 +16,26 @@ import file_operations
 
 def decrypt_netease_vip(month=None):
     """解密网易云音乐VIP文件"""
-    utils.main_logger.info('开始处理网易云音乐VIP文件')
-    utils.create_operation_log('Neteasy')
+    utils.main_logger.info('开始处理网易云音乐文件')
 
-    # 扫描VIP目录
+    # 处理普通音乐文件（拷贝到临时目录）
+    utils.main_logger.info('处理网易云音乐普通文件')
+    normal_files = file_operations.scan_music_files([NETEASE_DIR], month)
+
+    if normal_files:
+        utils.main_logger.info(f'拷贝 {len(normal_files)} 个普通文件到临时目录')
+        file_operations.copy_files_to_temp(normal_files, NETEASE_TMP_DIR)
+    else:
+        utils.main_logger.info('没有找到需要处理的网易云普通文件')
+
+    # 处理VIP加密文件（移动到临时目录）
+    utils.main_logger.info('处理网易云音乐VIP加密文件')
     vip_files = file_operations.scan_music_files([NETEASE_VIP_DIR], month)
 
     if not vip_files:
         utils.main_logger.info('没有找到需要处理的网易云VIP文件')
-        return 0
+        normal_count = len(normal_files) if normal_files else 0
+        return normal_count
 
     # 移动VIP文件到临时目录
     utils.main_logger.info(f'移动 {len(vip_files)} 个VIP文件到临时目录')
@@ -64,7 +76,12 @@ def decrypt_netease_vip(month=None):
                     completed_count += 1
 
         op_logger.info(f'解密完成，共处理 {completed_count} 个文件')
-        utils.main_logger.info(f'网易云VIP解密完成: {completed_count} 个文件')
+
+        # 将解密后的文件移回原目录
+        utils.main_logger.info('将解密后的文件移回原目录')
+        moved_back_count = file_operations.move_decrypted_files_back(TEMP_COMPLETED_DIR)
+        op_logger.info(f'已移回 {moved_back_count} 个文件到原目录')
+        utils.main_logger.info(f'网易云解密完成: {completed_count} 个文件，已移回 {moved_back_count} 个文件')
 
         return completed_count
 
@@ -77,15 +94,26 @@ def decrypt_netease_vip(month=None):
 
 def decrypt_qq_vip(month=None):
     """解密QQ音乐VIP文件"""
-    utils.main_logger.info('开始处理QQ音乐VIP文件')
-    op_logger = utils.create_operation_log('QQ')
+    utils.main_logger.info('开始处理QQ音乐文件')
 
-    # 扫描VIP目录
+    # 处理普通音乐文件（拷贝到临时目录）
+    utils.main_logger.info('处理QQ音乐普通文件')
+    normal_files = file_operations.scan_music_files([QQ_DIR], month)
+
+    if normal_files:
+        utils.main_logger.info(f'拷贝 {len(normal_files)} 个普通文件到临时目录')
+        file_operations.copy_files_to_temp(normal_files, QQ_TMP_DIR)
+    else:
+        utils.main_logger.info('没有找到需要处理的QQ普通文件')
+
+    # 处理VIP加密文件（移动到临时目录）
+    utils.main_logger.info('处理QQ音乐VIP加密文件')
     vip_files = file_operations.scan_music_files([QQ_VIP_DIR], month)
 
     if not vip_files:
         utils.main_logger.info('没有找到需要处理的QQ VIP文件')
-        return 0
+        normal_count = len(normal_files) if normal_files else 0
+        return normal_count
 
     # 移动VIP文件到临时目录
     utils.main_logger.info(f'移动 {len(vip_files)} 个VIP文件到临时目录')
@@ -93,6 +121,7 @@ def decrypt_qq_vip(month=None):
 
     # 直接导入qq.py的run_decrypt函数并调用
     utils.main_logger.info('运行qq.py解密QQ音乐文件')
+    op_logger = utils.create_operation_log('QQ')
     op_logger.info(f'开始解密，输入目录: {QQ_TMP_DIR}，输出目录: {TEMP_COMPLETED_DIR}')
 
     try:
@@ -114,7 +143,12 @@ def decrypt_qq_vip(month=None):
                     completed_count += 1
 
         op_logger.info(f'解密完成，共处理 {completed_count} 个文件')
-        utils.main_logger.info(f'QQ VIP解密完成: {completed_count} 个文件')
+
+        # 将解密后的文件移回原目录
+        utils.main_logger.info('将解密后的文件移回原目录')
+        moved_back_count = file_operations.move_decrypted_files_back(TEMP_COMPLETED_DIR)
+        op_logger.info(f'已移回 {moved_back_count} 个文件到原目录')
+        utils.main_logger.info(f'QQ解密完成: {completed_count} 个文件，已移回 {moved_back_count} 个文件')
 
         return completed_count
 

@@ -66,13 +66,6 @@ def main():
     )
 
     parser.add_argument(
-        '--check-master',
-        action='store_true',
-        dest='check',  # 别名到 --check
-        help='检查主目录D:\\music的文件 (已废弃，使用 --check)'
-    )
-
-    parser.add_argument(
         '--archive',
         action='store_true',
         help='归档临时目录G:\\Temp到主目录'
@@ -149,7 +142,7 @@ def main():
     utils.main_logger.info('='*60)
 
     # 确定处理目录
-    if args.check or args.check_master:
+    if args.check:
         target_dir = MAIN_DIR
         utils.main_logger.info(f'使用 check 模式，只处理主目录: {target_dir}')
     else:
@@ -157,7 +150,7 @@ def main():
         utils.main_logger.info(f'使用默认模式，只处理临时目录: {target_dir}')
 
     # 步骤1: 解密VIP文件和移动普通文件（check模式下跳过）
-    if not args.skip_vip and not args.check and not args.check_master and not args.archive_manual:
+    if not args.skip_vip and not args.check and not args.archive_manual:
         utils.main_logger.info('\n' + '='*60)
         utils.main_logger.info('步骤 1: 处理VIP文件')
         utils.main_logger.info('='*60)
@@ -175,7 +168,7 @@ def main():
         utils.main_logger.info(f'VIP处理完成: 网易 {netease_count} 个, QQ {qq_count} 个')
         utils.main_logger.info(f'普通文件: 网易 {netease_normal_count} 个, QQ {qq_normal_count} 个')
 
-    if args.check or args.check_master or args.archive_manual:
+    if args.check or args.archive_manual:
         utils.main_logger.info('\n' + '='*60)
         utils.main_logger.info('check 模式: 跳过VIP文件解密和移动')
         utils.main_logger.info('='*60)
@@ -186,7 +179,7 @@ def main():
         utils.main_logger.info('步骤 2: 声纹识别去重')
         utils.main_logger.info('='*60)
         # check模式下不带--temp参数
-        if args.check or args.check_master:
+        if args.check:
             soundalike.run_soundalike_fingerprinting_without_temp()
         else:
             soundalike.run_soundalike_fingerprinting()
@@ -206,11 +199,11 @@ def main():
         utils.main_logger.info('='*60)
         file_operations.check_filename_consistency(
             check_master=args.check or args.check_master,
-            check_temp=not args.check and not args.check_master and not args.archive_manual
+            check_temp=not args.check and not args.archive_manual
         )
 
     # 步骤5: 年份分类（默认模式和归档模式下执行）
-    if not args.skip_organize and not args.check and not args.check_master:
+    if not args.skip_organize and not args.check:
         utils.main_logger.info('\n' + '='*60)
         utils.main_logger.info('步骤 5: 按年份分类整理')
         utils.main_logger.info('='*60)
