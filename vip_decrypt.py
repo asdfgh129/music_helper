@@ -19,7 +19,7 @@ def decrypt_netease_vip(month=None):
     utils.main_logger.info('开始处理网易云音乐VIP加密文件')
 
     # 扫描VIP加密文件
-    vip_files = file_operations.scan_music_files([NETEASE_VIP_DIR], month)
+    vip_files = file_operations.scan_music_files([NETEASE_VIP_DIR], month, file_type='vip')
 
     if not vip_files:
         utils.main_logger.info('没有找到需要处理的网易云VIP文件')
@@ -85,7 +85,7 @@ def decrypt_qq_vip(month=None):
     utils.main_logger.info('开始处理QQ音乐VIP加密文件')
 
     # 扫描VIP加密文件
-    vip_files = file_operations.scan_music_files([QQ_VIP_DIR], month)
+    vip_files = file_operations.scan_music_files([QQ_VIP_DIR], month, file_type='vip')
 
     if not vip_files:
         utils.main_logger.info('没有找到需要处理的QQ VIP文件')

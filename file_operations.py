@@ -16,10 +16,27 @@ import utils
 import metadata
 
 
-def scan_music_files(directories, month=None):
-    """扫描指定目录中的音乐文件"""
+def scan_music_files(directories, month=None, file_type='all'):
+    """扫描指定目录中的音乐文件
+
+    Args:
+        directories: 要扫描的目录列表
+        month: 月份（YYYYMM格式），None表示当前月
+        file_type: 文件类型
+            - 'all': 所有音乐文件（包括加密和普通）
+            - 'normal': 只扫描普通音频文件（不包括加密格式）
+            - 'vip': 只扫描加密文件
+    """
     if month is None:
         month = utils.get_current_month()
+
+    # 根据文件类型确定要扫描的扩展名
+    if file_type == 'normal':
+        extensions = AUDIO_EXTENSIONS  # 普通音频
+    elif file_type == 'vip':
+        extensions = VIP_EXTENSIONS  # 加密文件
+    else:
+        extensions = MUSIC_EXTENSIONS  # 所有文件
 
     music_files = []
 
@@ -33,7 +50,7 @@ def scan_music_files(directories, month=None):
         for root, _, files in os.walk(directory):
             for file in files:
                 ext = os.path.splitext(file)[1].lower()
-                if ext in MUSIC_EXTENSIONS:
+                if ext in extensions:
                     filepath = os.path.join(root, file)
                     file_month = utils.get_file_modification_month(filepath)
 
@@ -45,40 +62,7 @@ def scan_music_files(directories, month=None):
                             'directory': directory
                         })
 
-    main_logger.info(f'找到 {len(music_files)} 个指定月份({month})的音乐文件')
-    return music_files
-
-
-def scan_normal_music_files(directories, month=None):
-    """扫描指定目录中的普通音乐文件（不包括加密文件）"""
-    if month is None:
-        month = utils.get_current_month()
-
-    music_files = []
-
-    for directory in directories:
-        if not os.path.exists(directory):
-            utils.main_logger.warning(f'目录不存在: {directory}')
-            continue
-
-        utils.main_logger.info(f'扫描普通音乐文件目录: {directory}')
-
-        for root, _, files in os.walk(directory):
-            for file in files:
-                ext = os.path.splitext(file)[1].lower()
-                if ext in AUDIO_EXTENSIONS:  # 只扫描普通音频格式，不包括加密格式
-                    filepath = os.path.join(root, file)
-                    file_month = utils.get_file_modification_month(filepath)
-
-                    if file_month == month:
-                        music_files.append({
-                            'filepath': filepath,
-                            'filename': file,
-                            'month': file_month,
-                            'directory': directory
-                        })
-
-    main_logger.info(f'找到 {len(music_files)} 个指定月份({month})的普通音乐文件')
+    main_logger.info(f'找到 {len(music_files)} 个指定月份({month})的音乐文件（类型: {file_type}）')
     return music_files
 
 
@@ -151,20 +135,21 @@ def copy_files_to_temp(files, temp_dir):
 
 
 def move_decrypted_files_back(completed_dir):
-    """将解密后的文件移回原目录，并删除临时目录中的加密文件"""
+    """将解密后的文件移回原VIP目录，并删除对应的加密文件
+
+    解密后的文件位于 completed_dir，需要根据文件名找到原VIP目录中对应的加密文件，
+    将解密后的文件移到该位置，并删除加密文件。
+    """
     moved_count = 0
 
     for root, _, files in os.walk(completed_dir):
         for file in files:
             ext = os.path.splitext(file)[1].lower()
             if ext in AUDIO_EXTENSIONS:
-                # 找到对应的加密文件（在原目录中）
-                # 解密后的文件名通常去掉扩展名后与原加密文件同名
-                # 例如: song.ncm -> song.mp3
+                # 解密后的文件（例如: song.mp3）
                 src_path = os.path.join(root, file)
 
                 # 尝试在VIP目录中找到对应的加密文件
-                # 查找可能的源目录
                 possible_source_dirs = []
                 for source_dir in [NETEASE_VIP_DIR, QQ_VIP_DIR]:
                     if os.path.exists(source_dir):
@@ -194,7 +179,7 @@ def move_decrypted_files_back(completed_dir):
 
                                 try:
                                     shutil.move(src_path, dst_path)
-                                    utils.main_logger.info(f'移回文件: {src_path} -> {dst_path}')
+                                    utils.main_logger.info(f'移回解密文件: {src_path} -> {dst_path}')
 
                                     # 同时移回LRC文件
                                     src_lrc = os.path.splitext(src_path)[0] + '.lrc'
@@ -572,7 +557,7 @@ def copy_netease_normal_files(month=None):
     """拷贝网易云音乐普通文件到临时目录"""
     main_logger.info('开始拷贝网易云音乐普通文件')
 
-    files = scan_normal_music_files([NETEASE_DIR], month)
+    files = scan_music_files([NETEASE_DIR], month, file_type='normal')
     # 排除VIP目录
     files = [f for f in files if NETEASE_VIP_DIR not in f['filepath']]
 
@@ -587,7 +572,7 @@ def copy_qq_normal_files(month=None):
     """拷贝QQ音乐普通文件到临时目录"""
     main_logger.info('开始拷贝QQ音乐普通文件')
 
-    files = scan_normal_music_files([QQ_DIR], month)
+    files = scan_music_files([QQ_DIR], month, file_type='normal')
     # 排除VIP目录
     files = [f for f in files if QQ_VIP_DIR not in f['filepath']]
 
