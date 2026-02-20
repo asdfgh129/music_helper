@@ -67,7 +67,7 @@ def decrypt_netease_vip(month=None):
 
         # 将解密后的文件移回原目录
         utils.main_logger.info('将解密后的文件移回原目录')
-        moved_back_count = file_operations.move_decrypted_files_back(TEMP_COMPLETED_DIR)
+        moved_back_count = file_operations.move_decrypted_files_back(TEMP_COMPLETED_DIR, NETEASE_VIP_DIR)
         op_logger.info(f'已移回 {moved_back_count} 个文件到原目录')
         utils.main_logger.info(f'网易云VIP解密完成: {completed_count} 个文件，已移回 {moved_back_count} 个文件')
 
@@ -122,7 +122,7 @@ def decrypt_qq_vip(month=None):
 
         # 将解密后的文件移回原目录
         utils.main_logger.info('将解密后的文件移回原目录')
-        moved_back_count = file_operations.move_decrypted_files_back(TEMP_COMPLETED_DIR)
+        moved_back_count = file_operations.move_decrypted_files_back(TEMP_COMPLETED_DIR, QQ_VIP_DIR)
         op_logger.info(f'已移回 {moved_back_count} 个文件到原目录')
         utils.main_logger.info(f'QQ VIP解密完成: {completed_count} 个文件，已移回 {moved_back_count} 个文件')
 

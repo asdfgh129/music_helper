@@ -134,81 +134,47 @@ def copy_files_to_temp(files, temp_dir):
     return copied_count
 
 
-def move_decrypted_files_back(completed_dir):
-    """将解密后的文件移回原VIP目录，并删除对应的加密文件
+def move_decrypted_files_back(completed_dir, source_dir):
+    """将解密后的文件移动回原VIP目录
 
-    解密后的文件位于 completed_dir，需要根据文件名找到原VIP目录中对应的加密文件，
-    将解密后的文件移到该位置，并删除加密文件。
+    Args:
+        completed_dir: 解密后的文件所在的目录（TEMP_COMPLETED_DIR）
+        source_dir: 原VIP目录（NETEASE_VIP_DIR 或 QQ_VIP_DIR）
+
+    将 completed_dir 下的所有文件移动回 source_dir。
     """
+    if not os.path.exists(completed_dir):
+        utils.main_logger.warning(f'解密目录不存在: {completed_dir}')
+        return 0
+
     moved_count = 0
 
-    for root, _, files in os.walk(completed_dir):
-        for file in files:
-            ext = os.path.splitext(file)[1].lower()
-            if ext in AUDIO_EXTENSIONS:
-                # 解密后的文件（例如: song.mp3）
-                src_path = os.path.join(root, file)
+    # 移动解密后的文件回原目录
+    for file in os.listdir(completed_dir):
+        src_path = os.path.join(completed_dir, file)
 
-                # 尝试在VIP目录中找到对应的加密文件
-                possible_source_dirs = []
-                for source_dir in [NETEASE_VIP_DIR, QQ_VIP_DIR]:
-                    if os.path.exists(source_dir):
-                        possible_source_dirs.append(source_dir)
+        # 跳过目录
+        if os.path.isdir(src_path):
+            continue
 
-                # 遍历可能的源目录查找加密文件
-                found_source = False
-                for source_dir in possible_source_dirs:
-                    for src_root, _, src_files in os.walk(source_dir):
-                        for src_file in src_files:
-                            src_ext = os.path.splitext(src_file)[1].lower()
-                            src_name_no_ext = os.path.splitext(src_file)[0]
-                            dst_name_no_ext = os.path.splitext(file)[0]
+        dst_path = os.path.join(source_dir, file)
 
-                            # 检查是否为加密文件且基础文件名匹配
-                            if src_ext in VIP_EXTENSIONS and src_name_no_ext == dst_name_no_ext:
-                                # 找到匹配的加密文件，移动解密后的文件到该位置
-                                dst_path = os.path.join(src_root, file)
+        # 如果目标文件已存在，添加序号
+        counter = 1
+        original_dst = dst_path
+        while os.path.exists(dst_path):
+            base, ext = os.path.splitext(original_dst)
+            dst_path = f'{base}_{counter}{ext}'
+            counter += 1
 
-                                # 如果目标文件已存在，添加序号
-                                counter = 1
-                                original_dst = dst_path
-                                while os.path.exists(dst_path):
-                                    base, ext = os.path.splitext(original_dst)
-                                    dst_path = f'{base}_{counter}{ext}'
-                                    counter += 1
+        try:
+            shutil.move(src_path, dst_path)
+            utils.main_logger.info(f'移动解密文件: {src_path} -> {dst_path}')
+            moved_count += 1
+        except Exception as e:
+            utils.main_logger.error(f'移动文件失败 {src_path}: {e}')
 
-                                try:
-                                    shutil.move(src_path, dst_path)
-                                    utils.main_logger.info(f'移回解密文件: {src_path} -> {dst_path}')
-
-                                    # 同时移回LRC文件
-                                    src_lrc = os.path.splitext(src_path)[0] + '.lrc'
-                                    if os.path.exists(src_lrc):
-                                        dst_lrc = os.path.splitext(dst_path)[0] + '.lrc'
-                                        # 如果目标LRC已存在，添加序号
-                                        lrc_counter = 1
-                                        original_dst_lrc = dst_lrc
-                                        while os.path.exists(dst_lrc):
-                                            base, ext = os.path.splitext(original_dst_lrc)
-                                            dst_lrc = f'{base}_{lrc_counter}{ext}'
-                                            lrc_counter += 1
-                                        shutil.move(src_lrc, dst_lrc)
-                                        utils.main_logger.info(f'移回歌词: {src_lrc} -> {dst_lrc}')
-
-                                    # 删除加密文件
-                                    encrypted_path = os.path.join(src_root, src_file)
-                                    if os.path.exists(encrypted_path):
-                                        os.remove(encrypted_path)
-                                        utils.main_logger.info(f'删除加密文件: {encrypted_path}')
-
-                                    moved_count += 1
-                                    found_source = True
-                                    break
-                        if found_source:
-                            break
-                    if found_source:
-                        break
-
+    utils.main_logger.info(f'完成: 移动 {moved_count} 个解密文件到 {source_dir}')
     return moved_count
 
 
