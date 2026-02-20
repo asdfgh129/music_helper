@@ -16,6 +16,18 @@
 
 ---
 
+## [0.4-b1771563799] - 2026-02-20
+
+### 改进
+- **业务逻辑优化**: 分离VIP加密文件和普通音乐文件的处理流程
+  - VIP解密函数（`decrypt_netease_vip()` 和 `decrypt_qq_vip()`）现在只处理加密文件，不再处理普通文件
+  - 普通音乐文件使用独立的拷贝函数（`copy_netease_normal_files()` 和 `copy_qq_normal_files()`）
+  - 在 `file_operations.py` 中添加 `scan_normal_music_files()` 函数，专门扫描普通音频文件（不包括加密格式）
+  - 将原 `move_netease_normal_files()` 和 `move_qq_normal_files()` 改为 `copy_netease_normal_files()` 和 `copy_qq_normal_files()`
+  - 更新 `main.py` 中的函数调用和日志信息
+
+---
+
 ## [0.3-b1771562924] - 2026-02-20
 
 ### 改进

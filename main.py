@@ -161,12 +161,12 @@ def main():
         # QQ VIP
         qq_count = vip_decrypt.decrypt_qq_vip(month)
 
-        # 移动普通文件
-        netease_normal_count = file_operations.move_netease_normal_files(month)
-        qq_normal_count = file_operations.move_qq_normal_files(month)
+        # 拷贝普通文件
+        netease_normal_count = file_operations.copy_netease_normal_files(month)
+        qq_normal_count = file_operations.copy_qq_normal_files(month)
 
-        utils.main_logger.info(f'VIP处理完成: 网易 {netease_count} 个, QQ {qq_count} 个')
-        utils.main_logger.info(f'普通文件: 网易 {netease_normal_count} 个, QQ {qq_normal_count} 个')
+        utils.main_logger.info(f'VIP解密完成: 网易 {netease_count} 个, QQ {qq_count} 个')
+        utils.main_logger.info(f'普通文件拷贝完成: 网易 {netease_normal_count} 个, QQ {qq_normal_count} 个')
 
     if args.check or args.archive_manual:
         utils.main_logger.info('\n' + '='*60)

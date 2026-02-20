@@ -49,6 +49,39 @@ def scan_music_files(directories, month=None):
     return music_files
 
 
+def scan_normal_music_files(directories, month=None):
+    """扫描指定目录中的普通音乐文件（不包括加密文件）"""
+    if month is None:
+        month = utils.get_current_month()
+
+    music_files = []
+
+    for directory in directories:
+        if not os.path.exists(directory):
+            utils.main_logger.warning(f'目录不存在: {directory}')
+            continue
+
+        utils.main_logger.info(f'扫描普通音乐文件目录: {directory}')
+
+        for root, _, files in os.walk(directory):
+            for file in files:
+                ext = os.path.splitext(file)[1].lower()
+                if ext in AUDIO_EXTENSIONS:  # 只扫描普通音频格式，不包括加密格式
+                    filepath = os.path.join(root, file)
+                    file_month = utils.get_file_modification_month(filepath)
+
+                    if file_month == month:
+                        music_files.append({
+                            'filepath': filepath,
+                            'filename': file,
+                            'month': file_month,
+                            'directory': directory
+                        })
+
+    main_logger.info(f'找到 {len(music_files)} 个指定月份({month})的普通音乐文件')
+    return music_files
+
+
 def move_files_to_temp(files, temp_dir):
     """移动文件到临时目录"""
     os.makedirs(temp_dir, exist_ok=True)
@@ -535,31 +568,31 @@ def organize_by_year():
     return success_count, unknown_count
 
 
-def move_netease_normal_files(month=None):
-    """移动网易云音乐普通文件"""
-    main_logger.info('开始移动网易云音乐普通文件')
+def copy_netease_normal_files(month=None):
+    """拷贝网易云音乐普通文件到临时目录"""
+    main_logger.info('开始拷贝网易云音乐普通文件')
 
-    files = scan_music_files([NETEASE_DIR], month)
+    files = scan_normal_music_files([NETEASE_DIR], month)
     # 排除VIP目录
     files = [f for f in files if NETEASE_VIP_DIR not in f['filepath']]
 
     if files:
-        count = move_files_to_temp(files, TEMP_COMPLETED_DIR)
-        main_logger.info(f'移动 {count} 个网易云普通文件到临时完成目录')
+        count = copy_files_to_temp(files, TEMP_COMPLETED_DIR)
+        main_logger.info(f'拷贝 {count} 个网易云普通文件到临时完成目录')
         return count
     return 0
 
 
-def move_qq_normal_files(month=None):
-    """移动QQ音乐普通文件"""
-    main_logger.info('开始移动QQ音乐普通文件')
+def copy_qq_normal_files(month=None):
+    """拷贝QQ音乐普通文件到临时目录"""
+    main_logger.info('开始拷贝QQ音乐普通文件')
 
-    files = scan_music_files([QQ_DIR], month)
+    files = scan_normal_music_files([QQ_DIR], month)
     # 排除VIP目录
     files = [f for f in files if QQ_VIP_DIR not in f['filepath']]
 
     if files:
-        count = move_files_to_temp(files, TEMP_COMPLETED_DIR)
-        main_logger.info(f'移动 {count} 个QQ普通文件到临时完成目录')
+        count = copy_files_to_temp(files, TEMP_COMPLETED_DIR)
+        main_logger.info(f'拷贝 {count} 个QQ普通文件到临时完成目录')
         return count
     return 0
