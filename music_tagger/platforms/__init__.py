@@ -5,9 +5,9 @@
 
 from .netease import NetEaseMusicClient
 from .qqmusic import QQMusicApi, QmusicClient
-from .migu import MiGuMusicClient
-from .kugou import KugouClient
-from .kuwo import KuwoClient
+# from .migu import MiGuMusicClient
+# from .kugou import KugouClient
+# from .kuwo import KuwoClient
 from .acoustid import AcoustidClient
 
 from .netease import send as netease_send
@@ -34,14 +34,14 @@ class MusicResource:
         """根据平台名称获取对应的客户端"""
         if info == "netease":
             return NetEaseMusicClient()
-        elif info == "migu":
-            return MiGuMusicClient()
+        # elif info == "migu":
+        #     return MiGuMusicClient()
         elif info == "qmusic":
             return QmusicClient()
-        elif info == "kugou":
-            return KugouClient()
-        elif info == "kuwo":
-            return KuwoClient()
+        # elif info == "kugou":
+        #     return KugouClient()
+        # elif info == "kuwo":
+        #     return KuwoClient()
         elif info == "acoustid":
             return AcoustidClient()
         raise Exception(f"暂不支持该音乐平台: {info}")

@@ -77,16 +77,58 @@ def parse_filename(filename):
     }
 
 
+def print_song_details(song, index=None):
+    """
+    打印歌曲的详细标签信息
+
+    Args:
+        song: 歌曲信息字典
+        index: 结果索引（可选）
+    """
+    if index is not None:
+        print(f"\n{'='*60}")
+        print(f"结果 #{index} [{song['platform']} - 得分: {song['match_score']:.2f}]")
+        print(f"{'='*60}")
+    else:
+        print(f"\n{'='*60}")
+        print(f"[{song['platform']} - 得分: {song['match_score']:.2f}]")
+        print(f"{'='*60}")
+
+    print(f"\n🎵 基本信息")
+    print(f"  歌曲ID: {song.get('id', 'N/A')}")
+    print(f"  歌曲名: {song.get('name', 'N/A')}")
+    print(f"  歌手: {song.get('artist', 'N/A')}")
+    print(f"  歌手ID: {song.get('artist_id', 'N/A')}")
+    print(f"  专辑: {song.get('album', 'N/A')}")
+    print(f"  专辑ID: {song.get('album_id', 'N/A')}")
+    print(f"  年份: {song.get('year', 'N/A')}")
+
+    print(f"\n📀 专辑信息")
+    print(f"  专辑封面: {song.get('album_img', 'N/A')}")
+
+    # 打印所有其他字段
+    print(f"\n📋 完整标签信息")
+    excluded_keys = {'platform', 'match_score', 'file_full_path', 'filename'}
+    for key, value in song.items():
+        if key not in excluded_keys:
+            # 格式化字段名显示
+            display_key = key.replace('_', ' ').title()
+            # 限制过长的值显示
+            if isinstance(value, str) and len(value) > 100:
+                value = value[:100] + "..."
+            print(f"  {display_key}: {value}")
+
+
 def search_best_match(artist, title, platforms=None, max_results=5):
     """
     在多个平台搜索并找出最佳匹配
-    
+
     Args:
         artist: 歌手名
         title: 歌曲名
         platforms: 平台列表，默认 ["netease", "qmusic", "migu", "kugou"]
-        max_results: 每个平台最多返回结果数
-    
+        max_results: 此参数已废弃，现在会显示所有搜索结果
+
     Returns:
         dict: 最佳匹配结果，包含所有标签信息
     """
@@ -128,21 +170,23 @@ def search_best_match(artist, title, platforms=None, max_results=5):
     if not all_results:
         print("\n未找到匹配结果")
         return None
-    
+
     # 按匹配度排序
     all_results.sort(key=lambda x: x["match_score"], reverse=True)
-    
-    print(f"\n总共找到 {len(all_results)} 个候选结果")
-    print("\n=== 最佳匹配结果 ===")
-    
-    # 显示前几个结果
-    for i, song in enumerate(all_results[:max_results]):
-        print(f"\n#{i+1} [{song['platform']} - 得分: {song['match_score']:.2f}]")
-        print(f"  歌曲: {song['name']}")
-        print(f"  歌手: {song['artist']}")
-        print(f"  专辑: {song['album']}")
-        print(f"  ID: {song.get('id', 'N/A')}")
-    
+
+    print(f"\n{'='*60}")
+    print(f"总共找到 {len(all_results)} 个候选结果")
+    print(f"{'='*60}")
+
+    # 打印所有搜索结果及其详细标签信息
+    for i, song in enumerate(all_results):
+        print_song_details(song, i+1)
+
+    # 标记最佳匹配
+    print(f"\n{'='*60}")
+    print(f"★ 最佳匹配结果: 结果 #{1}")
+    print(f"{'='*60}")
+
     return all_results[0]
 
 

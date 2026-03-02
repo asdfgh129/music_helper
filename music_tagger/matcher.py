@@ -6,12 +6,12 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 
 try:
-    from component.music_tag import load_file
+    from music_tag import load_file
 except ImportError:
     raise ImportError("需要安装 music_tag 模块")
 
 from .platforms import MusicResource
-from .utils import match_score
+# from .utils import match_score
 
 
 def match_artist(my_value, u_value):
@@ -30,6 +30,41 @@ def match_artist(my_value, u_value):
                + match_score(my_value, u_value.split(",")[1].replace(" ", ""))
     else:
         return match_score(my_value, u_value)
+
+def match_score(my_value, u_value):
+    """
+    字符串匹配评分算法
+    
+    Args:
+        my_value: 本地值
+        u_value: 在线值
+    
+    Returns:
+        int: 2(完全匹配) | 1(包含匹配) | 0(不匹配)
+    """
+    try:
+        my_value = my_value.lower().replace(" ", "")
+        u_value = u_value.lower().replace(" ", "")
+        
+        # 繁简转换
+        # if not issimp(my_value):
+        #     my_value = convert(my_value, 'zh-cn')
+        # if not issimp(u_value):
+        #     u_value = convert(u_value, 'zh-cn')
+        
+        if not my_value or not u_value:
+            return 0
+        
+        # 完全匹配
+        if my_value == u_value:
+            return 2
+        # 包含匹配
+        elif my_value in u_value or u_value in my_value:
+            return 1
+        # 不匹配
+        return 0
+    except Exception:
+        return 0
 
 
 class SmartTagClient:
@@ -108,5 +143,5 @@ class SmartTagClient:
 
 
 # 导出函数
-from .utils import match_score
+# from .utils import match_score
 __all__ = ["SmartTagClient", "match_score", "match_artist"]

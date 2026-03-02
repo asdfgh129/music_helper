@@ -6,7 +6,7 @@ import requests
 import time
 from random import randint
 
-from ..crypto import weEncrypt, linuxEncrypt
+from ..encrypt import weEncrypt, linuxEncrypt
 
 
 def timestamp_to_dt(timestamp, format_type="%Y-%m-%d %H:%M:%S"):
@@ -106,7 +106,7 @@ class NetEaseMusicClient:
 
     def fetch_id3_by_title(self, title):
         """搜索音乐"""
-        data = send({'s': title, 'type': '1', 'limit': '10', 'offset': '0'}).POST("weapi/cloudsearch/get/web")
+        data = send({'s': title, 'type': '1', 'limit': '10', 'offset': '0'}).POST("weapi/cloudsearch/pc")
         try:
             songs = data.json().get("result", {}).get("songs", [])
         except Exception as e:
