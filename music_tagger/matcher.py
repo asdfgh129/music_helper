@@ -11,7 +11,8 @@ except ImportError:
     raise ImportError("需要安装 music_tag 模块")
 
 from .platforms import MusicResource
-# from .utils import match_score
+from .zhconv import convert, issimp
+from ..utils import split_artist
 
 
 def match_artist(my_value, u_value):
@@ -20,16 +21,25 @@ def match_artist(my_value, u_value):
     
     Args:
         my_value: 本地艺术家名称
-        u_value: 在线艺术家名称(可能包含多个, 用逗号分隔)
+        u_value: 在线艺术家名称(可能包含多个, 用多种分隔符分隔)
     
     Returns:
-        int: 匹配得分
+        int: 匹配得分，取所有在线艺术家中的最高匹配得分
     """
-    if "," in u_value:
-        return match_score(my_value, u_value.split(",")[0].replace(" ", "")) \
-               + match_score(my_value, u_value.split(",")[1].replace(" ", ""))
-    else:
+    # 拆分在线艺术家列表
+    online_artists = split_artist(u_value)
+    
+    if not online_artists:
         return match_score(my_value, u_value)
+    
+    # 对每个在线艺术家进行匹配，取最高得分
+    max_score = 0
+    for online_artist in online_artists:
+        score = match_score(my_value, online_artist)
+        if score > max_score:
+            max_score = score
+    
+    return max_score
 
 def match_score(my_value, u_value):
     """
@@ -47,10 +57,10 @@ def match_score(my_value, u_value):
         u_value = u_value.lower().replace(" ", "")
         
         # 繁简转换
-        # if not issimp(my_value):
-        #     my_value = convert(my_value, 'zh-cn')
-        # if not issimp(u_value):
-        #     u_value = convert(u_value, 'zh-cn')
+        if not issimp(my_value):
+            my_value = convert(my_value, 'zh-cn')
+        if not issimp(u_value):
+            u_value = convert(u_value, 'zh-cn')
         
         if not my_value or not u_value:
             return 0

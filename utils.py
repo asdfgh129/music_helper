@@ -112,7 +112,27 @@ def get_current_month():
 
 
 def split_artist(artist):
-    """拆分艺术家名称，支持多种分隔符"""
+    """
+    拆分艺术家名称，支持多种分隔符
+    
+    支持的分隔符：
+    - 英文逗号: ,
+    - 英文分号: ;
+    - 中文逗号: ，
+    - 中文分号: ；
+    - & 符号: &
+    - 斜杠: /
+    - 中文顿号: 、
+    - 中点: • ·
+    - 竖线: | ｜
+    - 加号: + ＋
+    
+    Args:
+        artist: 艺术家字符串，可能包含多个艺术家
+    
+    Returns:
+        list: 拆分后的艺术家列表，去除空字符串
+    """
     if not artist:
         return []
 
@@ -158,3 +178,33 @@ def has_lrc_file(music_filepath):
     """检查音乐文件是否有对应的LRC歌词文件"""
     lrc_path = os.path.splitext(music_filepath)[0] + '.lrc'
     return os.path.exists(lrc_path)
+
+def detect_language(lyrics):
+    chinese_pattern = re.compile(r'[\u4e00-\u9fa5]')
+    english_pattern = re.compile(r'[a-zA-Z]')
+    japanese_pattern = re.compile(r'[\u0800-\u4e00]')
+    korean_pattern = re.compile(r'[\uac00-\ud7a3]')
+    thai_pattern = re.compile(r'[\u0e00-\u0e7f]')
+
+    chinese_count = len(re.findall(chinese_pattern, lyrics))
+    english_count = len(re.findall(english_pattern, lyrics))
+    japanese_count = len(re.findall(japanese_pattern, lyrics))
+    korean_count = len(re.findall(korean_pattern, lyrics))
+    thai_count = len(re.findall(thai_pattern, lyrics))
+    if chinese_count > english_count and chinese_count > japanese_count and chinese_count > korean_count \
+            and chinese_count > thai_count:
+        return '中文'
+    elif english_count > chinese_count and english_count > japanese_count and english_count > korean_count \
+            and english_count > thai_count:
+        return '英文'
+    elif japanese_count > chinese_count and japanese_count > english_count and japanese_count > korean_count \
+            and japanese_count > thai_count:
+        return '日文'
+    elif korean_count > chinese_count and korean_count > english_count and korean_count > japanese_count \
+            and korean_count > thai_count:
+        return '韩文'
+    elif thai_count > chinese_count and thai_count > english_count and thai_count > japanese_count \
+            and thai_count > korean_count:
+        return '泰文'
+    else:
+        return '未知'

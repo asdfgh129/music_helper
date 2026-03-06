@@ -72,9 +72,18 @@ NETEASE_VIP_DIR = r'G:\Neteasymusic\VipSOngsDownload'
 NETEASE_TMP_DIR = r'G:\NeTmp'
 TEMP_COMPLETED_DIR = r'G:\Temp'
 TEMP_MOVE_DIR = r'G:\Tmp'
+
+# 指纹长度配置（秒）
+FPCALC_LENGTH = 120  # MusicBrainz 标准长度，与 soundalike 工具保持一致
 ```
 
-**重要**: 根据您的实际环境修改这些路径!
+**重要**: 根据您的实际环境修改这些路径！
+
+**指纹长度说明**:
+- `FPCALC_LENGTH = 120` 是 MusicBrainz 数据库的标准指纹长度
+- 确保 `soundalike.exe` 工具也使用相同的长度（120 秒）
+- 不同长度的指纹无法互相匹配
+- 详细说明见 [FINGERPRINT_LENGTH_CONFIG.md](./FINGERPRINT_LENGTH_CONFIG.md)
 
 ### 3. 基本使用
 

@@ -1363,6 +1363,13 @@ TEMP_MOVE_DIR = r'G:\Tmp'
 UM_EXE = r'um.exe'
 SOUNDALIKE_EXE = r'soundalike.exe'
 
+# ==================== 指纹配置 ====================
+# fpcalc 指纹提取长度（秒）
+# MusicBrainz 需要的指纹长度为 120 秒
+# 声纹识别去重工具 Soundalike 使用的指纹长度
+# 注意：两个工具应该使用相同的长度以确保指纹兼容性
+FPCALC_LENGTH = 120  # 统一使用 120 秒长度（MusicBrainz 标准长度）
+
 # ==================== 文件扩展名配置 ====================
 
 # 支持的所有音乐文件扩展名
@@ -1384,6 +1391,23 @@ A: 可能原因:
 - 音频文件太短或质量太差
 - MusicBrainz数据库中没有收录
 - fpcalc工具未正确安装
+- 指纹长度配置不正确（应为 120 秒，MusicBrainz 标准长度）
+
+**Q: 什么是指纹长度配置?**
+A:
+- 指纹长度是指从音频文件中提取指纹数据的时长（秒）
+- `config.py` 中的 `FPCALC_LENGTH = 120` 控制此配置
+- MusicBrainz 数据库使用 120 秒长度的指纹
+- `soundalike.exe` 工具也应该使用相同的 120 秒长度
+- 不同长度的指纹无法互相匹配
+- 详细说明见项目根目录的 `FINGERPRINT_LENGTH_CONFIG.md`
+
+**Q: 为什么 soundalike.exe 需要使用 120 秒长度?**
+A:
+- MusicBrainz 数据库存储的是 120 秒长度的指纹
+- 如果使用 15 秒长度，指纹无法匹配 MusicBrainz
+- 为了实现项目内指纹数据共享和统一匹配，必须使用相同长度
+- 建议：重新编译或配置 `soundalike.exe` 使用 120 秒长度
 
 **Q: QQ音乐解密失败怎么办?**
 A: 检查:

@@ -273,7 +273,9 @@ class MusicTagger:
                 artist = resolve_template(tag_info["artist"], var_dict)
             else:
                 artist = tag_info["artist"]
-            artists = artist.split(",") if isinstance(artist, str) else [artist]
+            # 使用统一的艺术家分割函数
+            from ..utils import split_artist
+            artists = split_artist(artist) if isinstance(artist, str) else [artist]
             self._file.set("artist", artists)
 
         # 专辑

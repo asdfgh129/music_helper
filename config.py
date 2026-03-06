@@ -91,6 +91,13 @@ TEMP_MOVE_DIR = r'G:\Tmp'
 UM_EXE = r'um.exe'
 SOUNDALIKE_EXE = r'soundalike.exe'
 
+# ==================== 指纹配置 ====================
+# fpcalc 指纹提取长度（秒）
+# MusicBrainz 需要的指纹长度为 120 秒
+# 声纹识别去重工具 Soundalike 使用的指纹长度
+# 注意：两个工具应该使用相同的长度以确保指纹兼容性
+FPCALC_LENGTH = 120  # 统一使用 120 秒长度（MusicBrainz 标准长度）
+
 # 支持的文件扩展名
 MUSIC_EXTENSIONS = {'.flac', '.mp3', '.wav', '.ape', '.ogg', '.mflac', '.mgg', '.ncm'}
 AUDIO_EXTENSIONS = {'.flac', '.mp3', '.wav', '.ape', '.ogg'}  # 解压后的格式

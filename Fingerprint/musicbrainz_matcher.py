@@ -10,11 +10,32 @@ import json
 import logging
 import subprocess
 import re
+import os
+import sys
 from typing import Optional, Dict, List, Callable, Any, Union, Tuple
 from urllib.parse import urlencode, quote
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 from datetime import datetime
+import ssl
+
+# macOS SSL 证书修复
+# 创建默认的 SSL 上下文以避免证书验证失败
+_ssl_context = None
+try:
+    _ssl_context = ssl._create_unverified_context()
+except Exception:
+    pass
+
+# 添加项目根目录到路径以导入 config
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    from config import FPCALC_LENGTH
+except ImportError:
+    # 如果无法导入，使用默认值
+    FPCALC_LENGTH = 120
+    logging.warning(f"无法从 config 导入 FPCALC_LENGTH，使用默认值: {FPCALC_LENGTH}")
 
 # 导入OpenCC进行完整的繁简转换
 try:
@@ -357,7 +378,7 @@ class HTTPClient:
         request = Request(url, data=encoded_data, headers=all_headers, method='POST')
 
         try:
-            with urlopen(request, timeout=30) as response:
+            with urlopen(request, timeout=30, context=_ssl_context) as response:
                 content = response.read().decode('utf-8')
                 # 解析JSON并将繁体中文转换为简体中文
                 parsed_json = json.loads(content)
@@ -388,7 +409,7 @@ class HTTPClient:
         request = Request(url, headers=headers)
 
         try:
-            with urlopen(request, timeout=30) as response:
+            with urlopen(request, timeout=30, context=_ssl_context) as response:
                 content = response.read().decode('utf-8')
                 # 解析JSON并将繁体中文转换为简体中文
                 parsed_json = json.loads(content)
@@ -428,10 +449,13 @@ class FingerprintCalculator:
         """计算音频文件的指纹"""
         if not self.fpcalc_path:
             return FingerprintResult('', 0, success=False)
-        
+
+        # 使用配置的指纹长度
+        logger.info(f"使用指纹长度: {FPCALC_LENGTH} 秒")
+
         try:
             result = subprocess.run(
-                [self.fpcalc_path, '-json', '-length', '120', audio_file_path],
+                [self.fpcalc_path, '-json', '-length', str(FPCALC_LENGTH), audio_file_path],
                 capture_output=True,
                 text=True,
                 timeout=60
