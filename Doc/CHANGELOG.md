@@ -16,6 +16,30 @@
 
 ---
 
+## [0.5-b1772000000] - 2026-03-06
+
+### 改进
+- **MusicBrainz 连接优化**: 修复 macOS SSL 证书验证问题
+  - 在 `musicbrainz_matcher.py` 中添加 SSL 上下文配置
+  - 使用 `ssl._create_unverified_context()` 避免 SSL 证书验证失败
+  - 测试文件统一存放到 `test/` 目录
+- **项目文件整理**: 清理临时测试文件和文档
+  - 删除临时测试脚本: `test_mb_direct.py`, `simple_test.py`, `verify_musicbrainz.py`
+  - 删除临时文档: `FINGERPRINT_LENGTH_*.md`, `MUSIC_TAGGER_EXAMPLE_UPDATE.md`, `MATCHER_IMPROVEMENTS.md`
+  - 删除 `test/` 目录中的临时测试报告和 JSON 文件
+  - 保留最终测试代码: `test/test_musicbrainz_connection.py`, `test/test_musicbrainz_direct.py`
+- **文档整理**: 更新 CHANGELOG，记录文件整理和改进内容
+
+### 修复
+- 修复 macOS 平台上 MusicBrainz API 连接的 SSL 证书验证失败问题
+
+### 文档
+- 更新 CHANGELOG.md
+- 保留核心文档: README.md, Doc/FEATURES.md, Doc/QUICKSTART.md
+- 保留技术文档: Doc/FINGERPRINT_MATCHER_README.md
+
+---
+
 ## [0.4-b1771563799] - 2026-02-20
 
 ### 改进

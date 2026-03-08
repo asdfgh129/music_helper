@@ -1,45 +1,43 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""验证 musicbrainz_matcher.py 的 MusicBrainz 连接是否正常"""
+"""
+MusicBrainz 连接测试
+验证 musicbrainz_matcher.py 的 MusicBrainz 连接功能
+"""
 
 import sys
-import ssl
+import os
 import logging
 
-# macOS Python SSL 证书修复
-try:
-    import certifi
-    ssl._create_default_https_context = ssl._create_unverified_context
-    logging.info("已使用 SSL 上下文配置")
-except ImportError:
-    logging.warning("certifi 未安装,可能会遇到 SSL 证书问题")
+# 添加 Fingerprint 模块路径
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'Fingerprint'))
 
-# 设置日志
+from musicbrainz_matcher import FingerprintMatcher
+
+# 配置日志
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s %(levelname)s %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
 )
 
-# 导入 Fingerprint 模块
-try:
-    sys.path.insert(0, '/Users/bemin/Code/music_helper/Fingerprint')
-    from musicbrainz_matcher import FingerprintMatcher
-    
-    logging.info("成功导入 FingerprintMatcher")
-except Exception as e:
-    logging.error(f"导入失败: {e}")
-    sys.exit(1)
-
-def test_connection():
+def test_musicbrainz_connection():
     """测试 MusicBrainz 连接"""
+    logging.info("=" * 60)
+    logging.info("开始测试 MusicBrainz 连接")
+    logging.info("=" * 60)
+    
     try:
         # 创建 matcher 实例
         matcher = FingerprintMatcher()
-        logging.info("成功创建 FingerprintMatcher 实例")
+        logging.info("✓ 成功创建 FingerprintMatcher 实例")
         
         # 使用测试音频文件
-        audio_file = "/Users/bemin/Code/music_helper/1.flac"
+        audio_file = os.path.join(os.path.dirname(__file__), '..', '1.flac')
+        
+        if not os.path.exists(audio_file):
+            logging.error(f"测试音频文件不存在: {audio_file}")
+            return False
         
         logging.info(f"测试文件: {audio_file}")
         
@@ -47,7 +45,7 @@ def test_connection():
         result = matcher.match_file(audio_file)
         
         if result.success:
-            logging.info(f"✓ 查询成功! 找到 {len(result.recordings)} 条结果")
+            logging.info(f"✓ 查询成功! 找到 {len(result.recordings)} 条匹配结果")
             
             if result.recordings:
                 logging.info("\n最佳匹配:")
@@ -56,43 +54,37 @@ def test_connection():
                     if key in best:
                         logging.info(f"  {key}: {best[key]}")
                 
-                # 如果有更多结果,显示前3条
+                # 显示更多结果
                 if len(result.recordings) > 1:
                     logging.info(f"\n其他匹配 ({len(result.recordings)-1} 条):")
                     for i, rec in enumerate(result.recordings[1:4], 2):
-                        logging.info(f"  {i}. {rec.get('title', 'N/A')} - {rec.get('artist', 'N/A')}")
+                        title = rec.get('title', 'N/A')
+                        artist = rec.get('artist', 'N/A')
+                        logging.info(f"  {i}. {title} - {artist}")
             
+            logging.info("=" * 60)
+            logging.info("✓ MusicBrainz 连接测试通过")
+            logging.info("=" * 60)
             return True
         else:
             if result.error:
                 logging.warning(f"✓ 连接成功,但查询失败: {result.error}")
             else:
                 logging.warning("✓ 连接成功,但没有找到匹配结果")
+            logging.info("=" * 60)
             return True
             
     except Exception as e:
         logging.error(f"✗ 查询失败: {e}")
         import traceback
         logging.error(traceback.format_exc())
+        logging.info("=" * 60)
         return False
 
 def main():
     """主函数"""
-    logging.info("=" * 60)
-    logging.info("开始验证 MusicBrainz 连接")
-    logging.info("=" * 60)
-    
-    success = test_connection()
-    
-    logging.info("=" * 60)
-    if success:
-        logging.info("✓ MusicBrainz 连接验证通过")
-        logging.info("=" * 60)
-        sys.exit(0)
-    else:
-        logging.error("✗ MusicBrainz 连接验证失败")
-        logging.info("=" * 60)
-        sys.exit(1)
+    success = test_musicbrainz_connection()
+    return 0 if success else 1
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
