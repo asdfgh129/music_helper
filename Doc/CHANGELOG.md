@@ -16,6 +16,36 @@
 
 ---
 
+## [0.6-b1772100000] - 2026-03-08
+
+### 新增
+- **Debug 模式支持**: 为 music_helper 和 soundalike 项目添加详细的调试输出功能
+  - `music_helper/main.py`: 添加 `--debug` 命令行参数，启用 DEBUG 级别日志
+  - `soundalike/main.go`: 添加 `-debug` 标志，启用详细输出和自动日志记录
+  - 所有测试脚本支持 `--debug` 参数
+
+### 改进
+- **MusicBrainz 匹配器 Debug 信息**:
+  - `FingerprintMatcher`: 记录文件路径、元数据、指纹计算结果、查询结果
+  - `AcoustIDClient`: 记录 API 参数、请求/响应、解析结果
+  - `RecordingResolver`: 记录录音信息解析过程、MBID、sources
+  - `ReleaseLoader`: 记录 Release 加载过程、缓存状态
+  - `HTTPClient`: 记录 HTTP 请求详情、响应时间、状态码
+- **标签更新模块**: 支持传递 debug_mode 参数，启用详细日志
+- **声纹识别模块**: 在 debug 模式下添加 `-log-sec=1` 参数
+- **SoundAlike 扫描模块**:
+  - 记录文件扫描过程（大小、修改时间、是否需要重新计算指纹）
+  - 记录 fpcalc 执行结果（时长、指纹长度、压缩指纹长度）
+  - 记录数据库操作（ID、lookup 阈值、匹配过程）
+
+### 文档
+- 新增 `DEBUG_MODE_GUIDE.md`: Debug 模式完整使用指南
+- 更新 `README.md`: 添加 Debug 模式使用说明
+- 更新 `test/test_musicbrainz_connection.py`: 支持 `--debug` 参数
+- 更新 `soundalike/test/test_musicbrainz.go`: 支持 `-debug` 标志
+
+---
+
 ## [0.5-b1772000000] - 2026-03-06
 
 ### 改进

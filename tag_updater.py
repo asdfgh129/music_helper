@@ -15,16 +15,20 @@ import metadata
 import tag_fetcher
 
 
-def update_tags_from_fingerprint(target_dir=None):
+def update_tags_from_fingerprint(target_dir=None, debug_mode=False):
     """根据声纹信息从在线数据库更新标签
 
     Args:
         target_dir: 要扫描的目录，默认为TEMP_COMPLETED_DIR
+        debug_mode: 是否启用调试模式
     """
     if target_dir is None:
         target_dir = TEMP_COMPLETED_DIR
 
     utils.main_logger.info(f'开始从声纹信息更新标签，目标目录: {target_dir}')
+    if debug_mode:
+        utils.main_logger.debug(f'调试模式: {debug_mode}')
+
     op_logger = utils.create_operation_log('UpdateTags')
 
     if not mutagen_available:
@@ -41,8 +45,10 @@ def update_tags_from_fingerprint(target_dir=None):
     # 初始化指纹匹配器
     fingerprint_matcher = None
     if fingerprint_matcher_available:
-        fingerprint_matcher = FingerprintMatcher()
+        fingerprint_matcher = FingerprintMatcher(debug_mode=debug_mode)
         utils.main_logger.info('声纹匹配器已初始化')
+        if debug_mode:
+            utils.main_logger.debug('指纹匹配器启用调试模式')
     else:
         utils.main_logger.warning('声纹匹配模块不可用，将跳过指纹查询')
 

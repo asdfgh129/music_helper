@@ -8,7 +8,7 @@ from config import TEMP_MOVE_DIR, TEMP_COMPLETED_DIR, MAIN_DIR, SOUNDALIKE_EXE
 import utils
 
 
-def run_soundalike_fingerprinting():
+def run_soundalike_fingerprinting(debug_mode=False):
     """运行声纹识别去重（使用--temp参数）"""
     utils.main_logger.info('开始声纹识别去重')
 
@@ -20,6 +20,11 @@ def run_soundalike_fingerprinting():
             '-temp', TEMP_COMPLETED_DIR,
             MAIN_DIR
         ]
+
+        # 如果启用了调试模式，添加调试标志
+        if debug_mode:
+            cmd.append('-log-sec=1')  # 每秒记录一次日志
+
         utils.main_logger.info(f'执行命令: {" ".join(cmd)}')
 
         # 执行声纹识别程序
@@ -45,7 +50,7 @@ def run_soundalike_fingerprinting():
         return False
 
 
-def run_soundalike_fingerprinting_without_temp():
+def run_soundalike_fingerprinting_without_temp(debug_mode=False):
     """运行声纹识别去重（不带--temp参数）"""
     utils.main_logger.info('开始声纹识别去重（不带--temp参数）')
 
@@ -56,6 +61,11 @@ def run_soundalike_fingerprinting_without_temp():
             '-move-interactive', TEMP_MOVE_DIR,
             MAIN_DIR
         ]
+
+        # 如果启用了调试模式，添加调试标志
+        if debug_mode:
+            cmd.append('-log-sec=1')  # 每秒记录一次日志
+
         utils.main_logger.info(f'执行命令: {" ".join(cmd)}')
 
         # 执行声纹识别程序

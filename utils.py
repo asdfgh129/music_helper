@@ -18,7 +18,7 @@ main_logger: logging.Logger = logging.getLogger('music_manager')
 log_file: str | None = None
 
 
-def setup_logging():
+def setup_logging(debug_mode=False):
     """设置主日志系统"""
     global main_logger, log_file
 
@@ -29,23 +29,30 @@ def setup_logging():
     os.makedirs(LOG_DIR, exist_ok=True)
 
     main_logger = logging.getLogger('music_manager')
-    main_logger.setLevel(logging.INFO)
+
+    # 根据 debug 模式设置日志级别
+    if debug_mode:
+        main_logger.setLevel(logging.DEBUG)
+    else:
+        main_logger.setLevel(logging.INFO)
 
     # 文件处理器
     file_handler = logging.FileHandler(log_file, encoding='utf-8')
-    file_handler.setLevel(logging.INFO)
+    file_handler.setLevel(logging.DEBUG if debug_mode else logging.INFO)
     file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     file_handler.setFormatter(file_formatter)
 
     # 控制台处理器
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(logging.DEBUG if debug_mode else logging.INFO)
     console_formatter = logging.Formatter('%(levelname)s: %(message)s')
     console_handler.setFormatter(console_formatter)
 
     main_logger.addHandler(file_handler)
     main_logger.addHandler(console_handler)
 
+    mode_str = "调试" if debug_mode else "正常"
+    main_logger.info(f'运行模式: {mode_str}')
     main_logger.info(f'日志文件: {log_file}')
     main_logger.info('音乐文件管理系统启动')
 

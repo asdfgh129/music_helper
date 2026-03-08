@@ -355,12 +355,26 @@ class MatchResult:
 
 class HTTPClient:
     """简单的HTTP客户端"""
-    
-    def __init__(self, user_agent: Optional[str] = None):
+
+    def __init__(self, user_agent: Optional[str] = None, debug_mode: bool = False):
         self.user_agent = user_agent or f'Picard-FingerprintMatcher/{AcoustIDConfig.DEFAULT_CLIENT_VERSION}'
+        self.debug_mode = debug_mode
+        if debug_mode:
+            logger.debug("HTTPClient 初始化")
+            logger.debug(f"  user_agent = {self.user_agent}")
     
     def post(self, url: str, data: Union[Dict[str, Any], str], headers: Optional[Dict[str, str]] = None) -> tuple[Optional[dict], Optional[str]]:
         """发送POST请求"""
+        if self.debug_mode:
+            logger.debug("="*60)
+            logger.debug("HTTPClient.post 开始")
+            logger.debug("="*60)
+            logger.debug(f"method = POST")
+            logger.debug(f"url = {url}")
+            logger.debug(f"data type = {type(data).__name__}")
+            logger.debug(f"data length = {len(str(data))}")
+            logger.debug(f"headers = {headers}")
+
         all_headers = {
             'User-Agent': self.user_agent,
             'Content-Type': 'application/x-www-form-urlencoded',
@@ -375,33 +389,71 @@ class HTTPClient:
         else:
             encoded_data = data.encode('utf-8')
 
+        if self.debug_mode:
+            logger.debug(f"encoded_data length = {len(encoded_data)} bytes")
+
         request = Request(url, data=encoded_data, headers=all_headers, method='POST')
 
         try:
+            if self.debug_mode:
+                logger.debug("发送请求...")
+                import time
+                start_time = time.time()
+
             with urlopen(request, timeout=30, context=_ssl_context) as response:
                 content = response.read().decode('utf-8')
+
+                if self.debug_mode:
+                    elapsed = time.time() - start_time
+                    logger.debug(f"响应 received in {elapsed:.3f}s")
+                    logger.debug(f"status code = {response.status}")
+                    logger.debug(f"content length = {len(content)} chars")
+
                 # 解析JSON并将繁体中文转换为简体中文
                 parsed_json = json.loads(content)
                 converted_json = convert_dict_to_simplified(parsed_json)
+
+                if self.debug_mode:
+                    logger.debug(f"JSON 解析成功")
+
                 return converted_json, None
         except HTTPError as e:
             error_msg = f"HTTP Error {e.code}: {e.reason}"
+            if self.debug_mode:
+                logger.debug(f"HTTP Error: {e.code} - {e.reason}")
             return None, error_msg
         except URLError as e:
             error_msg = f"URL Error: {e.reason}"
+            if self.debug_mode:
+                logger.debug(f"URL Error: {e.reason}")
             return None, error_msg
         except json.JSONDecodeError as e:
             error_msg = f"JSON Decode Error: {e}"
+            if self.debug_mode:
+                logger.debug(f"JSON Decode Error: {e}")
             return None, error_msg
         except Exception as e:
             error_msg = f"Unexpected error: {e}"
+            if self.debug_mode:
+                logger.debug(f"Unexpected error: {e}")
             return None, error_msg
     
     def get(self, url: str, params: Optional[Dict[str, Any]] = None) -> tuple[Optional[dict], Optional[str]]:
         """发送GET请求"""
+        if self.debug_mode:
+            logger.debug("="*60)
+            logger.debug("HTTPClient.get 开始")
+            logger.debug("="*60)
+            logger.debug(f"method = GET")
+            logger.debug(f"url = {url}")
+            logger.debug(f"params = {params}")
+
         if params:
             url = f"{url}?{urlencode(params)}"
-        
+
+        if self.debug_mode:
+            logger.debug(f"final url = {url}")
+
         headers = {
             'User-Agent': self.user_agent,
             'Accept': 'application/json',
@@ -409,23 +461,47 @@ class HTTPClient:
         request = Request(url, headers=headers)
 
         try:
+            if self.debug_mode:
+                logger.debug("发送请求...")
+                import time
+                start_time = time.time()
+
             with urlopen(request, timeout=30, context=_ssl_context) as response:
                 content = response.read().decode('utf-8')
+
+                if self.debug_mode:
+                    elapsed = time.time() - start_time
+                    logger.debug(f"响应 received in {elapsed:.3f}s")
+                    logger.debug(f"status code = {response.status}")
+                    logger.debug(f"content length = {len(content)} chars")
+
                 # 解析JSON并将繁体中文转换为简体中文
                 parsed_json = json.loads(content)
                 converted_json = convert_dict_to_simplified(parsed_json)
+
+                if self.debug_mode:
+                    logger.debug(f"JSON 解析成功")
+
                 return converted_json, None
         except HTTPError as e:
             error_msg = f"HTTP Error {e.code}: {e.reason}"
+            if self.debug_mode:
+                logger.debug(f"HTTP Error: {e.code} - {e.reason}")
             return None, error_msg
         except URLError as e:
             error_msg = f"URL Error: {e.reason}"
+            if self.debug_mode:
+                logger.debug(f"URL Error: {e.reason}")
             return None, error_msg
         except json.JSONDecodeError as e:
             error_msg = f"JSON Decode Error: {e}"
+            if self.debug_mode:
+                logger.debug(f"JSON Decode Error: {e}")
             return None, error_msg
         except Exception as e:
             error_msg = f"Unexpected error: {e}"
+            if self.debug_mode:
+                logger.debug(f"Unexpected error: {e}")
             return None, error_msg
 
 
@@ -613,14 +689,17 @@ class JSONHelpers:
 
 class RecordingResolver:
     """录音信息解析器 - 从AcoustID和MusicBrainz获取完整录音信息"""
-    
+
     SOURCE_THRESHOLD_NO_METADATA = 0.25
     MAX_NO_METADATA_RECORDINGS = 3
-    
-    def __init__(self, http_client: HTTPClient):
+
+    def __init__(self, http_client: HTTPClient, debug_mode: bool = False):
         self.http_client = http_client
         self.recording_cache = {}
         self.missing_metadata = []
+        self.debug_mode = debug_mode
+        if debug_mode:
+            logger.debug("RecordingResolver 初始化")
     
     def _get_score(self, node: dict) -> float:
         """获取分数"""
@@ -643,23 +722,44 @@ class RecordingResolver:
     
     def resolve(self, doc: dict) -> List[dict]:
         """解析AcoustID查询结果"""
+        if self.debug_mode:
+            logger.debug("="*60)
+            logger.debug("RecordingResolver.resolve 开始")
+            logger.debug("="*60)
+
         results = doc.get('results') or []
         recording_map = {}
         incomplete_counts = {}
-        
-        for result in results:
+
+        if self.debug_mode:
+            logger.debug(f"results count = {len(results)}")
+
+        for i, result in enumerate(results):
             recordings = result.get('recordings') or []
             result_score = self._get_score(result)
             acoustid = result.get('id')
             max_sources = self._max_source_count_raw(recordings)
-            
-            for recording in sorted(recordings, key=lambda r: r.get('sources', 1), reverse=True):
+
+            if self.debug_mode:
+                logger.debug(f"\n结果 {i+1}/{len(results)}:")
+                logger.debug(f"  acoustid = {acoustid}")
+                logger.debug(f"  result_score = {result_score}")
+                logger.debug(f"  recordings count = {len(recordings)}")
+                logger.debug(f"  max_sources = {max_sources}")
+
+            for j, recording in enumerate(sorted(recordings, key=lambda r: r.get('sources', 1), reverse=True)):
                 mbid = recording.get('id')
                 sources = recording.get('sources', 1)
-                
+
+                if self.debug_mode:
+                    logger.debug(f"  录音 {j+1}:")
+                    logger.debug(f"    mbid = {mbid}")
+                    logger.debug(f"    sources = {sources}")
+                    logger.debug(f"    title = {recording.get('title', 'N/A')}")
+
                 if acoustid not in recording_map:
                     recording_map[acoustid] = {}
-                
+
                 if JSONHelpers.recording_has_metadata(recording):
                     mb_recording = JSONHelpers.parse_recording(recording)
                     if mb_recording:
@@ -738,25 +838,36 @@ class RecordingResolver:
 
 class ReleaseLoader:
     """Release加载器 - 从MusicBrainz加载完整的Release信息"""
-    
-    def __init__(self, http_client: HTTPClient):
+
+    def __init__(self, http_client: HTTPClient, debug_mode: bool = False):
         self.http_client = http_client
         self._cache = {}
+        self.debug_mode = debug_mode
+        if debug_mode:
+            logger.debug("ReleaseLoader 初始化")
     
     def load_release_by_id(self, release_id: str, inc: Optional[list] = None) -> Optional[dict]:
         """
         从MusicBrainz加载完整的Release信息
-        
+
         Args:
             release_id: MusicBrainz Release ID
             inc: 要包含的额外信息列表
-        
+
         Returns:
             Release数据字典,失败返回None
         """
+        if self.debug_mode:
+            logger.debug("="*60)
+            logger.debug("ReleaseLoader.load_release_by_id 开始")
+            logger.debug("="*60)
+            logger.debug(f"release_id = {release_id}")
+
         if release_id in self._cache:
+            if self.debug_mode:
+                logger.debug("从缓存返回")
             return self._cache[release_id]
-        
+
         # 默认inc参数,与Picard保持一致
         if inc is None:
             inc = [
@@ -782,10 +893,14 @@ class ReleaseLoader:
                 'recording-level-rels',  # 录音级关系
                 'work-level-rels',      # 作品级关系
             ]
-        
+
         # 构建inc参数
         inc_param = '+'.join(inc)
         url = f"{AcoustIDConfig.MUSICBRAINZ_URL}/release/{release_id}"
+
+        if self.debug_mode:
+            logger.debug(f"inc = {', '.join(inc[:5])}... (共{len(inc)}项)")
+            logger.debug(f"url = {url}?inc={inc_param}")
         params = {'inc': inc_param}
         
         logger.info(f"Loading release {release_id} from MusicBrainz with inc={inc_param}")
@@ -808,13 +923,18 @@ class ReleaseLoader:
 
 class AcoustIDClient:
     """AcoustID客户端 - 主要的指纹匹配客户端"""
-    
-    def __init__(self, client_version: Optional[str] = None):
-        self.http_client = HTTPClient()
+
+    def __init__(self, client_version: Optional[str] = None, debug_mode: bool = False):
+        self.http_client = HTTPClient(debug_mode=debug_mode)
         self.client_key = AcoustIDConfig.ACOUSTID_KEY
         self.client_version = client_version or AcoustIDConfig.DEFAULT_CLIENT_VERSION
-        self.resolver = RecordingResolver(self.http_client)
-        self.release_loader = ReleaseLoader(self.http_client)
+        self.resolver = RecordingResolver(self.http_client, debug_mode=debug_mode)
+        self.release_loader = ReleaseLoader(self.http_client, debug_mode=debug_mode)
+        self.debug_mode = debug_mode
+        if debug_mode:
+            logger.debug("AcoustIDClient 初始化")
+            logger.debug(f"  client_key = {self.client_key}")
+            logger.debug(f"  client_version = {self.client_version}")
     
     def _encode_acoustid_args(self, args: Dict[str, Any]) -> str:
         """编码AcoustID请求参数，与原始Picard实现保持一致"""
@@ -826,6 +946,11 @@ class AcoustIDClient:
     
     def query_acoustid(self, fingerprint: str, duration: int) -> tuple[Optional[dict], Optional[str]]:
         """使用指纹查询AcoustID"""
+        if self.debug_mode:
+            logger.debug("="*60)
+            logger.debug("开始查询 AcoustID API")
+            logger.debug("="*60)
+
         params = {
             'fingerprint': fingerprint,
             'duration': str(duration),
@@ -834,23 +959,49 @@ class AcoustIDClient:
 
         url = f"{AcoustIDConfig.ACOUSTID_URL}/lookup"
 
+        if self.debug_mode:
+            logger.debug(f"AcoustID 查询参数:")
+            logger.debug(f"  url = {url}")
+            logger.debug(f"  fingerprint length = {len(fingerprint)}")
+            logger.debug(f"  fingerprint = {fingerprint[:50]}...")
+            logger.debug(f"  duration = {duration}s")
+            logger.debug(f"  meta = recordings releasegroups releases tracks artists usermeta compress sources")
+
         logger.info(f"Querying AcoustID with fingerprint ({len(fingerprint)} chars, {duration}s)")
 
         # 编码参数并添加必需的client, clientversion, format参数
         body = self._encode_acoustid_args(params)
+
+        if self.debug_mode:
+            logger.debug(f"  请求体长度 = {len(body)} chars")
+
         document, error = self.http_client.post(url, body)
 
         if error or document is None:
+            if self.debug_mode:
+                logger.debug(f"  查询失败: {error}")
             logger.error(f"AcoustID query error: {error}")
             return None, error
+
+        if self.debug_mode:
+            logger.debug(f"  响应状态: {document.get('status')}")
 
         status = document.get('status')
         if status != 'ok':
             error_msg = document.get('error', {}).get('message', 'Unknown error')
+            if self.debug_mode:
+                logger.debug(f"  API 错误: {error_msg}")
             logger.error(f"AcoustID API error: {error_msg}")
             return None, error_msg
 
-        logger.info(f"AcoustID returned {len(document.get('results', []))} results")
+        results = document.get('results', [])
+        logger.info(f"AcoustID returned {len(results)} results")
+
+        if self.debug_mode:
+            logger.debug(f"  返回结果数 = {len(results)}")
+            if results:
+                logger.debug(f"  第一个结果: {json.dumps(results[0], ensure_ascii=False, indent=2)[:500]}...")
+
         return document, None
     
     def match_fingerprint(self, fingerprint: str, duration: int, metadata: Optional[Dict] = None) -> MatchResult:
@@ -865,29 +1016,60 @@ class AcoustIDClient:
         Returns:
             MatchResult 包含最佳匹配的录音
         """
+        if self.debug_mode:
+            logger.debug("="*60)
+            logger.debug("开始匹配指纹")
+            logger.debug("="*60)
+            logger.debug(f"fingerprint length = {len(fingerprint)}")
+            logger.debug(f"duration = {duration}s")
+            logger.debug(f"metadata = {json.dumps(metadata, ensure_ascii=False) if metadata else None}")
+
         document, error = self.query_acoustid(fingerprint, duration)
 
         if error or document is None:
+            if self.debug_mode:
+                logger.debug(f"查询失败: {error}")
             return MatchResult(success=False, recordings=[], error=error or "Unknown error")
 
         # 解析录音信息
         try:
+            if self.debug_mode:
+                logger.debug("开始解析录音信息...")
+
             recordings = self.resolver.resolve(document)
             logger.info(f"Resolved {len(recordings)} recordings")
 
+            if self.debug_mode:
+                logger.debug(f"解析出 {len(recordings)} 条录音")
+
             # 如果提供了元数据，使用相似度算法选择最佳匹配
             if metadata and recordings:
+                if self.debug_mode:
+                    logger.debug("使用元数据进行最佳匹配...")
+
                 best_match = self._find_best_match(recordings, metadata, duration * 1000)
                 logger.info(f"Best match selected with score: {best_match.get('score', 0):.1f}%")
+
+                if self.debug_mode:
+                    logger.debug(f"最佳匹配分数: {best_match.get('score', 0):.1f}%")
+                    logger.debug(f"最佳匹配: {json.dumps(best_match, ensure_ascii=False, indent=2)[:500]}...")
+
                 return MatchResult(success=True, recordings=recordings, best_match=best_match)
             else:
                 # 如果没有提供元数据，选择 AcoustID 分数最高的
+                if self.debug_mode:
+                    logger.debug("未提供元数据，使用 AcoustID 分数选择最佳匹配...")
+
                 best_match = max(recordings, key=lambda r: r.get('score', 0), default=None)
                 if best_match:
                     logger.info(f"Best match by AcoustID score: {best_match.get('score', 0):.1f}%")
+                    if self.debug_mode:
+                        logger.debug(f"AcoustID 最佳匹配分数: {best_match.get('score', 0):.1f}%")
                 return MatchResult(success=True, recordings=recordings, best_match=best_match)
         except Exception as e:
             error_msg = f"Failed to resolve recordings: {e}"
+            if self.debug_mode:
+                logger.debug(f"解析录音失败: {e}")
             logger.error(error_msg)
             return MatchResult(success=False, recordings=[], error=error_msg)
 
@@ -1046,10 +1228,18 @@ class AcoustIDClient:
 
 class FingerprintMatcher:
     """指纹匹配器 - 整合所有功能的主类"""
-    
-    def __init__(self, fpcalc_path: Optional[str] = None, client_version: Optional[str] = None):
+
+    def __init__(self, fpcalc_path: Optional[str] = None, client_version: Optional[str] = None, debug_mode: bool = False):
         self.calculator = FingerprintCalculator(fpcalc_path)
         self.acoustid_client = AcoustIDClient(client_version)
+        self.debug_mode = debug_mode
+        if debug_mode:
+            logger.debug("="*60)
+            logger.debug("FingerprintMatcher 初始化")
+            logger.debug(f"  debug_mode = {debug_mode}")
+            logger.debug(f"  fpcalc_path = {fpcalc_path}")
+            logger.debug(f"  client_version = {client_version}")
+            logger.debug("="*60)
     
     def match_file(self, audio_file_path: str, metadata: Optional[Dict] = None) -> MatchResult:
         """
@@ -1063,12 +1253,31 @@ class FingerprintMatcher:
         Returns:
             MatchResult 包含最佳匹配的录音
         """
+        if self.debug_mode:
+            logger.debug("="*60)
+            logger.debug("开始匹配音频文件")
+            logger.debug("="*60)
+            logger.debug(f"audio_file_path = {audio_file_path}")
+            logger.debug(f"metadata = {json.dumps(metadata, ensure_ascii=False) if metadata else None}")
+            logger.debug(f"文件存在: {os.path.exists(audio_file_path)}")
+            if os.path.exists(audio_file_path):
+                logger.debug(f"文件大小: {os.path.getsize(audio_file_path)} bytes")
+
         logger.info(f"Processing file: {audio_file_path}")
 
         # 计算指纹
         fingerprint_result = self.calculator.calculate(audio_file_path)
 
+        if self.debug_mode:
+            logger.debug(f"指纹计算结果:")
+            logger.debug(f"  success = {fingerprint_result.success}")
+            logger.debug(f"  fingerprint = {fingerprint_result.fingerprint[:50]}..." if fingerprint_result.fingerprint else "  fingerprint = None")
+            logger.debug(f"  duration = {fingerprint_result.duration}")
+            logger.debug(f"  error = {fingerprint_result.error}")
+
         if not fingerprint_result.success:
+            if self.debug_mode:
+                logger.debug(f"指纹计算失败: {fingerprint_result.error}")
             return MatchResult(
                 success=False,
                 recordings=[],
@@ -1076,11 +1285,25 @@ class FingerprintMatcher:
             )
 
         # 查询匹配
-        return self.acoustid_client.match_fingerprint(
+        if self.debug_mode:
+            logger.debug("开始查询 AcoustID API...")
+
+        result = self.acoustid_client.match_fingerprint(
             fingerprint_result.fingerprint,
             fingerprint_result.duration,
             metadata
         )
+
+        if self.debug_mode:
+            logger.debug(f"AcoustID 查询结果:")
+            logger.debug(f"  success = {result.success}")
+            logger.debug(f"  recordings count = {len(result.recordings)}")
+            if result.recordings:
+                logger.debug(f"  最佳匹配: {result.recordings[0].get('title', 'N/A')}")
+            logger.debug(f"  error = {result.error}")
+            logger.debug("="*60)
+
+        return result
     
     def match_from_fingerprint(self, fingerprint: str, duration: int, metadata: Optional[Dict] = None) -> MatchResult:
         """

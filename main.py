@@ -41,6 +41,9 @@ def main():
   # 检查数据库一致性
   python main.py --checkdb
 
+  # 启用调试模式（输出详细信息）
+  python main.py --debug
+
   # 显示版本信息
   python main.py --version
         '''
@@ -50,6 +53,12 @@ def main():
         '--version',
         action='version',
         version=f'%(prog)s v{__version__}'
+    )
+
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='启用调试模式，输出详细的运行信息'
     )
 
     parser.add_argument(
@@ -116,7 +125,14 @@ def main():
     args = parser.parse_args()
 
     # 设置日志
-    utils.setup_logging()
+    utils.setup_logging(debug_mode=args.debug)
+
+    if args.debug:
+        utils.main_logger.debug('='*60)
+        utils.main_logger.debug('调试模式已启用')
+        utils.main_logger.debug('='*60)
+        utils.main_logger.debug(f'命令行参数: {vars(args)}')
+        utils.main_logger.debug(f'工作目录: {os.getcwd()}')
 
     # 检查数据库一致性模式
     if args.checkdb:
@@ -180,16 +196,19 @@ def main():
         utils.main_logger.info('='*60)
         # check模式下不带--temp参数
         if args.check:
-            soundalike.run_soundalike_fingerprinting_without_temp()
+            soundalike.run_soundalike_fingerprinting_without_temp(debug_mode=args.debug)
         else:
-            soundalike.run_soundalike_fingerprinting()
+            soundalike.run_soundalike_fingerprinting(debug_mode=args.debug)
 
     # 步骤3: 更新标签
     if not args.skip_tag_update:
         utils.main_logger.info('\n' + '='*60)
         utils.main_logger.info('步骤 3: 更新标签信息')
         utils.main_logger.info('='*60)
-        success, fail, tag_success = tag_updater.update_tags_from_fingerprint(target_dir=target_dir)
+        success, fail, tag_success = tag_updater.update_tags_from_fingerprint(
+            target_dir=target_dir,
+            debug_mode=args.debug
+        )
         utils.main_logger.info(f'标签更新汇总: 成功 {success}, 失败 {fail}, 标签更新 {tag_success}')
 
     # 步骤4: 检查文件
