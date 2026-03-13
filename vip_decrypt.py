@@ -14,7 +14,7 @@ import utils
 import file_operations
 
 
-def decrypt_netease_vip(month=None):
+def decrypt_netease_vip(month=None, debug_mode=False):
     """解密网易云音乐VIP加密文件"""
     utils.main_logger.info('开始处理网易云音乐VIP加密文件')
 
@@ -31,9 +31,8 @@ def decrypt_netease_vip(month=None):
 
     # 运行um.exe进行解密
     utils.main_logger.info('运行um.exe解密网易云音乐文件')
-    op_logger = utils.create_operation_log('Neteasy')
+    op_logger = utils.create_operation_log('Netease_Decrypt', debug_mode=debug_mode)
     op_logger.info(f'开始解密，输入目录: {NETEASE_TMP_DIR}，输出目录: {TEMP_COMPLETED_DIR}')
-
     try:
         # 构建命令
         cmd = [UM_EXE, '-i', NETEASE_TMP_DIR, '-o', TEMP_COMPLETED_DIR]
@@ -80,7 +79,7 @@ def decrypt_netease_vip(month=None):
         return 0
 
 
-def decrypt_qq_vip(month=None):
+def decrypt_qq_vip(month=None, debug_mode=False):
     """解密QQ音乐VIP加密文件"""
     utils.main_logger.info('开始处理QQ音乐VIP加密文件')
 
@@ -97,7 +96,7 @@ def decrypt_qq_vip(month=None):
 
     # 直接导入qq.py的run_decrypt函数并调用
     utils.main_logger.info('运行qq.py解密QQ音乐文件')
-    op_logger = utils.create_operation_log('QQ')
+    op_logger = utils.create_operation_log('QQ_Decrypt', debug_mode=debug_mode)
     op_logger.info(f'开始解密，输入目录: {QQ_TMP_DIR}，输出目录: {TEMP_COMPLETED_DIR}')
 
     try:
@@ -109,7 +108,7 @@ def decrypt_qq_vip(month=None):
             op_logger.error('Decrypto模块不可用')
             return 0
 
-        run_decrypt(QQ_TMP_DIR, TEMP_COMPLETED_DIR)
+        run_decrypt(QQ_TMP_DIR, TEMP_COMPLETED_DIR, logger=op_logger)
 
         # 统计完成的文件
         completed_count = 0

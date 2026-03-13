@@ -6,7 +6,7 @@
 import sys
 import argparse
 import time
-
+import os
 import utils
 import vip_decrypt
 import soundalike
@@ -28,6 +28,18 @@ def main():
 
   # 处理指定月份
   python main.py --month 202406
+
+  # 仅解密加密音乐文件
+  python main.py --only-decrypt
+
+  # 仅更新音乐文件标签
+  python main.py --only-update-tag
+
+  # 仅检查文件名一致性
+  python main.py --only-check-file-name
+
+  # 仅执行归档操作
+  python main.py --only-archive
 
   # 仅检查主目录
   python main.py --check
@@ -72,6 +84,18 @@ def main():
         '--check',
         action='store_true',
         help='检查主目录D:\\music的文件'
+    )
+
+    parser.add_argument(
+        '--init',
+        action='store_true',
+        help='初始化数据库'
+    )
+
+    parser.add_argument(
+        '--soundalike',
+        action='store_true',
+        help='检测相似音频文件'
     )
 
     parser.add_argument(
@@ -122,6 +146,32 @@ def main():
         help='跳过年份分类步骤'
     )
 
+    parser.add_argument(
+        '--only-decrypt',
+        action='store_true',
+        help='仅执行加密音乐文件解密后退出'
+    )
+
+    parser.add_argument(
+        '--only-update-tag',
+        type=str,
+        choices=['master', 'temp'],
+        help='仅执行更新标签操作后退出，指定目录: master(主目录) 或 temp(临时目录)'
+    )
+
+    parser.add_argument(
+        '--only-check-file-name',
+        type=str,
+        choices=['master', 'temp'],
+        help='仅执行文件名一致性检查后退出，指定目录: master(主目录) 或 temp(临时目录)'
+    )
+
+    parser.add_argument(
+        '--only-archive',
+        action='store_true',
+        help='仅执行归档操作后退出'
+    )
+
     args = parser.parse_args()
 
     # 设置日志
@@ -134,11 +184,103 @@ def main():
         utils.main_logger.debug(f'命令行参数: {vars(args)}')
         utils.main_logger.debug(f'工作目录: {os.getcwd()}')
 
+    # 初始化数据库
+    if args.init:
+        utils.main_logger.info('初始化数据库')
+        success = soundalike.run_soundalike_fingerprinting_without_temp(debug_mode=args.debug)
+        sys.exit(0 if success else 1)
+
     # 检查数据库一致性模式
     if args.checkdb:
         utils.main_logger.info('运行数据库一致性检查模式')
         success = soundalike.check_database_consistency()
         sys.exit(0 if success else 1)
+   
+    # 只运行声纹识别模式
+    if args.soundalike:
+        utils.main_logger.info('运行SoundAlike音频指纹处理')
+        success = soundalike.run_soundalike_fingerprinting(debug_mode=args.debug)
+        sys.exit(0 if success else 1)
+
+    # 仅解密模式
+    if args.only_decrypt:
+        utils.main_logger.info('运行仅解密模式')
+        month = args.month
+        if month is None:
+            month = utils.get_current_month()
+            utils.main_logger.info(f'使用当前月份: {month}')
+        else:
+            if not utils.validate_month_format(month):
+                utils.main_logger.error(f'月份格式错误: {month}，应为YYYYMM格式（如202406）')
+                sys.exit(1)
+            utils.main_logger.info(f'使用指定月份: {month}')
+
+        utils.main_logger.info('\n' + '='*60)
+        utils.main_logger.info('步骤: 解密VIP文件和移动普通文件')
+        utils.main_logger.info('='*60)
+
+        netease_count = vip_decrypt.decrypt_netease_vip(month, debug_mode=args.debug)
+        qq_count = vip_decrypt.decrypt_qq_vip(month, debug_mode=args.debug)
+        netease_normal_count = file_operations.copy_netease_normal_files(month)
+        qq_normal_count = file_operations.copy_qq_normal_files(month)
+
+        utils.main_logger.info(f'VIP解密完成: 网易 {netease_count} 个, QQ {qq_count} 个')
+        utils.main_logger.info(f'普通文件拷贝完成: 网易 {netease_normal_count} 个, QQ {qq_normal_count} 个')
+        sys.exit(0)
+
+    # 仅更新标签模式
+    if args.only_update_tag:
+        utils.main_logger.info('运行仅更新标签模式')
+
+        if args.only_update_tag == 'master':
+            target_dir = MAIN_DIR
+            utils.main_logger.info(f'使用主目录: {target_dir}')
+        elif args.only_update_tag == 'temp':
+            target_dir = TEMP_COMPLETED_DIR
+            utils.main_logger.info(f'使用临时目录: {target_dir}')
+
+        utils.main_logger.info('\n' + '='*60)
+        utils.main_logger.info('步骤: 更新标签信息')
+        utils.main_logger.info('='*60)
+        success, fail, tag_success = tag_updater.update_tags_from_fingerprint(
+            target_dir=target_dir,
+            debug_mode=args.debug
+        )
+        utils.main_logger.info(f'标签更新汇总: 成功 {success}, 失败 {fail}, 标签更新 {tag_success}')
+        sys.exit(0)
+
+    # 仅检查文件名模式
+    if args.only_check_file_name:
+        utils.main_logger.info('运行仅检查文件名模式')
+
+        if args.only_check_file_name == 'master':
+            check_master = True
+            check_temp = False
+            utils.main_logger.info('检查主目录')
+        elif args.only_check_file_name == 'temp':
+            check_master = False
+            check_temp = True
+            utils.main_logger.info('检查临时目录')
+
+        utils.main_logger.info('\n' + '='*60)
+        utils.main_logger.info('步骤: 检查文件一致性')
+        utils.main_logger.info('='*60)
+        file_operations.check_filename_consistency(
+            check_master=check_master,
+            check_temp=check_temp,
+            debug_mode=args.debug
+        )
+        sys.exit(0)
+
+    # 仅归档模式
+    if args.only_archive:
+        utils.main_logger.info('运行仅归档模式')
+
+        utils.main_logger.info('\n' + '='*60)
+        utils.main_logger.info('步骤: 按年份分类整理')
+        utils.main_logger.info('='*60)
+        file_operations.organize_by_year(debug_mode=args.debug)
+        sys.exit(0)
 
     # 获取月份参数
     month = args.month
@@ -168,14 +310,14 @@ def main():
     # 步骤1: 解密VIP文件和移动普通文件（check模式下跳过）
     if not args.skip_vip and not args.check and not args.archive_manual:
         utils.main_logger.info('\n' + '='*60)
-        utils.main_logger.info('步骤 1: 处理VIP文件')
+        utils.main_logger.info('步骤 1: 处理VIP文件和普通文件')
         utils.main_logger.info('='*60)
 
         # 网易云VIP
-        netease_count = vip_decrypt.decrypt_netease_vip(month)
+        netease_count = vip_decrypt.decrypt_netease_vip(month, debug_mode=args.debug)
 
         # QQ VIP
-        qq_count = vip_decrypt.decrypt_qq_vip(month)
+        qq_count = vip_decrypt.decrypt_qq_vip(month, debug_mode=args.debug)
 
         # 拷贝普通文件
         netease_normal_count = file_operations.copy_netease_normal_files(month)
@@ -186,7 +328,7 @@ def main():
 
     if args.check or args.archive_manual:
         utils.main_logger.info('\n' + '='*60)
-        utils.main_logger.info('check 模式: 跳过VIP文件解密和移动')
+        utils.main_logger.info('check 模式: 跳过音乐下载目录中VIP音乐文件解密、移动和非加密音乐文件的拷贝')
         utils.main_logger.info('='*60)
 
     # 步骤2: 声纹识别去重
@@ -196,12 +338,12 @@ def main():
         utils.main_logger.info('='*60)
         # check模式下不带--temp参数
         if args.check:
-            soundalike.run_soundalike_fingerprinting_without_temp(debug_mode=args.debug)
+            soundalike.check_database_consistency(debug_mode=args.debug)
         else:
             soundalike.run_soundalike_fingerprinting(debug_mode=args.debug)
 
     # 步骤3: 更新标签
-    if not args.skip_tag_update:
+    if not args.skip_tag_update and not args.archive_manual:
         utils.main_logger.info('\n' + '='*60)
         utils.main_logger.info('步骤 3: 更新标签信息')
         utils.main_logger.info('='*60)
@@ -218,7 +360,8 @@ def main():
         utils.main_logger.info('='*60)
         file_operations.check_filename_consistency(
             check_master=args.check or args.check_master,
-            check_temp=not args.check and not args.archive_manual
+            check_temp=not args.check and not args.archive_manual,
+            debug_mode=args.debug
         )
 
     # 步骤5: 年份分类（默认模式和归档模式下执行）
@@ -226,7 +369,7 @@ def main():
         utils.main_logger.info('\n' + '='*60)
         utils.main_logger.info('步骤 5: 按年份分类整理')
         utils.main_logger.info('='*60)
-        file_operations.organize_by_year()
+        file_operations.organize_by_year(debug_mode=args.debug)
 
     # 记录结束时间
     end_time = time.time()

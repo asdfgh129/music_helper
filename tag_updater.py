@@ -29,7 +29,7 @@ def update_tags_from_fingerprint(target_dir=None, debug_mode=False):
     if debug_mode:
         utils.main_logger.debug(f'调试模式: {debug_mode}')
 
-    op_logger = utils.create_operation_log('UpdateTags')
+    op_logger = utils.create_operation_log('UpdateTags', debug_mode=debug_mode)
 
     if not mutagen_available:
         utils.main_logger.error('mutagen库未安装，无法更新标签')

@@ -36,11 +36,11 @@ def run_soundalike_fingerprinting(debug_mode=False):
             errors='replace'
         )
 
-        # 记录输出
-        if result.stdout:
-            utils.main_logger.info(f'声纹识别输出:\n{result.stdout}')
-        if result.stderr:
-            utils.main_logger.warning(f'声纹识别错误:\n{result.stderr}')
+        # 记录输出 soundalike项目中已通过Logger记录日志，这里不再需要重复记录
+        # if result.stdout:
+        #     utils.main_logger.info(f'声纹识别输出:\n{result.stdout}')
+        # if result.stderr:
+        #    utils.main_logger.warning(f'声纹识别错误:\n{result.stderr}')
 
         utils.main_logger.info(f'声纹识别完成，返回码: {result.returncode}')
         return result.returncode == 0
@@ -77,11 +77,11 @@ def run_soundalike_fingerprinting_without_temp(debug_mode=False):
             errors='replace'
         )
 
-        # 记录输出
-        if result.stdout:
-            utils.main_logger.info(f'声纹识别输出:\n{result.stdout}')
-        if result.stderr:
-            utils.main_logger.warning(f'声纹识别错误:\n{result.stderr}')
+        # 记录输出 soundalike项目中已通过Logger记录日志，这里不再需要重复记录
+        # if result.stdout:
+        #     utils.main_logger.info(f'声纹识别输出:\n{result.stdout}')
+        # if result.stderr:
+        #     utils.main_logger.warning(f'声纹识别错误:\n{result.stderr}')
 
         utils.main_logger.info(f'声纹识别完成，返回码: {result.returncode}')
         return result.returncode == 0
@@ -109,11 +109,11 @@ def check_database_consistency():
             errors='replace'
         )
 
-        # 记录输出
-        if result.stdout:
-            utils.main_logger.info(f'数据库检查输出:\n{result.stdout}')
-        if result.stderr:
-            utils.main_logger.warning(f'数据库检查错误:\n{result.stderr}')
+        # 记录输出 soundalike项目中已通过Logger记录日志，这里不再需要重复记录
+        # if result.stdout:
+        #     utils.main_logger.info(f'数据库检查输出:\n{result.stdout}')
+        # if result.stderr:
+        #     utils.main_logger.warning(f'数据库检查错误:\n{result.stderr}')
 
         utils.main_logger.info(f'数据库检查完成，返回码: {result.returncode}')
         return result.returncode == 0

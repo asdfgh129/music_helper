@@ -178,10 +178,10 @@ def move_decrypted_files_back(completed_dir, source_dir):
     return moved_count
 
 
-def check_filename_consistency(check_master=True, check_temp=True):
+def check_filename_consistency(check_master=True, check_temp=True, debug_mode=False):
     """检查文件名与标签的一致性"""
     utils.main_logger.info('开始检查文件名一致性')
-    op_logger = utils.create_operation_log('Check')
+    op_logger = utils.create_operation_log('Check', debug_mode=debug_mode)
 
     directories = []
     if check_temp:
@@ -389,10 +389,10 @@ def check_filename_consistency(check_master=True, check_temp=True):
     return len(inconsistent_files), len(duplicate_files), len(missing_lrc_files)
 
 
-def organize_by_year():
+def organize_by_year(debug_mode=False):
     """按年份分类整理音乐文件"""
     main_logger.info('开始按年份分类整理')
-    op_logger = utils.create_operation_log('Organize')
+    op_logger = utils.create_operation_log('Organize', debug_mode=debug_mode)
 
     success_count = 0
     unknown_count = 0

@@ -59,7 +59,7 @@ def setup_logging(debug_mode=False):
     return main_logger
 
 
-def create_operation_log(operation_name):
+def create_operation_log(operation_name, debug_mode=False):
     """创建操作专用日志文件"""
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     log_filename = f'{operation_name}-{timestamp}.log'
@@ -67,7 +67,7 @@ def create_operation_log(operation_name):
 
     # 创建操作日志记录器
     op_logger = logging.getLogger(f'operation.{operation_name}')
-    op_logger.setLevel(logging.INFO)
+    op_logger.setLevel(logging.DEBUG if debug_mode else logging.INFO)
 
     # 移除旧处理器
     for handler in op_logger.handlers[:]:
@@ -75,17 +75,20 @@ def create_operation_log(operation_name):
 
     # 添加文件处理器
     file_handler = logging.FileHandler(log_path, encoding='utf-8')
-    file_handler.setLevel(logging.INFO)
+    file_handler.setLevel(logging.DEBUG if debug_mode else logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     file_handler.setFormatter(formatter)
     op_logger.addHandler(file_handler)
 
-    # 添加控制台处理器（warning级别）
+    # 添加控制台处理器
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.WARNING)
-    console_formatter = logging.Formatter('WARNING: %(message)s')
+    console_handler.setLevel(logging.DEBUG if debug_mode else logging.WARNING)
+    console_formatter = logging.Formatter('%(levelname)s: %(message)s' if debug_mode else 'WARNING: %(message)s')
     console_handler.setFormatter(console_formatter)
     op_logger.addHandler(console_handler)
+
+    if debug_mode:
+        op_logger.info(f'操作日志调试模式已启用: {operation_name}')
 
     return op_logger, log_path
 
@@ -161,24 +164,44 @@ def normalize_text(text):
 
 
 def parse_filename(filename):
-    """解析文件名，提取艺术家和歌曲名"""
+    """解析文件名，提取艺术家和歌曲名
+
+    支持的分隔符格式：
+    1. "艺术家 - 歌曲名"（推荐格式，带空格的破折号）
+    2. "艺术家-歌曲名"（单个破折号，无空格）
+
+    解析策略：
+    - 优先使用 " - " 分隔符（带空格的破折号）
+    - 如果没有 " - "，则在第一个 "-" 处分割
+    - 考虑到歌手名中包含 "-" 的情况比较少见，采用第一个 "-" 分割的策略
+    """
     # 移除扩展名
     name = os.path.splitext(filename)[0]
 
-    # 检查是否符合 "艺术家 - 歌曲名" 格式
+    # 优先检查 " - " 分隔符（带空格的破折号）
     if ' - ' in name:
+        # split('-', 1) 限制分割次数：只在第一个 "-" 处分割，后面的 "-" 保留在歌名中
         parts = name.split(' - ', 1)
         artist = parts[0].strip()
         title = parts[1].strip()
         return artist, title
 
+    # 检查 "-" 分隔符（无空格的破折号）
+    # 在第一个 "-" 处分割
+    if '-' in name:
+        parts = name.split('-', 1)
+        artist = parts[0].strip()
+        title = parts[1].strip()
+        return artist, title
+
+    # 没有找到有效的分隔符，返回空艺术家和完整歌名
     return '', name.strip()
 
 
 def check_filename_format(filename):
-    """检查文件名是否符合 '艺术家 - 歌曲名' 格式"""
+    """检查文件名是否符合 '艺术家 - 歌曲名' 或 '艺术家-歌曲名' 格式"""
     artist, title = parse_filename(filename)
-    return bool(artist and title and ' - ' in filename)
+    return bool(artist and title and (' - ' in filename or '-' in filename))
 
 
 def has_lrc_file(music_filepath):

@@ -18,12 +18,19 @@ except Exception:
         return None
 
 
-def list_download_songs():
+def list_download_songs(logger=None):
+    """列出QQ音乐下载目录中的歌曲
+
+    Args:
+        logger: 日志记录器，如果为None则使用logging模块
+    """
+    log = logger if logger else logging
+
     download_dir = os.path.join(os.path.expanduser("~"), "Music", "VipSongsDownload")
     if not os.path.exists(download_dir):
-        logging.error(f"默认下载目录不存在：{download_dir}")
+        log.error(f"默认下载目录不存在：{download_dir}")
         return
-    logging.info(f"QQ 音乐下载目录：{download_dir}")
+    log.info(f"QQ 音乐下载目录：{download_dir}")
     exts = {".mflac", ".mgg", ".ogg", ".flac", ".mp3", ".m4a"}
     count = 0
     for root, _, files in os.walk(download_dir):
@@ -33,7 +40,7 @@ def list_download_songs():
                 full_path = os.path.join(root, file)
                 rel = os.path.relpath(full_path, download_dir)
                 print(f"{count:4d}. {rel}")
-    logging.info(f"共找到 {count} 个文件")
+    log.info(f"共找到 {count} 个文件")
 
 
 def append_csv(song_name: str, src_url: str):
@@ -46,9 +53,19 @@ def append_csv(song_name: str, src_url: str):
         writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), song_name, src_url or ""])
 
 
-def run_decrypt(input_dir, output_dir):
+def run_decrypt(input_dir, output_dir, logger=None):
+    """解密QQ音乐文件
+
+    Args:
+        input_dir: 输入目录
+        output_dir: 输出目录
+        logger: 日志记录器，如果为None则使用logging模块
+    """
+    # 使用传入的logger，如果没有则使用logging模块
+    log = logger if logger else logging
+
     if not os.path.exists(input_dir):
-        logging.error(f"输入目录不存在: {input_dir}")
+        log.error(f"输入目录不存在: {input_dir}")
         return
 
     input_dir = os.path.abspath(input_dir)
@@ -57,7 +74,7 @@ def run_decrypt(input_dir, output_dir):
     try:
         session = frida.attach("QQMusic.exe")
     except frida.ProcessNotFoundError:
-        logging.error("未找到 QQMusic.exe 进程，请先启动 QQ 音乐")
+        log.error("未找到 QQMusic.exe 进程，请先启动 QQ 音乐")
         return
 
     try:
@@ -65,7 +82,7 @@ def run_decrypt(input_dir, output_dir):
             script = session.create_script(f.read())
         script.load()
     except Exception as e:
-        logging.error(f"加载 Frida 脚本失败: {e}")
+        log.error(f"加载 Frida 脚本失败: {e}")
         return
 
     if not os.path.exists(output_dir):
@@ -80,16 +97,16 @@ def run_decrypt(input_dir, output_dir):
                 if ext.lower() not in [".mflac", ".mgg"]:
                     continue
 
-                logging.info(f"开始解密: {file}")
+                log.info(f"开始解密: {file}")
 
                 new_ext = ext.lower().replace("mflac", "flac").replace("mgg", "ogg")
                 output_filename = base + new_ext
                 output_file_path = os.path.join(output_dir, output_filename)
 
                 if os.path.exists(output_file_path):
-                    logging.info(f"已存在，跳过: {output_file_path}")
+                    log.info(f"已存在，跳过: {output_file_path}")
                     src_url = guess_song_url(file) or guess_song_url(output_filename)
-                    logging.info(f"来源: {src_url or '未找到（可稍后重试）'}")
+                    log.info(f"来源: {src_url or '未找到（可稍后重试）'}")
                     append_csv(output_filename, src_url)
                     continue
 
@@ -105,12 +122,12 @@ def run_decrypt(input_dir, output_dir):
                 try:
                     script.exports_sync.decrypt(temp_src_path, tmp_output_path)
                     os.rename(tmp_output_path, output_file_path)
-                    logging.info(f"解密成功: {output_file_path}")
+                    log.info(f"解密成功: {output_file_path}")
                     src_url = guess_song_url(file) or guess_song_url(output_filename)
-                    logging.info(f"来源: {src_url or '未找到（可稍后重试）'}")
+                    log.info(f"来源: {src_url or '未找到（可稍后重试）'}")
                     append_csv(output_filename, src_url)
                 except Exception as e:
-                    logging.error(f"解密失败: {file} -> {e}")
+                    log.error(f"解密失败: {file} -> {e}")
                     try:
                         if os.path.exists(tmp_output_path):
                             os.remove(tmp_output_path)
@@ -120,7 +137,7 @@ def run_decrypt(input_dir, output_dir):
     finally:
         session.detach()
         shutil.rmtree(temp_dir, ignore_errors=True)
-        logging.info("所有任务已完成")
+        log.info("所有任务已完成")
 
 
 if __name__ == "__main__":
