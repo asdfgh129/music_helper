@@ -157,6 +157,24 @@ def set_music_metadata(filepath, tags):
                 audio['genre'] = tags['genre']
             audio.save()
 
+        elif ext == '.ape':
+            try:
+                audio = APEv2File(filepath)
+            except Exception:
+                audio = APEv2File()
+
+            if tags.get('title'):
+                audio['Title'] = tags['title']
+            if tags.get('artist'):
+                audio['Artist'] = tags['artist']
+            if tags.get('album'):
+                audio['Album'] = tags['album']
+            if tags.get('year'):
+                audio['Year'] = tags['year']
+            if tags.get('genre'):
+                audio['Genre'] = tags['genre']
+            audio.save()
+
         else:
             return False
 

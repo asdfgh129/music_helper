@@ -26,8 +26,8 @@ def update_tags_from_fingerprint(target_dir=None, debug_mode=False):
         target_dir = TEMP_COMPLETED_DIR
 
     utils.main_logger.info(f'开始从声纹信息更新标签，目标目录: {target_dir}')
-    if debug_mode:
-        utils.main_logger.debug(f'调试模式: {debug_mode}')
+    # if debug_mode:
+    #    utils.main_logger.debug(f'调试模式: {debug_mode}')
 
     op_logger = utils.create_operation_log('UpdateTags', debug_mode=debug_mode)
 
@@ -47,8 +47,8 @@ def update_tags_from_fingerprint(target_dir=None, debug_mode=False):
     if fingerprint_matcher_available:
         fingerprint_matcher = FingerprintMatcher(debug_mode=debug_mode)
         utils.main_logger.info('声纹匹配器已初始化')
-        if debug_mode:
-            utils.main_logger.debug('指纹匹配器启用调试模式')
+        #if debug_mode:
+        #    utils.main_logger.debug('指纹匹配器启用调试模式')
     else:
         utils.main_logger.warning('声纹匹配模块不可用，将跳过指纹查询')
 
@@ -106,31 +106,29 @@ def update_tags_from_fingerprint(target_dir=None, debug_mode=False):
                                 new_tags = tag_fetcher.parse_musicbrainz_recording(best_recording)
 
                                 if new_tags:
+                                    # 合并标签:保留当前已有标签,只更新外部获取的非空标签
+                                    merged_tags = {}
+                                    for key in ['title', 'artist', 'album', 'year', 'genre']:
+                                        # 优先使用已有标签,如果已有标签为空才使用新标签
+                                        merged_tags[key] = current_tags.get(key, '') or new_tags.get(key, '')
+
                                     # 更新标签
-                                    metadata.set_music_metadata(filepath, new_tags)
+                                    metadata.set_music_metadata(filepath, merged_tags)
                                     tag_updated = True
                                     fingerprint_success_count += 1
-                                    op_logger.info(f'  标签已从MusicBrainz更新: {new_tags.get("artist")} - {new_tags.get("title")}')
+                                    op_logger.info(f'  标签已从MusicBrainz更新: {merged_tags.get("artist")} - {merged_tags.get("title")}')
+                                    op_logger.debug(f'    当前标签: {current_tags}, 新标签: {new_tags}, 合并后: {merged_tags}')
 
-                                # 尝试下载封面
-                                if music_tagger_available and new_tags.get('album'):
-                                    try:
-                                        tagger = MusicTagger(filepath)
-                                        album_artists = []
-                                        for artist_credit in best_recording.get('artist-credit', []):
-                                            album_artists.append(artist_credit.get('artist', {}).get('name', ''))
-
-                                        # 从QQ音乐或网易云音乐获取封面
-                                        cover_url = tag_fetcher.fetch_album_cover(
-                                            qq_api, netease_api,
-                                            new_tags.get('title', ''),
-                                            new_tags.get('artist', '')
-                                        )
-
-                                        if cover_url:
-                                            op_logger.info(f'  已下载封面: {cover_url[:50]}...')
-                                    except Exception as e:
-                                        op_logger.warning(f'  下载封面失败: {e}')
+                                    # 尝试下载封面(从MusicBrainz的封面URL)
+                                    if music_tagger_available and new_tags.get('album_img'):
+                                        try:
+                                            tagger = MusicTagger(filepath)
+                                            tagger.update_tags({
+                                                'album_img': new_tags['album_img']
+                                            }, is_raw_thumbnail=False)
+                                            op_logger.info(f'  已从MusicBrainz下载封面: {new_tags["album_img"][:60]}...')
+                                        except Exception as e:
+                                            op_logger.warning(f'  下载封面失败: {e}')
                             else:
                                 op_logger.info(f'  声纹匹配分数较低 ({score:.1f}%)，尝试其他方式')
                         else:
@@ -139,7 +137,7 @@ def update_tags_from_fingerprint(target_dir=None, debug_mode=False):
                         op_logger.warning(f'  声纹查询失败: {e}')
 
                 # 第二步：如果声纹查询失败，使用歌曲名和歌手从音乐网站查询
-                if not tag_updated and qq_api and netease_api:
+                if not tag_updated and (qq_api or netease_api):
                     try:
                         op_logger.info(f'  尝试在线音乐平台查询: {file}')
 
@@ -151,21 +149,24 @@ def update_tags_from_fingerprint(target_dir=None, debug_mode=False):
                             artist, title = utils.parse_filename(file)
 
                         if title:
-                            # 优先尝试QQ音乐
-                            tag_info = tag_fetcher.fetch_qq_music_tags(qq_api, title, artist)
-                            source = 'QQ音乐'
-
-                            # 如果QQ音乐失败，尝试网易云音乐
-                            if not tag_info:
-                                tag_info = tag_fetcher.fetch_netease_tags(netease_api, title, artist)
-                                source = '网易云音乐'
+                            # 同时查询QQ音乐和网易云音乐,选择最佳结果
+                            tag_info = tag_fetcher.fetch_best_tags(qq_api, netease_api, title, artist)
 
                             if tag_info:
+                                source = tag_info.get('source', '未知来源')
+
+                                # 合并标签:保留当前已有标签,只更新外部获取的非空标签
+                                merged_tags = {}
+                                for key in ['title', 'artist', 'album', 'year', 'genre']:
+                                    # 优先使用已有标签,如果已有标签为空才使用新标签
+                                    merged_tags[key] = current_tags.get(key, '') or tag_info.get(key, '')
+
                                 # 更新标签
-                                metadata.set_music_metadata(filepath, tag_info)
+                                metadata.set_music_metadata(filepath, merged_tags)
                                 tag_updated = True
                                 online_success_count += 1
-                                op_logger.info(f'  标签已从{source}更新: {tag_info.get("artist")} - {tag_info.get("title")}')
+                                op_logger.info(f'  标签已从{source}更新: {merged_tags.get("artist")} - {merged_tags.get("title")} (得分: {tag_info.get("score", 0):.1f})')
+                                op_logger.debug(f'    当前标签: {current_tags}, 新标签: {tag_info}, 合并后: {merged_tags}')
 
                                 # 尝试下载封面
                                 if music_tagger_available and tag_info.get('album_img'):
@@ -177,6 +178,20 @@ def update_tags_from_fingerprint(target_dir=None, debug_mode=False):
                                         op_logger.info(f'  已从{source}下载封面')
                                     except Exception as e:
                                         op_logger.warning(f'  下载封面失败: {e}')
+
+                                # 尝试下载歌词
+                                if tag_info.get('lyrics'):
+                                    try:
+                                        lrc_path = os.path.splitext(filepath)[0] + '.lrc'
+                                        # 检查是否已存在歌词文件
+                                        if not os.path.exists(lrc_path):
+                                            with open(lrc_path, 'w', encoding='utf-8') as f:
+                                                f.write(tag_info['lyrics'])
+                                            op_logger.info(f'  已从{source}下载歌词')
+                                        else:
+                                            op_logger.info(f'  歌词文件已存在，跳过下载')
+                                    except Exception as e:
+                                        op_logger.warning(f'  下载歌词失败: {e}')
                         else:
                             op_logger.warning(f'  无法确定歌曲名称，跳过在线查询')
                     except Exception as e:
