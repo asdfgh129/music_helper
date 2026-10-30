@@ -25,7 +25,7 @@
 | [configuration.md](configuration.md) | 目录、环境变量、外部程序、业务阈值 |
 | [features.md](features.md) | 各功能的判定规则与边界，包括文件名规则、重复判定、归档、报告格式 |
 | [architecture.md](architecture.md) | 分层设计、模块职责、数据流、扩展与踩坑记录 |
-| [fingerprint.md](fingerprint.md) | AcoustID / MusicBrainz 指纹匹配（`Fingerprint/`） |
+| [fingerprint.md](fingerprint.md) | AcoustID / MusicBrainz 指纹匹配（`fingerprint/`） |
 | [troubleshooting.md](troubleshooting.md) | 常见故障与排查步骤 |
 | [git-proxy.md](git-proxy.md) | git pull / push 连不上 GitHub 时，用免费节点临时自建本地代理（`scripts/git_uplink.py`） |
 

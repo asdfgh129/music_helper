@@ -14,12 +14,12 @@ import re
 
 try:
     from mutagen import File as _mutagen_file
-    from mutagen.flac import FLAC
-    from mutagen.mp3 import MP3
-    from mutagen.wave import WAVE
-    from mutagen.oggvorbis import OggVorbis
     from mutagen.apev2 import APEv2File
-    from mutagen.id3 import TIT2, TPE1, TALB, TDRC, TCON
+    from mutagen.flac import FLAC
+    from mutagen.id3 import TALB, TCON, TDRC, TIT2, TPE1
+    from mutagen.mp3 import MP3
+    from mutagen.oggvorbis import OggVorbis
+    from mutagen.wave import WAVE
 
     MUTAGEN_AVAILABLE = True
 except ImportError:  # 没装 mutagen 时整个项目仍可启动
@@ -204,6 +204,7 @@ def write_cover(path, data, desc='Cover'):
 
         if ext in ('.flac', '.ogg'):
             import base64
+
             from mutagen.flac import Picture
 
             picture = Picture()

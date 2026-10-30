@@ -1,1 +1,0 @@
-um -o ..\temp -i ..\tmp

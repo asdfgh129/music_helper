@@ -67,8 +67,20 @@ class TestNaming(unittest.TestCase):
         self.assertEqual(split_artist('A，B；C'), ['A', 'B', 'C'])
         self.assertEqual(split_artist(''), [])
 
+    def test_split_artist_trims_and_counts(self):
+        self.assertEqual(split_artist('Taylor Swift; Ed Sheeran'), ['Taylor Swift', 'Ed Sheeran'])
+        self.assertEqual(len(split_artist('周杰伦，林俊杰，陈奕迅')), 3)
+        self.assertEqual(len(split_artist('Beyoncé & Jay-Z')), 2)
+
     def test_normalize_text(self):
         self.assertEqual(normalize_text('Hello  World'), 'helloworld')
+        self.assertEqual(normalize_text('Hello World'), 'helloworld')
+        self.assertEqual(normalize_text('你好 世界'), '你好世界')
+        self.assertEqual(normalize_text(''), '')
+
+    def test_is_canonical_chinese(self):
+        self.assertTrue(is_canonical('周杰伦 - 青花瓷.flac'))
+        self.assertTrue(is_canonical('Artist - Song - Version.mp3'))
 
     def test_normalize_key_strips_noise(self):
         self.assertEqual(normalize_key('晴天 (Live)'), '晴天')

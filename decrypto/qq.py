@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
+"""QQ 音乐 .mflac/.mgg 解密（Frida 注入 QQMusic.exe）
 
-import frida
+上游实现来自唐晓宇的 QQ 音乐解密脚本，随本仓库长期维护。这里只负责「起 Frida 会话 +
+逐个文件调 decrypt + 记录来源链接」，目录与流水编排在 services/decrypt.py。
+"""
+
 import os
 import sys
 import hashlib
@@ -17,16 +21,32 @@ except Exception:
     def guess_song_url(_):
         return None
 
+# Frida 脚本与本文件同目录，必须按 __file__ 定位；用相对路径时只有 CWD 恰好在
+# decrypto/ 下才能跑到（历史上正是这个坑，靠 qq.bat 先 cd 过去绕过）
+HOOK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_qq_music.js")
+# 转换流水写进仓库统一的 log/，不落进包目录（包目录混入运行产物会被误提交）
+LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "log")
 
-def list_download_songs(logger=None):
+
+def _default_download_dir():
+    """QQ 音乐下载目录：优先用 config.QQ_VIP_DIR，读不到配置时退回用户目录旧约定。"""
+    try:
+        import config
+        return config.QQ_VIP_DIR
+    except Exception:
+        return os.path.join(os.path.expanduser("~"), "Music", "VipSongsDownload")
+
+
+def list_download_songs(logger=None, download_dir=None):
     """列出QQ音乐下载目录中的歌曲
 
     Args:
         logger: 日志记录器，如果为None则使用logging模块
+        download_dir: 下载目录，默认取 config.QQ_VIP_DIR
     """
     log = logger if logger else logging
 
-    download_dir = os.path.join(os.path.expanduser("~"), "Music", "VipSongsDownload")
+    download_dir = download_dir or _default_download_dir()
     if not os.path.exists(download_dir):
         log.error(f"默认下载目录不存在：{download_dir}")
         return
@@ -44,7 +64,8 @@ def list_download_songs(logger=None):
 
 
 def append_csv(song_name: str, src_url: str):
-    csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "conversion_log.csv")
+    csv_path = os.path.join(LOG_DIR, "conversion_log.csv")
+    os.makedirs(LOG_DIR, exist_ok=True)
     exists = os.path.exists(csv_path)
     with open(csv_path, "a", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
@@ -71,6 +92,13 @@ def run_decrypt(input_dir, output_dir, logger=None):
     input_dir = os.path.abspath(input_dir)
     output_dir = os.path.abspath(output_dir)
 
+    # frida 是可选依赖：延迟导入，缺了只让 QQ 解密不可用，不影响其余流程（也方便本文件单独跑）
+    try:
+        import frida
+    except ImportError:
+        log.error("未安装 frida（pip install frida），QQ 音乐解密不可用")
+        return
+
     try:
         session = frida.attach("QQMusic.exe")
     except frida.ProcessNotFoundError:
@@ -78,7 +106,7 @@ def run_decrypt(input_dir, output_dir, logger=None):
         return
 
     try:
-        with open("hook_qq_music.js", "r", encoding="utf-8") as f:
+        with open(HOOK_PATH, "r", encoding="utf-8") as f:
             script = session.create_script(f.read())
         script.load()
     except Exception as e:
@@ -147,23 +175,22 @@ if __name__ == "__main__":
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("-l", "--list", action="store_true")
-    parser.add_argument("-i", "--input", type=str, required=False)
-    parser.add_argument("-o", "--output", type=str, required=False)
+    parser = argparse.ArgumentParser(description="QQ 音乐加密文件（.mflac/.mgg）解密")
+    parser.add_argument("-l", "--list", action="store_true", help="只列出下载目录里的歌曲")
+    parser.add_argument("-d", "--dir", help="查看目录，默认取 config.QQ_VIP_DIR")
+    parser.add_argument("-i", "--input", type=str, required=False, help="待解密的临时目录")
+    parser.add_argument("-o", "--output", type=str, required=False, help="解密输出目录")
     args = parser.parse_args()
 
     if len(sys.argv) == 1:
-        print("作者: 唐晓宇\n")
-        print("命令用法:")
-        print("  列出 QQ 音乐默认下载目录下的歌曲: main.py -l")
-        print("  注：默认目录 C:\\Users\\<当前用户名>\\Music\\VipSongsDownload")
-        print("  解密转换指定目录下的歌曲（可批量转换）:")
-        print("  main.py -i input -o output")
+        print("命令用法（本文件也可直接运行，等价于 main.py --only-decrypt）:")
+        print("  列出 QQ 音乐下载目录下的歌曲: python decrypto/qq.py -l")
+        print("  解密转换指定目录下的歌曲（可批量转换）: python decrypto/qq.py -i input -o output")
+        parser.print_help()
         sys.exit(0)
 
     if args.list:
-        list_download_songs()
+        list_download_songs(download_dir=args.dir)
         sys.exit(0)
 
     if not args.input or not args.output:

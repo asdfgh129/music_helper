@@ -10,7 +10,6 @@
 保留策略：优先无损格式，其次文件更大者（同格式下通常码率更高）。
 """
 
-import os
 import re
 from dataclasses import dataclass, field
 

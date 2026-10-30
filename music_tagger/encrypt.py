@@ -2,11 +2,11 @@
 """
 加密模块 - AES和RSA加密
 """
-from json import dumps
-from os import urandom
 from base64 import b64encode
 from binascii import hexlify
 from hashlib import md5
+from json import dumps
+from os import urandom
 
 from Cryptodome.Cipher import AES
 
@@ -60,7 +60,7 @@ def create_key(size):
 def weEncrypt(text):
     """
     网易云音乐网页API加密方式
-    
+
     引用自: https://github.com/darknessomi/musicbox/blob/master/NEMbox/encrypt.py#L40
     """
     data = dumps(text).encode("utf-8")
@@ -74,7 +74,7 @@ def weEncrypt(text):
 def linuxEncrypt(text):
     """
     网易云音乐Linux API加密方式
-    
+
     参考自: https://github.com/Binaryify/NeteaseCloudMusicApi/blob/master/util/crypto.js#L28
     """
     text = str(text).encode()

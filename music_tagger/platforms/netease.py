@@ -2,11 +2,12 @@
 """
 网易云音乐API客户端
 """
-import requests
 import time
 from random import randint
 
-from ..encrypt import weEncrypt, linuxEncrypt
+import requests
+
+from ..encrypt import linuxEncrypt, weEncrypt
 
 
 def timestamp_to_dt(timestamp, format_type="%Y-%m-%d %H:%M:%S"):
@@ -112,7 +113,7 @@ class NetEaseMusicClient:
         except Exception as e:
             print("网易云音乐搜索失败", e, data.text)
             songs = []
-        
+
         for song in songs:
             artists = song.get("ar", [])
             album = song.get("al", {})

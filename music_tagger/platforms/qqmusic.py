@@ -2,11 +2,11 @@
 """
 QQ音乐API客户端
 """
+import base64
 import json
 import uuid
-import requests
-import base64
 
+import requests
 
 QQMUSIC_SONG_COVER = "http://y.qq.com/music/photo_new/T002R300x300M000{id}.jpg"
 
@@ -166,7 +166,7 @@ class QQMusicApi:
             qStr = ""
             fsize = 0
             mid = _id['media_mid']
-            
+
             if int(_id['size_hires']) != 0:
                 code = "RS01"
                 format = "flac"
@@ -218,7 +218,7 @@ class QQMusicApi:
                 'mid': mid,
                 'musicid': i['id'],
                 'id': i['mid'],
-                'size': f"%.2fMB" % (fsize / 1024 / 1024),
+                'size': "%.2fMB" % (fsize / 1024 / 1024),
                 'name': i["title"],
                 'artist': singer,
                 'album': albumName,

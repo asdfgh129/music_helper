@@ -49,14 +49,14 @@ python -c "import config, json; print(json.dumps(config.as_dict(), ensure_ascii=
 
 外部程序返回成功但没写文件。逐项确认：
 
-1. `um.exe` / `Decrypto` 路径存在且可执行；
+1. `um.exe` / `decrypto` 路径存在且可执行；
 2. QQ 解密需要 **QQMusic 客户端正在运行**且已登录（Frida 注入进程）；
 3. 用 `--debug` 看外部程序 stdout/stderr，日志里会原样打印；
 4. 手动跑一次：
 
 ```bash
 # 网易云
-Decrypto\um.exe -i G:\NeTmp -o G:\Temp
+decrypto\um.exe -i G:\NeTmp -o G:\Temp
 ```
 
 ### 「执行超时（>3600s）」
@@ -87,7 +87,7 @@ findstr /C:"加密原文件" log\journal.jsonl
 
 ### `找不到外部程序: ...soundalike.exe`
 
-路径默认是 `Fingerprint/soundalike.exe`。移动过就设：
+路径默认是 `fingerprint/soundalike.exe`。移动过就设：
 
 ```bash
 $env:MUSIC_HELPER_SOUNDALIKE_EXE = "D:\tools\soundalike.exe"
@@ -224,7 +224,8 @@ Windows 下用绝对路径，例如 `C:/mh_test/lib`（Git Bash 的 `/tmp` 与 P
 它们叫 `test/manual/manual_*.py`，需要真实网络与密钥，手动运行：
 
 ```bash
-python test/manual/manual_musicbrainz_connection.py
+python test/manual/manual_musicbrainz.py               # 全链路（fpcalc → AcoustID → MusicBrainz）
+python test/manual/manual_musicbrainz.py --mode api    # 只打裸接口，用于区分网络与匹配链路
 ```
 
 ---

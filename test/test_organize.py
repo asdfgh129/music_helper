@@ -5,8 +5,8 @@ import os
 import unittest
 
 import core.ops as ops
-from core.model import Track
 from core import organize
+from core.model import Track
 
 
 def make(path, **tags):

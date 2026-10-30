@@ -5,7 +5,7 @@
 之所以这样约束：旧版 config.py 承担了「导入中转站」的职责（把 MusicTagger、
 FingerprintMatcher 等类从 config 导出），导致
   1) 任一可选依赖缺失就让 `from config import X` 直接崩，主程序起不来；
-  2) config 与 Fingerprint 形成循环导入，FPCALC_LENGTH 永远读到默认值。
+  2) config 与 fingerprint 形成循环导入，FPCALC_LENGTH 永远读到默认值。
 现在所有可选依赖都在各自模块内部延迟导入。
 
 所有路径都可以用环境变量覆盖，方便换机器 / 换盘符：
@@ -16,7 +16,7 @@ import os
 
 # ==================== 版本信息 ====================
 # 手工维护，与仓库根目录的 CHANGELOG.md 对齐；不再用时间戳动态生成
-__version__ = '0.4.0'
+__version__ = '0.5.0'
 VERSION = __version__
 
 # ==================== 项目目录 ====================
@@ -53,9 +53,9 @@ QQ_TMP_DIR = _path('MUSIC_HELPER_QQ_TMP', r'G:\QQTmp')
 
 # ==================== 外部程序 ====================
 # 默认指向仓库内已有的二进制位置，避免为了「好看」而搬动 exe 导致原有 bat 失效
-UM_EXE = _path('MUSIC_HELPER_UM_EXE', os.path.join(PROJECT_DIR, 'Decrypto', 'um.exe'))
+UM_EXE = _path('MUSIC_HELPER_UM_EXE', os.path.join(PROJECT_DIR, 'decrypto', 'um.exe'))
 SOUNDALIKE_EXE = _path('MUSIC_HELPER_SOUNDALIKE_EXE',
-                       os.path.join(PROJECT_DIR, 'Fingerprint', 'soundalike.exe'))
+                       os.path.join(PROJECT_DIR, 'fingerprint', 'soundalike.exe'))
 
 # 外部程序超时（秒）—— 旧代码没有超时，exe 卡死会拖死整条流水线
 SUBPROCESS_TIMEOUT = int(os.environ.get('MUSIC_HELPER_TIMEOUT', '3600'))

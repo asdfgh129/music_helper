@@ -230,7 +230,7 @@ class Tagger:
         if not self.with_fingerprint:
             return None
         try:
-            from Fingerprint import FingerprintMatcher
+            from fingerprint import FingerprintMatcher
             self._fingerprint = FingerprintMatcher()
         except Exception:  # noqa: BLE001 - 缺 acoustid/fpcalc 时降级
             self._fingerprint = None

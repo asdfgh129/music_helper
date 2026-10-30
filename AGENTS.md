@@ -17,15 +17,17 @@ Python 音乐库流水线：解密 → 去重 → 标签 → 检查 → 归档�
 | 加命令行参数 | [docs/usage.md](docs/usage.md)（参数优先级顺序敏感） |
 | 改配置项 | [docs/configuration.md](docs/configuration.md) |
 | 写文档/移动文档 | [docs/README.md](docs/README.md)、[CONTRIBUTING.md](CONTRIBUTING.md) |
+| 推不上 GitHub | [docs/git-proxy.md](docs/git-proxy.md)（`scripts/git_uplink.py`） |
 
 ## 常用命令
 
 ```bash
 python -m pip install -r requirements-dev.txt
 python -m pytest -q                                  # 全量测试，必须全绿
-python -m compileall -q core services main.py        # 语法检查
+python -m ruff check .                               # 静态检查（CI lint job 同款）
+python -m compileall -q core services scripts main.py config.py utils.py   # 语法检查
 python -c "import config, utils, main"               # 导入冒烟
-python scripts/check_docs.py                         # 文档链接检查
+python scripts/check_docs.py                         # 文档校验：链接 / 路径 / 命令
 python main.py --check --dry-run                     # 用真实配置预览
 ```
 
@@ -60,4 +62,6 @@ Conventional Commits：`fix(core/dedupe): ...`、`docs: ...`。一次提交一�
   `metadata.py` / `vip_decrypt.py` / `soundalike.py` 已删除，逻辑合并进 `core/`、`services/`。
   看到引用它们的代码或文档，说明是过期的。
 - `Doc/` 目录已不存在，内容并入 `docs/`。
+- `Decrypto/`、`Fingerprint/` 已改名为小写 `decrypto/`、`fingerprint/`（0.5.0）。
+  文档里再出现大写开头且带斜杠的路径，说明没跟上。
 - 历史文档在 `docs/history/`，只读，不要照着里面的模块名写代码。

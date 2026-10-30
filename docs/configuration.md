@@ -39,8 +39,8 @@ G:\QQMusic\（普通文件）
 
 | 程序 | 用途 | 默认路径 | 环境变量 | 缺失时 |
 |---|---|---|---|---|
-| `soundalike.exe` | 声纹去重、库一致性 | `Fingerprint/soundalike.exe` | `MUSIC_HELPER_SOUNDALIKE_EXE` | 去重与 `--checkdb` 报错，其余流程正常 |
-| `um.exe` | 网易云 `.ncm` 解密 | `Decrypto/um.exe` | `MUSIC_HELPER_UM_EXE` | 网易云解密报错，QQ 解密不受影响 |
+| `soundalike.exe` | 声纹去重、库一致性 | `fingerprint/soundalike.exe` | `MUSIC_HELPER_SOUNDALIKE_EXE` | 去重与 `--checkdb` 报错，其余流程正常 |
+| `um.exe` | 网易云 `.ncm` 解密 | `decrypto/um.exe` | `MUSIC_HELPER_UM_EXE` | 网易云解密报错，QQ 解密不受影响 |
 | `fpcalc` | AcoustID 指纹 | 系统 PATH | — | 声纹→标签降级为纯在线查询 |
 
 两个 exe 随仓库分发（约 8.2 MB + 4.6 MB），克隆即可用。若迁移位置，务必同步环境变量。

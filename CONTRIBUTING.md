@@ -21,14 +21,15 @@ python -m pip install -r requirements-dev.txt
 
 - Python 3.11+（CI 覆盖 3.11 / 3.12）。
 - 主要目标平台是 Windows；Linux/macOS 上除 QQ 解密外均可运行。
-- 外部程序 `Decrypto/um.exe`、`Fingerprint/soundalike.exe` 随仓库提供，缺失时对应功能降级，
+- 外部程序 `decrypto/um.exe`、`fingerprint/soundalike.exe` 随仓库提供，缺失时对应功能降级，
   不影响程序启动与测试。
 
 ## 运行与测试
 
 ```bash
 python -m pytest -q                 # 全量单元测试
-python scripts/check_docs.py        # 文档链接检查（改了 md 就跑一次）
+python -m ruff check .              # 静态检查（CI 的 lint job 同款）
+python scripts/check_docs.py        # 文档校验：链接 + 路径 + 命令（改了 md 就跑一次）
 python main.py --help               # 命令行冒烟
 python main.py --check --dry-run    # 用真实库验证时先 dry-run
 ```
@@ -43,9 +44,11 @@ python main.py --check --dry-run    # 用真实库验证时先 dry-run
 - 提交前跑一遍 CI 等价命令：
 
 ```bash
-python -m compileall -q core services music_tagger main.py config.py utils.py
+python -m compileall -q core services music_tagger decrypto fingerprint scripts main.py config.py utils.py
 python -c "import config, utils, main"
+python -m ruff check .
 python -m pytest -q
+python scripts/check_docs.py
 ```
 
 ## 代码约定

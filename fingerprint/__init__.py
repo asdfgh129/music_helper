@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""
-Fingerprint 模块 - 音乐文件指纹匹配
-从 AcoustID API 查询指纹并从 MusicBrainz 获取标签信息
+"""fingerprint - 音乐文件指纹匹配
+
+用 fpcalc 算指纹 → AcoustID 查 recording → MusicBrainz 取标签与封面。
+包名统一小写，与 core/services 一致；主流程经 services/tagger.py 延迟导入。
 """
 
 from .musicbrainz_matcher import (

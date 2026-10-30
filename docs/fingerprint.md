@@ -1,6 +1,6 @@
 # 指纹匹配（AcoustID / MusicBrainz）
 
-`Fingerprint/` 回答一个问题：**这个音频文件在 MusicBrainz 里是哪一首？**
+`fingerprint/` 回答一个问题：**这个音频文件在 MusicBrainz 里是哪一首？**
 答案用来补标签——不依赖文件名，也不依赖已有标签，所以对「文件名乱、标签空」的库最有效。
 
 ## 1. 工作原理
@@ -44,7 +44,7 @@ sudo apt install libchromaprint-tools
 ## 3. 作为库使用
 
 ```python
-from Fingerprint import FingerprintMatcher
+from fingerprint import FingerprintMatcher
 
 matcher = FingerprintMatcher()                 # fpcalc 不在 PATH 时传 fpcalc_path=...
 result = matcher.match_file('song.flac')
@@ -103,11 +103,12 @@ if match.success and match.recordings:
 ```bash
 # 提高日志级别看每一步请求与响应
 python -c "
-from Fingerprint import FingerprintMatcher
+from fingerprint import FingerprintMatcher
 m = FingerprintMatcher(debug_mode=True)
 print(m.match_file('test/fixtures/1.flac').recordings[:1])
 "
 ```
 
-`test/manual/manual_musicbrainz_connection.py` 与 `manual_musicbrainz_direct.py` 是现成的
-手工验证脚本（需要真实网络与 AcoustID key），用法见 [troubleshooting.md](troubleshooting.md)。
+`test/manual/manual_musicbrainz.py` 是现成的手工验证脚本（需要真实网络与 AcoustID key）：
+`--mode match` 跑全链路，`--mode api` 只打裸接口用来区分网络问题与匹配链路问题，
+用法见 [troubleshooting.md](troubleshooting.md)。

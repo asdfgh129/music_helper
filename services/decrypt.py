@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-解密服务 - 合并原 vip_decrypt.py 与 Decrypto 调用
+解密服务 - 合并原 vip_decrypt.py 与 decrypto 调用
 
 相比旧实现的三个关键修正：
 1. 只把「本次运行新产生」的文件搬回原目录（旧实现会把 TEMP 顶层所有文件搬走）；
@@ -102,9 +102,9 @@ def decrypt_qq(month=None, dry_run=False, logger=None):
 
 def _run_qq(logger=None):
     try:
-        from Decrypto import run_decrypt
+        from decrypto import run_decrypt
     except Exception as exc:  # noqa: BLE001
-        return None, f'Decrypto 模块不可用: {exc}'
+        return None, f'decrypto 模块不可用: {exc}'
     try:
         run_decrypt(config.QQ_TMP_DIR, config.TEMP_COMPLETED_DIR, logger=logger)
     except Exception as exc:  # noqa: BLE001

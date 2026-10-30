@@ -12,7 +12,7 @@ addopts = "-ra --strict-markers"
 [tool.ruff]
 line-length = 110
 target-version = "py311"
-exclude = ["Decrypto", "Fingerprint", "log", ".git"]
+exclude = ["decrypto", "fingerprint", "log", ".git"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]

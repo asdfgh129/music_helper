@@ -54,9 +54,9 @@
 
 | 模块 | 职责 | 依赖 |
 |---|---|---|
-| `decrypt.py` | 网易云 / QQ 解密 | `um.exe`、`Decrypto`（Frida） |
-| `soundalike.py` | 声纹去重、库一致性 | `Fingerprint/soundalike.exe` |
-| `tagger.py` | 声纹 + 在线标签、封面、歌词 | `Fingerprint/`、`music_tagger/platforms/`、`requests` |
+| `decrypt.py` | 网易云 / QQ 解密 | `um.exe`、`decrypto`（Frida） |
+| `soundalike.py` | 声纹去重、库一致性 | `fingerprint/soundalike.exe` |
+| `tagger.py` | 声纹 + 在线标签、封面、歌词 | `fingerprint/`、`music_tagger/platforms/`、`requests` |
 
 `music_tagger/` 只保留 `platforms/{qqmusic,netease}.py` 两个客户端，**不含**任何标签匹配或
 写盘逻辑——那部分唯一实现在 `core/scoring.py` 与 `services/tagger.py`。历史上有过一套
@@ -64,6 +64,21 @@
 
 外部依赖一律**延迟导入 + 失败降级**：缺 `requests` 只是不下载封面，缺 `fpcalc` 只是跳过声纹，
 缺 `mutagen` 只是读不到标签——主程序永远能启动。
+
+### 附属包与脚本（不属于上面两层）
+
+| 目录 | 是什么 | 为什么不在 `core`/`services` |
+|---|---|---|
+| `decrypto/` | QQ 音乐解密：Frida hook 脚本 + 来源检索（`qq.py`、`source_finder.py`、`um.exe`） | 半独立的上游代码，自带 CLI；由 `services/decrypt.py` 调用，不参与流水线编排 |
+| `fingerprint/` | AcoustID / MusicBrainz 指纹匹配（`musicbrainz_matcher.py` + `soundalike.exe`） | 同上，自带一套 HTTP 客户端与解析，被 `services/tagger.py`、`soundalike.py` 借用 |
+| `music_tagger/` | QQ 音乐 / 网易云平台客户端（`platforms/`） | 上游项目名的沿用；包内只剩客户端，标签择优逻辑在 `core/scoring.py` |
+| `scripts/` | 维护脚本：`check_docs.py`（文档校验）、`git_uplink.py`（出境代理） | 开发者工具，不参与运行时 |
+| `test/` | pytest 用例 + `manual/` 手工脚本 + `fixtures/` 样本 | 不随程序分发 |
+
+命名约定：**自有代码目录一律小写**（`core`/`services`/`decrypto`/`fingerprint`/`music_tagger`/
+`scripts`/`test`/`docs`），`decrypto` 与 `fingerprint` 在 0.5.0 之前是 `Decrypto`/`Fingerprint`，
+与同层目录大小写不一致、在大小写敏感的文件系统上易出现「同一目录两个名字」的问题。
+外部程序文件名保持上游原样（`um.exe`、`soundalike.exe`），改它会连带上游脚本失效。
 
 ## 3. 数据流
 
@@ -113,7 +128,7 @@ result = plan.execute()      # PlanResult(done, skipped, failed)
 从 config 导出。后果：
 
 1. 任一可选依赖缺失，`from config import X` 直接 `ImportError`，主程序起不来；
-2. `config → Fingerprint → config` 循环导入，`Fingerprint/musicbrainz_matcher.py` 拿到的
+2. `config → fingerprint → config` 循环导入，`fingerprint/musicbrainz_matcher.py` 拿到的
    是半初始化的 config，`FPCALC_LENGTH` 永远回退默认值 120，配置改了不生效。
 
 现在 config 只有数据和 `_path()` 帮助函数。

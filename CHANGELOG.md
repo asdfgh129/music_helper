@@ -10,6 +10,17 @@
 
 ## [Unreleased]
 
+### 计划中
+
+- 支持更多音乐平台（Spotify、Apple Music 等）
+- Web GUI 界面
+- Docker 部署支持
+
+## [0.5.0] - 2026-10-30
+
+第二轮全仓审计：统一目录命名、删掉与流水线无关的一次性脚本、修正三处「只在特定工作目录
+下才跑得通」的代码，并把文档与代码重新对齐（新增两条自动校验，防止再次漂移）。
+
 ### 新增
 
 - **`scripts/git_uplink.py`**：用已采集的免费节点临时自建本地代理，供 `git pull` / `push`
@@ -18,12 +29,46 @@
   `run` / `push` / `pull` 一次性调用与 `start` + `env` 常驻两种用法。
   与 free-nodes 空间的 `uplink.py` 相比不复刻四内核与协议转换，只借用其节点池与内核二进制。
 - `docs/git-proxy.md` 与 `test/test_git_uplink.py`（16 例，纯逻辑、不连网）。
+- `scripts/check_docs.py` 新增两项校验：文档里提到的**仓库内路径必须存在**、
+  `python xxx.py` 形式的命令其脚本必须存在（`docs/history/` 与 `CHANGELOG.md` 豁免）。
+- CI 新增 `lint` job（`ruff check .`），与 `hygiene`、`docs` 一起守住风格与文档。
 
-### 计划中
+### 变更
 
-- 支持更多音乐平台（Spotify、Apple Music 等）
-- Web GUI 界面
-- Docker 部署支持
+- **目录统一小写**：`Decrypto/` → `decrypto/`、`Fingerprint/` → `fingerprint/`，
+  与 `core/`、`services/`、`scripts/`、`test/` 一致。影响 `config.py` 的两个默认路径、
+  `services/decrypt.py`、`services/tagger.py` 的导入，以及全部文档；用 `MUSIC_HELPER_UM_EXE` /
+  `MUSIC_HELPER_SOUNDALIKE_EXE` 覆盖过路径的机器不受影响。
+- **两个手工验证脚本合并**：`manual_musicbrainz_connection.py` + `manual_musicbrainz_direct.py`
+  → `manual_musicbrainz.py --mode {match,api}`。两份脚本本来各有一套日志与退出码，且都写了
+  `sys.path.insert(0, '..')`（只指到 `test/`，导入 `fingerprint` 必然失败）。
+- `test/test_utils.py` 只留 `utils` 的用例（日志初始化、月份工具）；原先挂在它下面、实际测
+  `core.naming` 的 17 个用例并入 `test_naming.py`——文件名即被测模块名。
+- `music_tagger/__init__.py` 去掉自带的 `__version__ = '1.1.0'`：全仓版本号唯一来源是
+  `config.__version__`，第二个版本号只会误导。
+- `test/README.md`、`docs/architecture.md`（新增「附属包与脚本」小节）、`AGENTS.md`、
+  `README.md` 目录树与文档表同步到当前结构。
+
+### 移除
+
+- `scripts/qqmusic_analyzer.py`：抓包分析的一次性脚本（依赖 tshark、代码里还留着
+  `[citation:N]` 标记），与本项目流水线无关，也无任何引用。
+- `decrypto/qq.bat`、`decrypto/um.bat`：硬编码 `G:\QQtmp` / `c:\temp`，且 `qq.bat` 调用的
+  `main.py -i -o` 根本不是这两个脚本的参数——CLI 已统一到 `main.py` 与 `decrypto/qq.py`。
+- `music_helper.code-workspace`：单文件夹 workspace，还引用了不存在的 `../soundalike`。
+- 未使用的导入/变量：`core/dedupe.py` 的 `os`、`core/check.py` 里算完就没用的 `counts`、
+  两个测试文件里的多余导入；全仓 `ruff check .` 归零。
+
+### 修复
+
+- **`decrypto/qq.py` 的 Frida hook 用相对路径打开**（`open("hook_qq_music.js")`）：只有当前
+  工作目录恰好在 `decrypto/` 下才成立，从 `main.py --only-decrypt` 走会直接「加载 Frida 脚本
+  失败」。改为按 `__file__` 定位。
+- **`conversion_log.csv` 写进包目录**：改为写 `log/conversion_log.csv`，与其它运行产物一致，
+  不再是「源码目录里长出一个 CSV」。
+- `list_download_songs()` 硬编码 `~/Music/VipSongsDownload`，与 `config.QQ_VIP_DIR` 不一致：
+  改为默认读配置，并支持 `-d/--dir` 临时指定。
+- `decrypto/qq.py` 的 `__main__` 帮助文本把用法写成 `main.py -l`（实际是 `qq.py -l`）。
 
 ## [0.4.0] - 2026-10-30
 

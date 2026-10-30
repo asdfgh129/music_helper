@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""
-Decrypto 模块 - QQ 音乐解密工具
-提供 QQ 音乐加密音频文件的解密和转换功能
+"""decrypto - QQ 音乐解密（Frida 注入 + 来源检索）
+
+对外只暴露四个入口，具体编排在 services/decrypt.py；包名统一小写，与 core/services 一致。
 """
 
 from .qq import run_decrypt, list_download_songs

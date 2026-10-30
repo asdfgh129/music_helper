@@ -81,9 +81,9 @@ WARNING: 临时目录不存在: G:\Temp
 
 | 程序 | 默认路径 | 缺失后果 |
 |---|---|---|
-| `soundalike.exe` | `Fingerprint/soundalike.exe` | 声纹去重/建库/一致性检查失败，其余流程可用 |
-| `um.exe` | `Decrypto/um.exe` | 网易云 `.ncm` 解密失败 |
-| Frida + 运行中的 QQMusic | 由 `Decrypto/qq.py` 调用 | QQ 音乐 `.mflac/.mgg` 解密失败 |
+| `soundalike.exe` | `fingerprint/soundalike.exe` | 声纹去重/建库/一致性检查失败，其余流程可用 |
+| `um.exe` | `decrypto/um.exe` | 网易云 `.ncm` 解密失败 |
+| Frida + 运行中的 QQMusic | 由 `decrypto/qq.py` 调用 | QQ 音乐 `.mflac/.mgg` 解密失败 |
 
 两个 exe 随仓库分发，克隆即可用；换位置就设 `MUSIC_HELPER_SOUNDALIKE_EXE`、
 `MUSIC_HELPER_UM_EXE`。
@@ -586,8 +586,8 @@ python main.py --check --limit 500 --report-dir D:/reports/batch2   # 同样取�
 | `MUSIC_HELPER_NETEASE_TMP` | `G:\NeTmp` | 网易云解密临时目录 |
 | `MUSIC_HELPER_QQ_DIR` | `G:\QQMusic` | QQ 音乐下载目录（VIP 子目录同上） |
 | `MUSIC_HELPER_QQ_TMP` | `G:\QQTmp` | QQ 音乐解密临时目录 |
-| `MUSIC_HELPER_UM_EXE` | `Decrypto/um.exe` | 网易云解密程序 |
-| `MUSIC_HELPER_SOUNDALIKE_EXE` | `Fingerprint/soundalike.exe` | 声纹工具 |
+| `MUSIC_HELPER_UM_EXE` | `decrypto/um.exe` | 网易云解密程序 |
+| `MUSIC_HELPER_SOUNDALIKE_EXE` | `fingerprint/soundalike.exe` | 声纹工具 |
 | `MUSIC_HELPER_TIMEOUT` | `3600` | 外部程序超时（秒） |
 | `MUSIC_HELPER_ENCRYPTED_MODE` | `return` | 加密原文件去向：`return`/`trash`/`keep` |
 

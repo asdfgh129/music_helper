@@ -45,7 +45,7 @@ jobs:
           python -m pip install -r requirements-dev.txt
 
       - name: 语法编译检查
-        run: python -m compileall -q core services music_tagger main.py config.py utils.py
+        run: python -m compileall -q core services music_tagger decrypto fingerprint scripts main.py config.py utils.py
 
       - name: 导入冒烟（缺少可选依赖也不能影响启动）
         run: python -c "import config, utils, main; print('import ok', config.__version__)"
@@ -58,8 +58,8 @@ jobs:
           python main.py --version
           python main.py --help
 
-  docs:
-    name: docs 链接检查
+  lint:
+    name: lint（ruff）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -69,7 +69,24 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: 校验 Markdown 相对链接
+      - name: 安装 ruff
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: 静态检查
+        run: python -m ruff check .
+
+  docs:
+    name: docs 校验
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 校验文档链接 / 路径 / 命令
         run: python scripts/check_docs.py
 
   hygiene:

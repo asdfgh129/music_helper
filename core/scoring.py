@@ -5,7 +5,7 @@
 供 services.tagger 在多个平台候选中择优，也便于单独单测。
 """
 
-from core.naming import split_artist, normalize_text
+from core.naming import normalize_text, split_artist
 
 
 def match_score(local, online):

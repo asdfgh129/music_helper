@@ -7,7 +7,7 @@ Python 音乐库流水线：**解密 → 去重 → 标签 → 检查 → 归档
 
 | 项目 | 说明 |
 |---|---|
-| 当前版本 | `0.4.0`（见 [CHANGELOG.md](CHANGELOG.md)） |
+| 当前版本 | `0.5.0`（见 [CHANGELOG.md](CHANGELOG.md)） |
 | 运行环境 | Python 3.11+，Windows 为主要目标平台（QQ 解密仅 Windows） |
 | 入口 | `python main.py` |
 | 使用条款 | [LICENSE](LICENSE) |
@@ -77,14 +77,14 @@ music_helper/
 │   ├── decrypt.py          # 网易云 / QQ 音乐解密
 │   ├── soundalike.py       # 声纹去重（外部 exe 包装）
 │   └── tagger.py           # MusicBrainz + QQ/网易 标签、封面、歌词
-├── Decrypto/               # QQ 音乐解密（um.exe + Frida hook）
-├── Fingerprint/            # AcoustID / MusicBrainz 指纹匹配
+├── decrypto/               # QQ 音乐解密（um.exe + Frida hook）
+├── fingerprint/            # AcoustID / MusicBrainz 指纹匹配
 ├── music_tagger/           # 平台客户端（只保留 QQ 音乐、网易云）
 ├── test/                   # pytest 用例
 │   ├── fixtures/1.flac     # 测试样本
 │   └── manual/             # 需要联网的手工验证脚本（不进自动测试）
 ├── docs/                   # 用户与开发文档
-├── scripts/                # 维护脚本：文档链接检查、抓包分析
+├── scripts/                # 维护脚本：文档检查、git 出境代理（不参与流水线）
 └── log/                    # 运行日志、报告、journal、回收站
 ```
 
@@ -100,6 +100,7 @@ music_helper/
 | [docs/architecture.md](docs/architecture.md) | 分层设计、数据流、扩展约定 |
 | [docs/fingerprint.md](docs/fingerprint.md) | AcoustID / MusicBrainz 指纹匹配 |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | 常见问题与排查 |
+| [docs/git-proxy.md](docs/git-proxy.md) | 推不上 GitHub 时，用免费节点临时自建本地代理 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 开发环境、测试、提交规范 |
 | [CHANGELOG.md](CHANGELOG.md) | 变更记录 |
 
@@ -118,8 +119,8 @@ music_helper/
 - QQ 解密依赖 Frida 与正在运行的 QQMusic 客户端，仅 Windows。
 - 声纹去重依赖外部 `soundalike.exe` 的数据库格式，Python 侧只负责调用与结果搬运。
 - 在线标签查询只走 QQ 音乐与网易云；酷狗/酷我/咪咕客户端已删除（上游接口不可用）。
-- 仓库内含测试样本 `test/fixtures/1.flac`（15 MB）与两个 exe（`Decrypto/um.exe` 8.2 MB、
-  `Fingerprint/soundalike.exe` 4.6 MB），保持随仓库分发以便开箱即用。
+- 仓库内含测试样本 `test/fixtures/1.flac`（15 MB）与两个 exe（`decrypto/um.exe` 8.2 MB、
+  `fingerprint/soundalike.exe` 4.6 MB），保持随仓库分发以便开箱即用。
 
 ## 开发与测试
 

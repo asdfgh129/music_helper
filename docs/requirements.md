@@ -18,7 +18,7 @@
 | 9 | 主目录一致性 | 检查主目录文件与 soundalike 数据库记录是否一致 | `services/soundalike.py: check()` |
 | 10 | VIP 解密 | 解密 QQ 音乐 / 网易云 VIP 目录中的加密文件 | `services/decrypt.py` |
 | 11 | 普通文件移动 | 把未被识别为重复的文件移到指定目录 | `services/soundalike.py`（`-move-interactive` 输出到 `TEMP_MOVE_DIR`）、`main.py: _copy_normal_files` |
-| 12 | 声纹 → 标签 | 按声纹从 MusicBrainz 取标签并写入文件 | `services/tagger.py` + `Fingerprint/` |
+| 12 | 声纹 → 标签 | 按声纹从 MusicBrainz 取标签并写入文件 | `services/tagger.py` + `fingerprint/` |
 | 13 | 文件名 → 标签 | 按文件名从 QQ 音乐 / 网易云 API 取标签并写入 | `services/tagger.py` + `music_tagger/platforms/` |
 | 14 | 日志 | 记录运行中的错误、警告、调试信息 | `utils.py`、`log/journal.jsonl` |
 
@@ -60,7 +60,7 @@
 | 步骤 | 内容 | 实现 |
 |---|---|---|
 | 2.1 | 按月份拷贝 QQ VIP 目录文件到临时目录 | `services/decrypt.py: decrypt_qq`（移入） |
-| 2.2 | 解密 QQ 临时目录 | 同上（Frida / `Decrypto`） |
+| 2.2 | 解密 QQ 临时目录 | 同上（Frida / `decrypto`） |
 | 2.3 | 按月份拷贝网易云文件到临时目录 | `services/decrypt.py: decrypt_netease` |
 | 2.4 | 解密网易云临时目录 | 同上（`um.exe`） |
 | 2.5 | 拷贝普通文件到临时目录 | `main.py: _copy_normal_files` |

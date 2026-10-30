@@ -8,7 +8,6 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.dedupe import (
-    DuplicateGroup,
     find_by_filename,
     find_by_tag,
     find_duplicates,

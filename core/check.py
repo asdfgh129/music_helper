@@ -6,8 +6,8 @@
 Plan、由 report_into() 渲染成报告。检查本身不改动任何文件。
 """
 
-from dataclasses import dataclass, field
 import os
+from dataclasses import dataclass, field
 
 import core.tags as core_tags
 from core import dedupe as dedupe_mod
@@ -177,7 +177,6 @@ def plan_fixes(result, plan, review_dir=None, rename_canonical=True,
 
 def report_into(result, report):
     """把 CheckResult 渲染进 Report"""
-    counts = result.counts()
     for kind in (KIND_FILENAME, KIND_TAGS, KIND_MISMATCH, KIND_DUP, KIND_NO_LRC, KIND_ORPHAN_LRC):
         items = result.by_kind(kind)
         report.add_summary(kind, len(items))
