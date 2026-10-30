@@ -1,0 +1,10 @@
+-r requirements.txt
+
+# 测试
+pytest>=8.0.0
+
+# 代码风格（CI 不强制，本地可选）
+ruff>=0.6.0
+
+# 可选：繁简转换（Fingerprint 匹配会更准，缺失时自动降级）
+opencc-python-reimplemented>=0.1.7

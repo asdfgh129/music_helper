@@ -1,4 +1,29 @@
-.venv
-__pycache__
+# ===== Python =====
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# ===== 测试与工具缓存 =====
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ===== 运行产物（保留目录结构） =====
+log/*
+!log/.gitkeep
+music.db
 *.log
-。DS_Store
+conversion_log.csv
+
+# ===== 系统与编辑器 =====
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# ===== 本地代理/工作区数据 =====
+.sisyphus/
+.workbuddy/

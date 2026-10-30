@@ -1,0 +1,19 @@
+# 本项目是「脚本 + 库」形态的音乐库流水线，不作为可分发包发布，
+# 因此这里只放工具链配置；版本号唯一来源是 config.__version__（与 CHANGELOG.md 对齐）。
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["test"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-ra --strict-markers"
+# 网络相关的人工验证脚本命名为 manual_*.py，不进自动测试
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+exclude = ["Decrypto", "Fingerprint", "log", ".git"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]

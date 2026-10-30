@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }} / py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.12']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: 语法编译检查
+        run: python -m compileall -q core services music_tagger main.py config.py utils.py
+
+      - name: 导入冒烟（缺少可选依赖也不能影响启动）
+        run: python -c "import config, utils, main; print('import ok', config.__version__)"
+
+      - name: 单元测试
+        run: python -m pytest -q
+
+      - name: 命令行可用性
+        run: |
+          python main.py --version
+          python main.py --help
+
+  docs:
+    name: docs 链接检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 校验 Markdown 相对链接
+        run: python scripts/check_docs.py
+
+  hygiene:
+    name: 仓库卫生
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 禁止提交的项目产物
+        run: |
+          bad=$(git ls-files | grep -E '(^|/)(__pycache__|\.pytest_cache)/|\.pyc$|^log/[^.]' || true)
+          if [ -n "$bad" ]; then
+            echo "以下文件不应被提交："
+            echo "$bad"
+            exit 1
+          fi
+          echo "仓库卫生检查通过"
