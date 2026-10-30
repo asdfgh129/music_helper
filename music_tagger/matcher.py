@@ -12,7 +12,7 @@ except ImportError:
 
 from .platforms import MusicResource
 from .zhconv import convert, issimp
-from ..utils import split_artist
+from .utils import split_artist
 
 
 def match_artist(my_value, u_value):

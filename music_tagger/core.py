@@ -274,7 +274,7 @@ class MusicTagger:
             else:
                 artist = tag_info["artist"]
             # 使用统一的艺术家分割函数
-            from ..utils import split_artist
+            from .utils import split_artist
             artists = split_artist(artist) if isinstance(artist, str) else [artist]
             self._file.set("artist", artists)
 
