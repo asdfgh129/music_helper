@@ -1,4 +1,8 @@
-# 音乐文件标签代码提取总结
+# 历史归档：music_tagger 提取记录
+
+> **归档说明**：本文原为 `Doc/EXTRACTION_SUMMARY.md`，记录 `music_tagger/` 从上游
+> `music-tag-web` 项目提取的过程与来源映射。目录结构在 `0.2.0` 后基本未变
+> （新增了 `music_tagger/utils.py` 以修正相对导入越界）。保留本文便于日后同步上游改动。
 
 ## 提取说明
 
