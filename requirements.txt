@@ -2,8 +2,8 @@
 frida>=16.0.0            # QQ 音乐解密（Frida 注入）
 requests>=2.31.0         # 各平台 API / 封面下载
 mutagen>=1.45.1          # 标签读写（core/tags.py）
-music-tag>=1.0.0         # music_tagger 平台客户端
+music-tag>=0.4.3         # music_tagger 平台客户端（PyPI 最高版本为 0.4.3）
 pycryptodomex>=3.15.0    # 网易云 API 加密
-execjs>=1.5.1            # 网易云 core.js 执行
+PyExecJS>=1.5.1          # 网易云 core.js 执行（导入名为 execjs）
 mako>=1.2.0              # 网易云请求模板
 Pillow>=9.0.0            # 封面缩略图
