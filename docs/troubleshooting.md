@@ -211,7 +211,7 @@ python -m pytest -q
 ```bash
 # 造一个临时库
 mkdir -p /tmp/lib /tmp/temp
-cp 1.flac "/tmp/lib/Tester-TestSong.flac"
+cp test/fixtures/1.flac "/tmp/lib/Tester-TestSong.flac"
 
 MUSIC_HELPER_MAIN_DIR=/tmp/lib MUSIC_HELPER_TEMP_DIR=/tmp/temp \
   python main.py --check --dry-run
@@ -221,10 +221,10 @@ Windows 下用绝对路径，例如 `C:/mh_test/lib`（Git Bash 的 `/tmp` 与 P
 
 ### 网络相关脚本为什么没被 pytest 收集
 
-它们叫 `test/manual_*.py`，需要真实网络与密钥，手动运行：
+它们叫 `test/manual/manual_*.py`，需要真实网络与密钥，手动运行：
 
 ```bash
-python test/manual_musicbrainz_connection.py
+python test/manual/manual_musicbrainz_connection.py
 ```
 
 ---

@@ -10,24 +10,64 @@
 
 ## [Unreleased]
 
-### 新增
-
-- `docs/usage.md` 重写为完整使用说明：全部参数逐条解释、三条主流程 + 七个单一动作、
-  产物与回滚、场景速查、环境变量、退出码、使用禁忌。
-
-### 修复
-
-- `--trash-dup` 现在优先于「移入待处理目录」。此前 `--check --fix --trash-dup` 仍会把
-  重复文件移到 `review/重复文件/`，显式参数被默认行为覆盖。
-- `--check --fix --no-move` 生效。此前 `flow_check` 只看 `--fix`，`--no-move` 被忽略。
-- `--only-check-file-name` 只做文件名检查。此前它实际执行全套检查（标签/重复/歌词），
-  与参数名不符。
-
 ### 计划中
 
 - 支持更多音乐平台（Spotify、Apple Music 等）
 - Web GUI 界面
 - Docker 部署支持
+
+## [0.4.0] - 2026-10-30
+
+全仓审计后的一轮精简：删除无人引用的第二套标签实现与死文件，测试补齐到核心层。
+
+### 移除
+
+- **`music_tagger` 里的并行标签实现**：`core.py`、`matcher.py`、`utils.py`、`zhconv.py`
+  与 558 KB 的 `zhcdict.json`。这套 `MusicTagger` / `SmartTagClient` 只有示例脚本与测试在调，
+  主流程走的是 `services/tagger.py`；同一件事两处可改，已统一到后者。
+- **不可用的平台客户端**：`platforms/{kugou,kuwo,migu,acoustid}.py`。酷狗/酷我/咪咕上游接口
+  早已失效，`__init__.py` 里本来也整段注释着；`AcoustidClient` 只被上面那套实现使用。
+- **`Fingerprint/` 下 3 个示例脚本**：它们 `from fingerprint_matcher import ...`，而模块早已
+  改名 `musicbrainz_matcher.py`，实际跑不起来。
+- **`examples/music_tagger_demo.py`**：演示的是已删除的 `MusicTagger` API。
+- **`utils.py` 的 8 个兼容壳**：`create_operation_log`、`detect_language`、`has_lrc_file`、
+  `check_filename_format`、`parse_filename`、`normalize_text`、`split_artist`、
+  `get_file_modification_month` 生产代码零调用，仅 `test_utils` 经由它们测 `core.naming`。
+  现在 `utils.py` 只剩日志与月份校验，测试直接导入 `core.naming`。
+
+### 修复
+
+- `--trash-dup` 优先于「移入待处理目录」：此前 `--check --fix --trash-dup` 仍会把重复文件
+  移到 `review/重复文件/`，显式参数被默认行为覆盖。
+- `--check --fix --no-move` 生效：此前 `flow_check` 只看 `--fix`，`--no-move` 被忽略。
+- `--only-check-file-name` 现在只做文件名检查，不再跑全套（标签/重复/歌词）。
+- 非 UTF-8 控制台（如英文 Windows 的 cp1252）下 `main.py --help` 不再因打印中文抛
+  `UnicodeEncodeError`。
+- `requirements.txt` 的两个包名/版本修正：`music-tag>=0.4.3`（PyPI 最高版本）、
+  `PyExecJS`（`execjs` 只是导入名）。此前全新环境装不上依赖，CI 四个 test job 全挂。
+
+### 文档
+
+- `docs/usage.md` 重写为完整使用说明：全部参数逐条解释、三条主流程 + 七个单一动作、
+  产物与回滚、场景速查、环境变量、退出码、使用禁忌。
+
+### 变更
+
+- 测试样本 `1.flac` → `test/fixtures/1.flac`；需要联网的手工脚本 → `test/manual/`
+  （仍以 `manual_` 开头，不被 pytest 收集）。
+- `qqmusic_analyzer.py`（抓包分析，与应用无关）→ `scripts/qqmusic_analyzer.py`。
+- `music_tagger` 现在只导出 `QQMusicApi`、`NetEaseMusicClient` 两个客户端。
+- 文档同步：`README` 目录结构、`docs/architecture` 的 tagger 依赖说明、
+  `docs/fingerprint` 与 `docs/troubleshooting` 的脚本路径、`test/README` 覆盖矩阵。
+
+### 新增测试
+
+- `test_tagger.py`：MusicBrainz 解析、QQ/网易结果筛选、双平台择优、标签完整性（17 例）
+- `test_scan.py`：遍历/递归/跳过目录/月份过滤/扩展名白名单/去重排序（10 例）
+- `test_lyrics.py`：缺失与孤立歌词（6 例）
+- `test_organize.py`：年代边界、归档路径、计划生成（11 例）
+
+用例总数 125 → 135，`core` 层除 `tags.py` 外均有直接覆盖。
 
 ## [0.3.0] - 2026-10-30
 

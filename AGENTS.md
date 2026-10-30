@@ -46,7 +46,7 @@ python main.py --check --dry-run                     # 用真实配置预览
 ## 测试
 
 - 单元测试不得触碰真实音乐库、网络、外部 exe；一律用 `tempfile`。
-- 需要真实网络的脚本命名 `test/manual_*.py`，不参与自动收集。
+- 需要真实网络的脚本放 `test/manual/`、以 `manual_` 开头，不参与自动收集。
 - 改行为必须补用例；不接受「已知失败」。
 
 ## 提交

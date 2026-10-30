@@ -58,6 +58,10 @@
 | `soundalike.py` | 声纹去重、库一致性 | `Fingerprint/soundalike.exe` |
 | `tagger.py` | 声纹 + 在线标签、封面、歌词 | `Fingerprint/`、`music_tagger/platforms/`、`requests` |
 
+`music_tagger/` 只保留 `platforms/{qqmusic,netease}.py` 两个客户端，**不含**任何标签匹配或
+写盘逻辑——那部分唯一实现在 `core/scoring.py` 与 `services/tagger.py`。历史上有过一套
+`MusicTagger` / `SmartTagClient` 并行实现，已随仓库清理删除，避免同一件事两处可改。
+
 外部依赖一律**延迟导入 + 失败降级**：缺 `requests` 只是不下载封面，缺 `fpcalc` 只是跳过声纹，
 缺 `mutagen` 只是读不到标签——主程序永远能启动。
 

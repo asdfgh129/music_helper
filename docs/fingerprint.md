@@ -105,9 +105,9 @@ if match.success and match.recordings:
 python -c "
 from Fingerprint import FingerprintMatcher
 m = FingerprintMatcher(debug_mode=True)
-print(m.match_file('1.flac').recordings[:1])
+print(m.match_file('test/fixtures/1.flac').recordings[:1])
 "
 ```
 
-`Fingerprint/` 下的 `fingerprint_matcher_example.py`、`auto_match_example.py`、
-`example_full_release.py` 是可直接运行的示例脚本。
+`test/manual/manual_musicbrainz_connection.py` 与 `manual_musicbrainz_direct.py` 是现成的
+手工验证脚本（需要真实网络与 AcoustID key），用法见 [troubleshooting.md](troubleshooting.md)。
