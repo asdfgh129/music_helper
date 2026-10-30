@@ -35,7 +35,7 @@ def test_musicbrainz_connection(debug_mode=False):
         logging.info("✓ 成功创建 FingerprintMatcher 实例")
 
         # 使用测试音频文件
-        audio_file = os.path.join(os.path.dirname(__file__), '..', '1.flac')
+        audio_file = os.path.join(os.path.dirname(__file__), '..', 'fixtures', '1.flac')
 
         if not os.path.exists(audio_file):
             logging.error(f"测试音频文件不存在: {audio_file}")

@@ -1,21 +1,12 @@
 # -*- coding: utf-8 -*-
+"""music_tagger - 在线音乐平台客户端
+
+只保留主流程真正使用的两个平台客户端，供 services.tagger 延迟导入。
+标签匹配、择优与写盘逻辑统一在 core.scoring 与 services.tagger，
+这里不再保留第二套「MusicTagger」实现。
 """
-Music Tagger - 音乐文件标签管理工具
-"""
 
-from .core import MusicTagger
-from .matcher import SmartTagClient, match_score, match_artist
-from .platforms import MusicResource
+from .platforms import NetEaseMusicClient, QQMusicApi
 
-__version__ = "1.0.0"
-__all__ = [
-    "MusicTagger",
-    "MusicResource",
-    "SmartTagClient",
-    "match_score",
-    "match_artist",
-    "auto_tag",
-    "batch_update_tags",
-]
-
-from .core import auto_tag, batch_update_tags
+__version__ = '1.1.0'
+__all__ = ['NetEaseMusicClient', 'QQMusicApi']

@@ -11,14 +11,13 @@ import tempfile
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils import (
-    get_current_month,
-    validate_month_format,
+from core.naming import (
+    is_canonical as check_filename_format,
+    normalize_text,
     parse_filename,
     split_artist,
-    normalize_text,
-    check_filename_format,
 )
+from utils import get_current_month, validate_month_format
 
 
 class TestUtils(unittest.TestCase):
