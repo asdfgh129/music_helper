@@ -10,6 +10,15 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **`scripts/git_uplink.py`**：用已采集的免费节点临时自建本地代理，供 `git pull` / `push`
+  在 github.com:443 被重置的环境下使用。单文件（仅标准库）、单内核（mihomo）、单节点全局模式，
+  逐条试节点并探测 `https://github.com/`，通了就以 `-c http.proxy` 注入 git 命令；支持
+  `run` / `push` / `pull` 一次性调用与 `start` + `env` 常驻两种用法。
+  与 free-nodes 空间的 `uplink.py` 相比不复刻四内核与协议转换，只借用其节点池与内核二进制。
+- `docs/git-proxy.md` 与 `test/test_git_uplink.py`（16 例，纯逻辑、不连网）。
+
 ### 计划中
 
 - 支持更多音乐平台（Spotify、Apple Music 等）

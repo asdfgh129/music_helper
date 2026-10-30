@@ -12,6 +12,7 @@
 | 弄清某个检查到底怎么判定 | [features.md](features.md) | [requirements.md](requirements.md) |
 | 改代码 | [architecture.md](architecture.md) | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 | 出问题了 | [troubleshooting.md](troubleshooting.md) | — |
+| 推不上 GitHub | [git-proxy.md](git-proxy.md) | — |
 | 看这个项目原本要做什么 | [requirements.md](requirements.md) | — |
 | 看历史决策 | [history/](history/) | [../CHANGELOG.md](../CHANGELOG.md) |
 
@@ -26,6 +27,7 @@
 | [architecture.md](architecture.md) | 分层设计、模块职责、数据流、扩展与踩坑记录 |
 | [fingerprint.md](fingerprint.md) | AcoustID / MusicBrainz 指纹匹配（`Fingerprint/`） |
 | [troubleshooting.md](troubleshooting.md) | 常见故障与排查步骤 |
+| [git-proxy.md](git-proxy.md) | git pull / push 连不上 GitHub 时，用免费节点临时自建本地代理（`scripts/git_uplink.py`） |
 
 ## 历史归档
 
