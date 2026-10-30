@@ -44,6 +44,19 @@ EPILOG = '''
 '''
 
 
+def _ensure_console_encoding():
+    """让中文输出在非 UTF-8 控制台（如英文 Windows 的 cp1252）不再崩溃
+
+    不改变控制台原有编码，只把错误策略放宽为 replace：能显示的正常显示，
+    显示不了的退化成 ?，而不是抛 UnicodeEncodeError 让 --help 直接崩掉。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors='replace')
+        except (AttributeError, ValueError):  # 被重定向或非 TextIOWrapper 时跳过
+            pass
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description=f'音乐文件管理系统 v{config.__version__}',
@@ -335,6 +348,7 @@ def flow_manual_archive(args):
 # ---------------- 入口 ----------------
 
 def main(argv=None):
+    _ensure_console_encoding()
     parser = build_parser()
     args = parser.parse_args(argv)
 

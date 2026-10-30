@@ -17,6 +17,10 @@ jobs:
   test:
     name: test (${{ matrix.os }} / py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
+    env:
+      # 让中文帮助文本在各平台控制台都能正常输出（Windows runner 默认 cp1252）
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
     strategy:
       fail-fast: false
       matrix:
