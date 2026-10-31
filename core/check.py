@@ -56,6 +56,10 @@ class CheckResult:
         return summary
 
 
+READY_FIELDS = (('title', '歌曲名'), ('artist', '歌手'),
+                ('album', '专辑'), ('year', '年份'))
+
+
 def _consistency_problem(track):
     """文件名与标签是否矛盾，返回问题描述或 None"""
     file_artist, file_title = parse_filename(track.filename)
@@ -72,6 +76,18 @@ def _consistency_problem(track):
         if file_norm not in tag_norm and tag_norm not in file_norm:
             return f'歌名: 文件名「{file_title}」≠ 标签「{tag_title}」'
     return None
+
+
+def readiness_problems(track):
+    """判断是否达到「可入库」标准：核心标签齐全且文件名与标签不矛盾
+
+    封面与歌词不参与判定——它们缺失时只提示，不应把文件挡在 INCOMPLETE_DIR 之外。
+    """
+    problems = [f'缺少{label}' for key, label in READY_FIELDS if not track.tag(key)]
+    mismatch = _consistency_problem(track)
+    if mismatch:
+        problems.append(mismatch)
+    return problems
 
 
 def check_library(tracks, directories=None, tolerance=None, check_tags=True,
@@ -128,12 +144,13 @@ def check_library(tracks, directories=None, tolerance=None, check_tags=True,
 
 
 def plan_fixes(result, plan, review_dir=None, rename_canonical=True,
-               move_bad=False, delete_duplicates=False):
+               move_bad=False, delete_duplicates=False, dup_dir=None):
     """把检查结果转成动作
 
     Args:
         plan: core.ops.Plan 实例
         review_dir: 不一致文件的目标目录；为 None 则不移动
+        dup_dir: 重复文件目标目录，默认与 review_dir 相同
         rename_canonical: 是否把单个 '-' 的文件名规范化为 ' - '
         move_bad: 是否把标签不完整/文件名不一致的文件移入 review_dir
         delete_duplicates: 重复文件是否移入回收站（默认不动，只报告）
@@ -147,8 +164,9 @@ def plan_fixes(result, plan, review_dir=None, rename_canonical=True,
             if delete_duplicates:
                 plan.add_trash(track.path, f'重复于 {group.keep.filename}')
                 planned.add(track.path)
-            elif move_bad and review_dir:
-                plan.add_move(track.path, os.path.join(review_dir, KIND_DUP, track.filename),
+            elif move_bad and (dup_dir or review_dir):
+                target_root = dup_dir or review_dir
+                plan.add_move(track.path, os.path.join(target_root, KIND_DUP, track.filename),
                               f'重复于 {group.keep.filename}')
                 planned.add(track.path)
 

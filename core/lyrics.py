@@ -3,9 +3,10 @@
 
 import os
 
+from config import AUDIO_EXTENSIONS
 from core.scan import iter_files
 
-MUSIC_EXTS = ('.flac', '.mp3', '.wav', '.ape', '.ogg')
+MUSIC_EXTS = tuple(sorted(AUDIO_EXTENSIONS))
 
 
 def missing_lrc(tracks):

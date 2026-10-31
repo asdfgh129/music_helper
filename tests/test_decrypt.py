@@ -26,8 +26,8 @@ class TestEncryptedSourceHandling(unittest.TestCase):
 
         # 解密模块内部读的是 config 的这几个全局值，测试时指向临时目录
         self._saved = {key: getattr(config, key) for key in
-                       ('TEMP_COMPLETED_DIR', 'JOURNAL_PATH', 'TRASH_DIR', 'ENCRYPTED_SOURCE_MODE')}
-        config.TEMP_COMPLETED_DIR = self.out_dir
+                       ('WORKSPACE_DIR', 'JOURNAL_PATH', 'TRASH_DIR', 'ENCRYPTED_SOURCE_MODE')}
+        config.WORKSPACE_DIR = self.out_dir
         config.JOURNAL_PATH = os.path.join(self.root, 'journal.jsonl')
         config.TRASH_DIR = self.trash_dir
 

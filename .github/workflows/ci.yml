@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, dev]
   pull_request:
   workflow_dispatch:
 
@@ -45,7 +45,7 @@ jobs:
           python -m pip install -r requirements-dev.txt
 
       - name: 语法编译检查
-        run: python -m compileall -q core services music_tagger decrypto fingerprint scripts main.py config.py utils.py
+        run: python -m compileall -q core services tagger music_tagger decrypto fingerprint scripts tests main.py config.py utils.py
 
       - name: 导入冒烟（缺少可选依赖也不能影响启动）
         run: python -c "import config, utils, main; print('import ok', config.__version__)"

@@ -3,7 +3,7 @@
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-testpaths = ["test"]
+testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-ra --strict-markers"
@@ -12,7 +12,7 @@ addopts = "-ra --strict-markers"
 [tool.ruff]
 line-length = 110
 target-version = "py311"
-exclude = ["decrypto", "fingerprint", "log", ".git"]
+exclude = ["decrypto", "fingerprint", "log", ".git", "tmp"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]

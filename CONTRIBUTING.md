@@ -1,14 +1,15 @@
 # 贡献指南
 
-感谢你愿意改进 Music Helper。本文说明本地开发、测试与提交的约定。
+感谢你愿意改进 Music Helper。本文说明本地开发、测试与提交约定。
 
 ## 先读这些
 
 | 文档 | 为什么要读 |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | 分层边界与「一个功能只有一处实现」的约束 |
-| [docs/features.md](docs/features.md) | 各功能的判定规则，改行为前先确认规则 |
-| [docs/requirements.md](docs/requirements.md) | 原始功能规格（14 模块 + 3 流程） |
+| [docs/rules.md](docs/rules.md) | 全部判定规则，改行为前先确认规则 |
+| [docs/workflow.md](docs/workflow.md) | 端到端流程与状态迁移 |
+| [docs/README.md](docs/README.md) | 文档结构，新增文档放哪里 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本规范与发版清单 |
 
 ## 环境准备
@@ -20,8 +21,8 @@ python -m pip install -r requirements-dev.txt
 ```
 
 - Python 3.11+（CI 覆盖 3.11 / 3.12）。
-- 主要目标平台是 Windows；Linux/macOS 上除 QQ 解密外均可运行。
-- 外部程序 `decrypto/um.exe`、`fingerprint/soundalike.exe` 随仓库提供，缺失时对应功能降级，
+- 主要目标平台是 Windows；Linux/macOS 上除 QQ 解密和 `soundalike.exe` 外均可运行。
+- 外部程序 `tools/um.exe`、`tools/soundalike.exe` 随仓库提供；缺失时对应功能降级，
   不影响程序启动与测试。
 
 ## 运行与测试
@@ -29,22 +30,29 @@ python -m pip install -r requirements-dev.txt
 ```bash
 python -m pytest -q                 # 全量单元测试
 python -m ruff check .              # 静态检查（CI 的 lint job 同款）
-python scripts/check_docs.py        # 文档校验：链接 + 路径 + 命令（改了 md 就跑一次）
+python scripts/check_docs.py        # 文档校验：链接 + 路径 + 命令
 python main.py --help               # 命令行冒烟
 python main.py --check --dry-run    # 用真实库验证时先 dry-run
+```
+
+没有 pytest 的机器可以直接用标准库：
+
+```bash
+python -m unittest discover -s tests -p 'test_*.py'
 ```
 
 约定：
 
 - 单元测试**不得**触碰真实音乐库、网络、外部 exe。需要外部依赖的验证脚本放在
-  `test/manual/` 下、以 `manual_` 开头，不参与自动收集。
-- `scripts/git_uplink.py` 是**手动**工具（会起真实代理内核），`test/test_git_uplink.py`
+  `tests/manual/` 下、以 `manual_` 开头，不参与自动收集。
+- `scripts/git_uplink.py` 是**手动**工具（会起真实代理内核），`tests/test_git_uplink.py`
   只覆盖配置解析、单节点配置生成、环境变量注入这类纯逻辑，不连网、不启进程。
-- 新增/修改行为时，必须同时补 `test/` 下的用例。当前基线是**全部通过**，不接受「已知失败」。
-- 提交前跑一遍 CI 等价命令：
+- 新增/修改行为时，必须同时补 `tests/` 下的用例。当前基线是**全部通过**，不接受「已知失败」。
+
+提交前跑一遍 CI 等价命令：
 
 ```bash
-python -m compileall -q core services music_tagger decrypto fingerprint scripts main.py config.py utils.py
+python -m compileall -q core services tagger music_tagger decrypto fingerprint scripts tests main.py config.py utils.py
 python -c "import config, utils, main"
 python -m ruff check .
 python -m pytest -q
@@ -58,7 +66,7 @@ python scripts/check_docs.py
 | 层 | 允许 | 禁止 |
 |---|---|---|
 | `core/` | 纯计算、读文件元信息、生成 `Plan` | 网络请求、调用外部程序、删除文件、`os.remove` |
-| `services/` | 外部 exe、HTTP、写标签与封面 | 直接改目录结构（应返回结果由 `main` 编排） |
+| `services/`、`tagger/` | 外部 exe、HTTP、写标签与封面 | 直接改目录结构（应返回结果由 `main` 编排） |
 | `main.py` | 解析参数、串流程、汇总报告 | 业务规则实现 |
 | `config.py` | 纯数据（路径、阈值、扩展名） | 导入任何业务模块（避免循环导入） |
 
@@ -71,10 +79,18 @@ python scripts/check_docs.py
 - 歌词检查 → `core/lyrics.py`
 - 重复判定 → `core/dedupe.py`
 - 归档规则 → `core/organize.py`
+- 入库判定 → `core/check.py: readiness_problems()`
 - 破坏性动作 → `core/ops.py: Plan`
 
 不要在别处再写一套「差不多」的逻辑——重构前项目里同一个功能最多有四份实现，
 规则互相矛盾，这是最主要的维护成本来源。
+
+### 配置
+
+- 新增配置项时同时更新 `config.py`、`config.example.ini` 和
+  [docs/configuration.md](docs/configuration.md)；
+- 优先级保持环境变量 > `config.ini` > 默认值；
+- `config.py` 只允许标准库依赖。
 
 ### 破坏性操作
 
@@ -115,13 +131,14 @@ fix(services/decrypt): 解密成功后把加密原文件归还 VIP 目录
 ### 提交前检查
 
 - [ ] `python -m pytest -q` 全绿
-- [ ] 改了行为 → 同步 [docs/features.md](docs/features.md) 与 [CHANGELOG.md](CHANGELOG.md)
+- [ ] 改了行为 → 同步 [docs/rules.md](docs/rules.md) 与 [CHANGELOG.md](CHANGELOG.md)
+- [ ] 改了流程 → 同步 [docs/workflow.md](docs/workflow.md)
 - [ ] 改了配置项 → 同步 [docs/configuration.md](docs/configuration.md)
-- [ ] 没有把 `log/`、`__pycache__/`、`*.log`、测试产物提交进仓库
+- [ ] 没有把 `log/`、`__pycache__/`、`*.log`、`config.ini`、测试产物提交进仓库
 
 ## Pull Request
 
-1. 从 `main` 切分支：`feat/xxx`、`fix/xxx`、`docs/xxx`。
+1. 从 `dev` 切分支：`feat/xxx`、`fix/xxx`、`docs/xxx`。
 2. 一个 PR 只做一件事；纯格式化改动单独提。
 3. PR 描述里写清：**改了什么、为什么改、怎么验证的**（贴命令或报告片段）。
 4. CI 必须全绿才能合并。
@@ -131,9 +148,9 @@ fix(services/decrypt): 解密成功后把加密原文件归还 VIP 目录
 
 文档结构见 [docs/README.md](docs/README.md)：
 
-- 用户向内容放 `docs/`，不要新增根目录散装 md。
-- 历史归档放 `docs/history/`，只读，不再更新。
-- 图片等静态资源放 `docs/assets/`。
+- 用户向内容放 `docs/`，不要新增根目录散装 md；
+- 历史归档放 `docs/history/`，只读，不再更新；
+- 每篇文档开头写清「负责 / 不负责」；
 - 新增/移动文档后跑 `python scripts/check_docs.py`，CI 会拦住死链。
 
 ## 报告问题

@@ -1,241 +1,171 @@
 # 故障排查
 
-按「症状 → 原因 → 处理」组织。所有排查都从 `log/` 开始：主日志、`journal.jsonl`、
-报告三者能还原出「程序认为发生了什么」。
+> 本文负责：症状 → 原因 → 处理，日志与 journal 的位置，数据恢复。
+> 本文不负责：正常流程说明（见 [workflow.md](workflow.md)）、参数含义（见 [usage.md](usage.md)）。
 
-## 1. 启动相关
+## 1. 先看哪里
 
-### `ImportError: cannot import name 'X' from 'config'`
+| 信息 | 位置 |
+|---|---|
+| 本次运行日志 | `log/Music-*.log` |
+| 操作流水（每一次移动/改名/回收） | `log/journal.jsonl` |
+| 报告与待处理清单 | `log/reports/` |
+| 已「删除」的文件 | `log/_trash/` |
 
-可选依赖缺失，或运行时用了旧版本代码。
+`journal.jsonl` 每行一个 JSON，字段包括 `time`、`plan`、`action`、`src`、`dst`、`reason`、
+`ok`、`error`。排查「文件去哪了」优先看它。
 
-```bash
-python -m pip install -r requirements.txt
-python -c "import config, utils, main; print('ok', config.__version__)"
-```
+## 2. 启动与配置
 
-`config.py` 只放纯数据，不应该导出任何类。如果出现类似
-`cannot import name 'MusicTagger' from 'config'`，说明代码是重构前（`0.2.0` 之前）的版本。
-
-### `模块月份格式错误: 2024-06`
-
-`--month` 只接受 6 位 `YYYYMM`：
+### `import main` 失败
 
 ```bash
-python main.py --month 202406    # 正确
+python -c "import config, utils, main"
 ```
 
-### 启动就提示「主目录不存在」
+- 确认 Python ≥ 3.11；
+- 可选依赖缺失不应导致启动失败；如果报 `ModuleNotFoundError`，看栈顶是哪个模块，
+  再检查是否有人把可选依赖改成了顶层导入；
+- `config.py` 只依赖标准库，若这里报错通常是改坏了 `config.ini` 解析。
 
-`config.validate()` 只警告不退出，方便先看计划。检查：
+### `音乐库不存在` / `工作区不存在` WARNING
+
+路径不存在只警告不退出，方便 `--dry-run` 先看计划。检查：
 
 ```bash
 python -c "import config, json; print(json.dumps(config.as_dict(), ensure_ascii=False, indent=2))"
 ```
 
-路径不对就改 `config.py` 或设环境变量（见 [configuration.md](configuration.md)）。
+覆盖顺序是环境变量 > `config.ini` > 默认值，见 [configuration.md](configuration.md#1-配置来源与优先级)。
 
----
+### Windows 控制台中文乱码或报错
 
-## 2. 解密相关
+程序已把 stdout/stderr 的错误策略设为 `replace`，不会因编码崩溃。仍建议：
 
-### 「没有待解密的加密文件」
-
-- `--month` 按**文件修改时间**过滤，跨月的文件不会被选中；先去掉 `--month` 试。
-- 只扫描 VIP 下载目录的**当层**（不递归），检查文件是否在子目录里。
-- 扩展名要匹配：网易云 `.ncm`，QQ `.mflac/.mgg`。
-
-### 「未产生解密文件（返回码 0）」
-
-外部程序返回成功但没写文件。逐项确认：
-
-1. `um.exe` / `decrypto` 路径存在且可执行；
-2. QQ 解密需要 **QQMusic 客户端正在运行**且已登录（Frida 注入进程）；
-3. 用 `--debug` 看外部程序 stdout/stderr，日志里会原样打印；
-4. 手动跑一次：
-
-```bash
-# 网易云
-decrypto\um.exe -i G:\NeTmp -o G:\Temp
+```powershell
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
 ```
 
-### 「执行超时（>3600s）」
+## 3. 外部工具
 
-大批量时可能真的超过一小时。调整：
+### `找不到外部程序: ...soundalike.exe` / `...um.exe`
 
-```bash
-# Windows PowerShell
-$env:MUSIC_HELPER_TIMEOUT = "7200"
-```
+默认位置已统一到 `tools/`：
 
-超时按失败处理，本次移入的加密文件会自动还原回 VIP 目录，不会丢。
+| 程序 | 默认路径 |
+|---|---|
+| 声纹工具 | `tools/soundalike.exe` |
+| 网易云解密 | `tools/um.exe` |
+| Frida hook | `tools/hook_qq_music.js` |
 
-### 解密成功后加密原文件去哪了
+移动过就设置对应环境变量：
 
-由 `ENCRYPTED_SOURCE_MODE` 决定，默认 `return`：**搬回 VIP 下载目录**。
-
-```bash
-# 查这次运行搬了什么
-findstr /C:"加密原文件" log\journal.jsonl
-```
-
-不想要原文件就设 `MUSIC_HELPER_ENCRYPTED_MODE=trash`（进回收站）。
-
----
-
-## 3. 声纹去重
-
-### `找不到外部程序: ...soundalike.exe`
-
-路径默认是 `fingerprint/soundalike.exe`。移动过就设：
-
-```bash
+```powershell
 $env:MUSIC_HELPER_SOUNDALIKE_EXE = "D:\tools\soundalike.exe"
+$env:MUSIC_HELPER_UM_EXE = "D:\tools\um.exe"
 ```
 
-### 声纹库「找不到记录」/ 每次都在重建
+### 声纹库「找不到记录」或结果和以前不一致
 
-`soundalike.exe` 把 `music.db` 生成在**当前工作目录**。请固定从项目根启动：
+0.6.0 起固定使用 `-db <DB_PATH>`，并把工作目录设为库文件所在目录：
 
 ```bash
-cd /path/to/music_helper
+python -c "import config; print(config.DB_PATH)"
 python main.py --checkdb
 ```
 
-`music.db` 已在 `.gitignore` 中，不会误提交。
+- 换过 `DB_PATH` 等于换了一个新库，需要重新 `--init`；
+- `music.db` 被 `.gitignore` 忽略，不要指望克隆仓库自带；
+- 在 macOS/Linux 上 `soundalike.exe` 无法执行，会报 `Exec format error` 或
+  `无法执行外部程序`，这是平台限制，不影响其他步骤。
 
-### `-check` 返回非 0
+### `fpcalc not in path`
 
-数据库与磁盘不一致：有文件被手工删/移，或库是在别的目录建的。重新 `--init` 重建即可。
-
----
-
-## 4. 标签补不上
-
-按顺序排查：
-
-| 检查 | 命令 / 现象 |
-|---|---|
-| 有没有 `fpcalc` | `fpcalc -version`；没有则声纹匹配不可用 |
-| 网络是否通 | `python -c "import urllib.request;print(urllib.request.urlopen('https://api.acoustid.org/v2/lookup').status)"` |
-| 分数是否够 | 加 `--debug` 看 `MusicBrainz(分数)`，低于 `FINGERPRINT_THRESHOLD`(50) 会被丢弃 |
-| 是否已有标签 | **已有标签永不覆盖**，只填空缺；要刷新先手动清空对应字段 |
-| 平台客户端是否可用 | 日志出现 `在线查询失败`；只支持 QQ 音乐与网易云 |
-| `music_tagger` 是否可导入 | `python -c "import music_tagger"`，失败则是依赖缺失 |
-
-### 封面没下载
-
-- 超过 `MAX_COVER_SIZE`（5 MB）直接放弃；
-- 文件已有内嵌封面时不会重复下载；
-- 未安装 `requests` 时不下载，日志无提示——这是设计上的静默降级。
-
-### 歌词没写入
-
-只在「在线结果带歌词」且「本地没有同名 `.lrc`」时写入；已有歌词不覆盖。
-
----
-
-## 5. 文件被移动了，怎么恢复
-
-### 先定位
+声纹补标签会降级为在线平台查询。安装 Chromaprint：
 
 ```bash
-# 最近 20 条操作记录
-tail -n 20 log/journal.jsonl
+# macOS
+brew install chromaprint
+# Ubuntu / Debian
+sudo apt install libchromaprint-tools
 ```
 
-每行是一条 JSON：
+### QQ 音乐解密失败
 
-```json
-{"time":"2026-10-30 17:50:13","plan":"主目录检查-修复","action":"move",
- "src":"D:\\music\\a.flac","dst":"G:\\Tmp\\review\\重复文件\\a.flac",
- "reason":"重复于 b.flac","ok":true,"error":""}
-```
+- 仅 Windows 可用，需要正在运行的 `QQMusic.exe`；
+- 需要安装 `frida`；
+- hook 脚本路径默认 `tools/hook_qq_music.js`，移动过就设 `MUSIC_HELPER_QQ_HOOK`；
+- 失败时本次移入暂存区的加密文件会自动还回 VIP 目录。
 
-### 恢复方式
+## 4. 回滚与恢复
 
-1. **回收站**：`log/_trash/` 里保留原文件名，直接搬回；
-2. **待处理目录**：`review/<问题类型>/`，按 `journal.jsonl` 的 `src` 原路搬回；
-3. **重名让位**：目标冲突时会生成 `xxx_1.flac`，找出原始文件按记录改回。
+1. **文件被移走**：在 `log/journal.jsonl` 搜文件名，`src`/`dst` 就是搬运路径；
+2. **文件被「删除」**：实际在 `log/_trash/`，按原文件名找；
+3. **批量回滚**：按 journal 的 `dst` 反向 `move` 回 `src`，建议先复制一份再操作；
+4. **只想重跑**：`--dry-run` 先看计划，确认后再去掉；
+5. **不要手工编辑 `music.db`**：用 `--init` 重建，或换 `DB_PATH` 重新建库。
 
-目前没有自动 `--rollback`，只能按记录人工还原。这也是为什么每个动作都必须写 `reason`。
+## 5. 流水线结果不符合预期
 
-### 怎么避免再次误搬
+### 文件全进了 `INCOMPLETE_DIR`
+
+入库标准要求歌曲名、歌手、专辑、年份齐全，且文件名与标签不矛盾。
+先看报告里的「标签不完整」明细，再决定补标签还是手工处理。
+
+缺少 `mutagen` 时读不到任何标签，所有文件都会进 `INCOMPLETE_DIR`：
 
 ```bash
-python main.py --check --dry-run     # 先看计划
-python main.py --check --fix --no-move   # 只改名，不移动文件
+python -c "from core.tags import MUTAGEN_AVAILABLE; print(MUTAGEN_AVAILABLE)"
 ```
 
----
+### 文件没有进 `DUPLICATE_DIR`
 
-## 6. 检查结果不符合预期
+- `--dry-run` 会整步跳过声纹去重；
+- soundalike 是交互式的，终端里需要确认才会移动；
+- `--trash-dup` 只影响本地检查阶段，不影响 soundalike 的移动目标；
+- 本地查重只在检查阶段运行，`--skip-check` 会跳过。
 
-### 「这个文件明明是重复的，为什么没识别出来」
+### `--fix` 没有修复缺封面/缺专辑
 
-判定要求**时长相近（≤3 秒）**。以下情况不会判重：
+这是刻意设计：只有歌曲名/歌手缺失、文件名与标签矛盾才移动文件。其余问题只进报告，
+避免一次 `--fix` 搬空整个库。见 [rules.md](rules.md#7-修复范围)。
 
-- 两个文件时长差超过 `DURATION_TOLERANCE`；
-- 时长读取失败（会标注「时长未知」，需人工确认）；
-- 歌手/歌名标签不同，且文件名也不同（策略 A、B 都不命中）。
+### 孤立 `.lrc`
 
-### 「缺封面也报了，但我不想它被移走」
+报告里的「孤立歌词」表示同目录下没有对应音频。确认音频是否被移走；如果音频还在，
+检查扩展名是否在 `config.AUDIO_EXTENSIONS` 中。
 
-不会移走。缺封面/专辑/年份只进报告；只有**歌曲名/歌手缺失**或**文件名与标签矛盾**
-才会移入待处理目录。
-
-### 「文件名被改坏了」
-
-`canonicalize` 仅在「恰好一个 `-` 且不含 ` - `」时改写，`AC-DC-Back.flac`
-（两个连字符）不会被改。如果仍被改，用 `journal.jsonl` 的 `rename` 记录改回。
-
-### 报告里中文乱码
-
-- Markdown/CSV 都是 UTF-8（CSV 带 BOM，Excel 可直接打开）；
-- Windows 控制台若显示乱码，执行 `chcp 65001` 或改用 Windows Terminal。
-
----
-
-## 7. 测试与开发
-
-### `pytest` 报模块找不到
-
-从项目根目录运行，或确保 `test/` 里的 `sys.path.insert` 生效：
+## 6. 测试与手工验证
 
 ```bash
+python -m unittest discover -s tests -p 'test_*.py'
 python -m pytest -q
+python scripts/check_docs.py
 ```
 
-### 想在不碰真实库的情况下验证
+需要真实网络的脚本在 `tests/manual/`，不参与自动测试：
 
 ```bash
-# 造一个临时库
-mkdir -p /tmp/lib /tmp/temp
-cp test/fixtures/1.flac "/tmp/lib/Tester-TestSong.flac"
-
-MUSIC_HELPER_MAIN_DIR=/tmp/lib MUSIC_HELPER_TEMP_DIR=/tmp/temp \
-  python main.py --check --dry-run
+python tests/manual/manual_musicbrainz.py
+python tests/manual/manual_musicbrainz.py --mode api
 ```
 
-Windows 下用绝对路径，例如 `C:/mh_test/lib`（Git Bash 的 `/tmp` 与 Python 看到的不是同一路径）。
+### macOS/Linux 上的路径
 
-### 网络相关脚本为什么没被 pytest 收集
-
-它们叫 `test/manual/manual_*.py`，需要真实网络与密钥，手动运行：
+默认路径是 Windows 盘符。做本地验证时用临时目录覆盖：
 
 ```bash
-python test/manual/manual_musicbrainz.py               # 全链路（fpcalc → AcoustID → MusicBrainz）
-python test/manual/manual_musicbrainz.py --mode api    # 只打裸接口，用于区分网络与匹配链路
+MUSIC_HELPER_LIBRARY_DIR=/tmp/mh/lib \
+MUSIC_HELPER_WORKSPACE_DIR=/tmp/mh/temp \
+MUSIC_HELPER_INCOMPLETE_DIR=/tmp/mh/incomplete \
+MUSIC_HELPER_DUPLICATE_DIR=/tmp/mh/dup \
+MUSIC_HELPER_DB=/tmp/mh/music.db \
+python main.py --dry-run
 ```
 
----
+非 Windows 上 `utils.ensure_dirs()` 会跳过 `D:\...` 这类盘符路径，避免把字面量目录建到当前目录。
 
-## 8. 收集信息以便反馈
+## 7. 推不上 GitHub
 
-```bash
-python main.py --version
-python -c "import sys, platform; print(sys.version, platform.platform())"
-tail -n 50 log/Music-*.log          # 取最新一个
-tail -n 20 log/journal.jsonl
-python scripts/check_docs.py        # 若与文档相关
-```
+与音乐流水线无关，见 [git-proxy.md](git-proxy.md)。

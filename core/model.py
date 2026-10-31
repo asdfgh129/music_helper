@@ -4,7 +4,7 @@
 import os
 from dataclasses import dataclass, field
 
-from core.naming import normalize_key
+from core.naming import version_key
 
 
 @dataclass
@@ -87,8 +87,8 @@ class Track:
 
     @property
     def key(self):
-        """去重用的宽松比对键"""
-        return normalize_key(self.artist), normalize_key(self.title)
+        """去重键：保留 Live/Remix/伴奏/feat 等版本标记"""
+        return version_key(self.artist), version_key(self.title)
 
     def to_dict(self):
         return {

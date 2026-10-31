@@ -20,7 +20,7 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SKIP_DIRS = {'.git', '.workbuddy', '.sisyphus', '__pycache__', '.pytest_cache', 'log', 'node_modules', 'history'}
+SKIP_DIRS = {'.git', '.workbuddy', '.sisyphus', '.omo', 'tmp', '__pycache__', '.pytest_cache', 'log', 'node_modules', 'history'}
 # 允许指向「将来会生成」的路径（运行产物）
 IGNORE_PREFIXES = ('log/', 'music.db')
 

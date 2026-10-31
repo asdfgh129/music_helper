@@ -15,6 +15,8 @@ import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from core.naming import is_audio
+
 MOVE = 'move'
 RENAME = 'rename'
 TRASH = 'trash'
@@ -144,7 +146,7 @@ class Plan:
     @staticmethod
     def _move_companion_lrc(src, dst):
         """音频移动时同步搬走同名 .lrc"""
-        if os.path.splitext(src)[1].lower() not in {'.flac', '.mp3', '.wav', '.ape', '.ogg'}:
+        if not is_audio(src):
             return
         src_lrc = os.path.splitext(src)[0] + '.lrc'
         if not os.path.exists(src_lrc):

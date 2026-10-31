@@ -5,11 +5,11 @@
 相比旧实现的三个关键修正：
 1. 只把「本次运行新产生」的文件搬回原目录（旧实现会把 TEMP 顶层所有文件搬走）；
 2. 加密原文件解密成功后默认搬回 VIP 下载目录（config.ENCRYPTED_SOURCE_MODE 可改为
-   trash=移入回收站 / keep=留在临时目录），失败则一律原样归还 VIP 目录；
+   trash=移入回收站 / keep=留在暂存区），失败则一律原样归还 VIP 目录；
 3. 所有 subprocess 调用带超时并检查 returncode。
 
-注意：归还与清理都只针对「本次运行移入临时目录的那几个文件」，不会遍历 VIP 目录或
-临时目录顶层，因此不会误搬用户的其他文件。
+注意：归还与清理都只针对「本次运行移入暂存区的那几个文件」，不会遍历 VIP 目录或
+暂存区顶层，因此不会误搬用户的其他文件。
 """
 
 import os
@@ -35,12 +35,16 @@ class DecryptResult:
         return f'{self.name}: {state}（加密 {self.encrypted} / 产出 {self.produced}）{self.message}'
 
 
-def _snapshot(directory):
-    """目录内全部文件的相对路径快照"""
+def _snapshot(directory, exclude=None):
+    """目录内全部文件的相对路径快照（可排除解密暂存子目录）"""
     result = set()
     if not os.path.isdir(directory):
         return result
+    excluded = os.path.abspath(exclude) if exclude else None
     for root, _, files in os.walk(directory):
+        if excluded and (os.path.abspath(root) == excluded
+                         or os.path.abspath(root).startswith(excluded + os.sep)):
+            continue
         for name in files:
             result.add(os.path.relpath(os.path.join(root, name), directory))
     return result
@@ -77,12 +81,13 @@ def decrypt_netease(month=None, dry_run=False, logger=None):
     return _decrypt(
         name='网易云',
         vip_dir=config.NETEASE_VIP_DIR,
-        tmp_dir=config.NETEASE_TMP_DIR,
+        tmp_dir=config.NETEASE_STAGING_DIR,
         vip_exts=config.NETEASE_VIP_EXTENSIONS,
         month=month,
         dry_run=dry_run,
         logger=logger,
-        runner=lambda: _run([config.UM_EXE, '-i', config.NETEASE_TMP_DIR, '-o', config.TEMP_COMPLETED_DIR], logger),
+        runner=lambda: _run([config.UM_EXE, '-i', config.NETEASE_STAGING_DIR,
+                             '-o', config.WORKSPACE_DIR], logger),
     )
 
 
@@ -91,7 +96,7 @@ def decrypt_qq(month=None, dry_run=False, logger=None):
     return _decrypt(
         name='QQ音乐',
         vip_dir=config.QQ_VIP_DIR,
-        tmp_dir=config.QQ_TMP_DIR,
+        tmp_dir=config.QQ_STAGING_DIR,
         vip_exts=config.QQ_VIP_EXTENSIONS,
         month=month,
         dry_run=dry_run,
@@ -106,7 +111,7 @@ def _run_qq(logger=None):
     except Exception as exc:  # noqa: BLE001
         return None, f'decrypto 模块不可用: {exc}'
     try:
-        run_decrypt(config.QQ_TMP_DIR, config.TEMP_COMPLETED_DIR, logger=logger)
+        run_decrypt(config.QQ_STAGING_DIR, config.WORKSPACE_DIR, logger=logger)
     except Exception as exc:  # noqa: BLE001
         return None, f'解密异常: {exc}'
     return None, ''
@@ -127,12 +132,12 @@ def _decrypt(name, vip_dir, tmp_dir, vip_exts, month, dry_run, logger, runner):
         result.message = '没有待解密的加密文件'
         return result
 
-    before = _snapshot(config.TEMP_COMPLETED_DIR)
+    before = _snapshot(config.WORKSPACE_DIR, exclude=tmp_dir)
 
-    move_in = Plan(f'{name}-移入临时目录', dry_run=dry_run,
+    move_in = Plan(f'{name}-移入暂存区', dry_run=dry_run,
                    journal_path=config.JOURNAL_PATH, trash_dir=config.TRASH_DIR)
     for track in encrypted:
-        move_in.add_move(track.path, os.path.join(tmp_dir, track.filename), '移入解密临时目录')
+        move_in.add_move(track.path, os.path.join(tmp_dir, track.filename), '移入解密暂存区')
     move_in.execute()
 
     if dry_run:
@@ -147,7 +152,7 @@ def _decrypt(name, vip_dir, tmp_dir, vip_exts, month, dry_run, logger, runner):
         _restore(encrypted, tmp_dir, vip_dir)
         return result
 
-    produced = _snapshot(config.TEMP_COMPLETED_DIR) - before
+    produced = _snapshot(config.WORKSPACE_DIR, exclude=tmp_dir) - before
     result.produced = len(produced)
     result.ok = bool(produced) or (completed is not None and completed.returncode == 0)
     if not result.ok:

@@ -40,8 +40,29 @@ class TestSoundalike(unittest.TestCase):
         soundalike.run(with_temp=True, debug=True)
         cmd = mock_run.call_args[0][0]
         self.assertIn('-temp', cmd)
-        self.assertIn(config.TEMP_COMPLETED_DIR, cmd)
+        self.assertIn(config.WORKSPACE_DIR, cmd)
         self.assertIn('-log-sec=1', cmd)
+
+    @patch('services.soundalike.subprocess.run')
+    def test_run_uses_db_and_dup_dir(self, mock_run):
+        mock_run.return_value = _completed(0)
+        soundalike.run(with_temp=False)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn('-db', cmd)
+        self.assertIn(config.DB_PATH, cmd)
+        self.assertIn('-move-interactive', cmd)
+        self.assertIn(config.DUPLICATE_DIR, cmd)
+        self.assertNotIn('-temp', cmd)
+        self.assertEqual(mock_run.call_args.kwargs['cwd'], os.path.dirname(os.path.abspath(config.DB_PATH)))
+
+    @patch('services.soundalike.subprocess.run')
+    def test_check_requires_db(self, mock_run):
+        mock_run.return_value = _completed(0)
+        soundalike.check()
+        cmd = mock_run.call_args[0][0]
+        self.assertIn('-check', cmd)
+        self.assertIn('-db', cmd)
+        self.assertIn(config.DB_PATH, cmd)
 
     @patch('services.soundalike.subprocess.run')
     def test_timeout_returns_failure(self, mock_run):

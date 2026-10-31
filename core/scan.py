@@ -12,7 +12,7 @@ from core.model import Track
 from core.naming import is_audio
 
 # 不参与扫描的目录名（回收站、临时残留、隐藏目录）
-SKIP_DIRS = {'_trash', '.git', '__pycache__', '.sisyphus', 'unknown'}
+SKIP_DIRS = {'_trash', '_decrypt', '.git', '__pycache__', '.sisyphus', 'unknown'}
 
 
 def iter_files(directory, recursive=True):

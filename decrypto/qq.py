@@ -21,9 +21,20 @@ except Exception:
     def guess_song_url(_):
         return None
 
-# Frida 脚本与本文件同目录，必须按 __file__ 定位；用相对路径时只有 CWD 恰好在
-# decrypto/ 下才能跑到（历史上正是这个坑，靠 qq.bat 先 cd 过去绕过）
-HOOK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_qq_music.js")
+# Frida 脚本统一放在 tools/；路径按 __file__ 定位，避免依赖 CWD。
+_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _hook_path():
+    """优先读 config.QQ_HOOK_JS（支持环境变量覆盖），读不到时退回 tools/ 默认位置。"""
+    try:
+        import config
+        return config.QQ_HOOK_JS
+    except Exception:
+        return os.path.join(_PROJECT_DIR, "tools", "hook_qq_music.js")
+
+
+HOOK_PATH = _hook_path()
 # 转换流水写进仓库统一的 log/，不落进包目录（包目录混入运行产物会被误提交）
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "log")
 
@@ -178,7 +189,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="QQ 音乐加密文件（.mflac/.mgg）解密")
     parser.add_argument("-l", "--list", action="store_true", help="只列出下载目录里的歌曲")
     parser.add_argument("-d", "--dir", help="查看目录，默认取 config.QQ_VIP_DIR")
-    parser.add_argument("-i", "--input", type=str, required=False, help="待解密的临时目录")
+    parser.add_argument("-i", "--input", type=str, required=False, help="待解密的暂存目录")
     parser.add_argument("-o", "--output", type=str, required=False, help="解密输出目录")
     args = parser.parse_args()
 

@@ -5,15 +5,16 @@
 
 ## 项目是什么
 
-Python 音乐库流水线：解密 → 去重 → 标签 → 检查 → 归档。入口 `python main.py`。
-主要目标平台 Windows（QQ 解密依赖 Frida），Python 3.11+。
+Python 音乐库流水线：解密 → 去重 → 补标签 → 检查 → 分流 → 归档 → 人工确认入库。
+入口 `python main.py`。主要目标平台 Windows（QQ 解密依赖 Frida），Python 3.11+。
 
 ## 必读
 
 | 场景 | 文档 |
 |---|---|
 | 改代码前 | [docs/architecture.md](docs/architecture.md)（分层与唯一实现原则） |
-| 改判定规则前 | [docs/features.md](docs/features.md)（现成的规则与边界） |
+| 改判定规则前 | [docs/rules.md](docs/rules.md)（文件名/标签/重复/歌词/归档） |
+| 改流程顺序前 | [docs/workflow.md](docs/workflow.md)（端到端状态迁移） |
 | 加命令行参数 | [docs/usage.md](docs/usage.md)（参数优先级顺序敏感） |
 | 改配置项 | [docs/configuration.md](docs/configuration.md) |
 | 写文档/移动文档 | [docs/README.md](docs/README.md)、[CONTRIBUTING.md](CONTRIBUTING.md) |
@@ -23,9 +24,10 @@ Python 音乐库流水线：解密 → 去重 → 标签 → 检查 → 归档�
 
 ```bash
 python -m pip install -r requirements-dev.txt
+python -m unittest discover -s tests -p 'test_*.py'   # 不装 pytest 也能跑
 python -m pytest -q                                  # 全量测试，必须全绿
 python -m ruff check .                               # 静态检查（CI lint job 同款）
-python -m compileall -q core services scripts main.py config.py utils.py   # 语法检查
+python -m compileall -q core services tagger music_tagger decrypto fingerprint scripts tests main.py config.py utils.py
 python -c "import config, utils, main"               # 导入冒烟
 python scripts/check_docs.py                         # 文档校验：链接 / 路径 / 命令
 python main.py --check --dry-run                     # 用真实配置预览
@@ -38,23 +40,30 @@ python main.py --check --dry-run                     # 用真实配置预览
    必须支持 `dry_run`。删除 = 移入 `log/_trash/`。
 3. **一个功能只有一处实现**：命名规则 `core/naming.py`、标签 `core/tags.py`、重复 `core/dedupe.py`、
    归档 `core/organize.py`、歌词 `core/lyrics.py`。不要在别处再写一套。
-4. **`config.py` 只放数据**，不许 `import core` / `import services`（会重演循环导入事故）。
+4. **`config.py` 只放数据**，不许 `import core` / `import services` / `import tagger`（会重演循环导入事故）。
+   配置优先级固定为环境变量 > `config.ini` > 默认值。
 5. **可选依赖延迟导入 + 降级**：缺 `requests`/`mutagen`/`fpcalc` 只降级能力，`import main` 不许失败。
 6. **`--fix` 不要扩大移动范围**：只有 `severe`（歌曲名/歌手缺失、文件名与标签矛盾）才移文件；
    缺封面/专辑/年份只报告。否则一次 `--fix` 能把整个库搬空。
 7. **加密原文件去向**由 `ENCRYPTED_SOURCE_MODE` 控制（默认 `return` 搬回 VIP 目录），
-   只处理本次移入临时目录的文件，不许遍历目录批量搬运。
+   只处理本次移入暂存区的文件，不许遍历目录批量搬运。
+8. **待补全判定只在 `core.check.readiness_problems()`**：歌曲名/歌手/专辑/年份齐全且
+   文件名与标签不矛盾；封面和歌词不参与。不要在 `main.py` 另写一套。
+9. **外部二进制统一放 `tools/`**：`um.exe`、`soundalike.exe`、`hook_qq_music.js`；路径由
+   `config.py` 提供并支持环境变量覆盖。
 
 ## 测试
 
 - 单元测试不得触碰真实音乐库、网络、外部 exe；一律用 `tempfile`。
-- 需要真实网络的脚本放 `test/manual/`、以 `manual_` 开头，不参与自动收集。
+- 需要真实网络的脚本放 `tests/manual/`、以 `manual_` 开头，不参与自动收集。
 - 改行为必须补用例；不接受「已知失败」。
+- 新增/移动测试文件后，同步 `pyproject.toml` 的 `testpaths`（当前 `tests`）。
 
 ## 提交
 
 Conventional Commits：`fix(core/dedupe): ...`、`docs: ...`。一次提交一件事。
-改了行为同步 `docs/features.md` + `CHANGELOG.md`。
+改了行为同步 `docs/rules.md` + `CHANGELOG.md`；改了流程同步 `docs/workflow.md`；
+改了配置同步 `docs/configuration.md`。
 
 ## 历史包袱（知道就好，别再引入）
 
@@ -63,5 +72,9 @@ Conventional Commits：`fix(core/dedupe): ...`、`docs: ...`。一次提交一�
   看到引用它们的代码或文档，说明是过期的。
 - `Doc/` 目录已不存在，内容并入 `docs/`。
 - `Decrypto/`、`Fingerprint/` 已改名为小写 `decrypto/`、`fingerprint/`（0.5.0）。
-  文档里再出现大写开头且带斜杠的路径，说明没跟上。
+- 外部程序已从各包目录移到 `tools/`（0.6.0）；旧文档里写在 `decrypto/`、`fingerprint/`
+  下的 exe 路径都已过期。
+- `test/` 已改名为 `tests/`（0.6.0）。
+- 旧名 `MAIN_DIR`、`TEMP_COMPLETED_DIR`、`TEMP_MOVE_DIR`、`TEMP_REVIEW_DIR` 仅作兼容别名，
+  新代码用 `LIBRARY_DIR`、`WORKSPACE_DIR`、`DUPLICATE_DIR`、`INCOMPLETE_DIR`。
 - 历史文档在 `docs/history/`，只读，不要照着里面的模块名写代码。

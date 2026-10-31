@@ -13,13 +13,36 @@
 
 import logging
 import os
+import re
 import sys
 from datetime import datetime
 
-from config import LOG_DIR
+import config
+
+# 兼容旧引用；日志目录固定，不随 config.reload() 变化
+LOG_DIR = config.LOG_DIR
 
 main_logger = logging.getLogger('music_manager')
 log_file = None
+
+
+_WINDOWS_ABS = re.compile(r'^[A-Za-z]:[\\/]')
+
+
+def ensure_dirs():
+    """创建流水线运行所需的目录（幂等，不碰用户已有数据）
+
+    在非 Windows 上跳过 `D:\\...` 这类盘符路径，避免把字面量目录建到当前目录。
+    """
+    created = []
+    for path in config.runtime_dirs():
+        if not path or os.path.isdir(path):
+            continue
+        if os.name != 'nt' and _WINDOWS_ABS.match(path):
+            continue
+        os.makedirs(path, exist_ok=True)
+        created.append(path)
+    return created
 
 
 def _make_handler(kind, path, level, fmt):

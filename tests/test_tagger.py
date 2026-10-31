@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""services.tagger 的单元测试
+"""tagger 包的单元测试
 
 覆盖标签解析、平台结果筛选与择优。全部用假客户端，不联网。
 """
@@ -8,7 +8,7 @@ import base64
 import unittest
 
 from core.model import Track
-from services import tagger
+import tagger
 
 
 class FakeQQ:

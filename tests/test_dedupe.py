@@ -47,6 +47,23 @@ class TestDedupe(unittest.TestCase):
         b = track('b.flac', 200, 5000, title='晴天', artist='罗大佑')
         self.assertEqual(find_by_tag([a, b]), [])
 
+    def test_live_and_studio_not_duplicate(self):
+        studio = track('a.flac', 200, 5000, title='晴天', artist='周杰伦')
+        live = track('b.flac', 200, 5000, title='晴天 (Live)', artist='周杰伦')
+        self.assertEqual(find_by_tag([studio, live]), [])
+
+    def test_same_version_markers_are_duplicate(self):
+        a = track('a.flac', 200, 5000, title='晴天 (Live)', artist='周杰伦')
+        b = track('b.flac', 201, 4000, title='晴天（现场版）', artist='周杰伦')
+        groups = find_by_tag([a, b])
+        self.assertEqual(len(groups), 1)
+
+    def test_download_suffix_still_duplicate(self):
+        a = track('a.flac', 200, 5000, title='晴天', artist='周杰伦')
+        b = track('b.flac', 200, 5000, title='晴天 (1)', artist='周杰伦')
+        groups = find_by_tag([a, b])
+        self.assertEqual(len(groups), 1)
+
     def test_pick_keep_prefers_lossless(self):
         mp3 = track('a.mp3', 200, 9000, title='x', artist='y')
         flac = track('b.flac', 200, 5000, title='x', artist='y')

@@ -11,6 +11,11 @@ dist/
 .ruff_cache/
 .mypy_cache/
 
+# ===== 本地配置与临时工作区 =====
+config.ini
+tmp/
+.omo/
+
 # ===== 运行产物（保留目录结构） =====
 log/*
 !log/.gitkeep

@@ -9,13 +9,30 @@
 import os
 import re
 
+from config import AUDIO_EXTENSIONS
+
 # Windows / Linux 均不允许出现在文件名中的字符
 _ILLEGAL_CHARS = re.compile(r'[\\/:*?"<>|\r\n\t]')
 
 # 名字里需要忽略的噪声片段（如 "(1)"、"[无损]"）
 _NOISE = re.compile(r'[\[(（【][^\])）】]*[\])）】]')
 
-_AUDIO_EXTS = {'.flac', '.mp3', '.wav', '.ape', '.ogg'}
+# 括号内容，用于识别「版本标记」
+_BRACKET = re.compile(r'[\[(（【]([^\])）】]*)[\])）】]')
+
+# 同一个歌名下，这些标记代表不同的录音/版本，不能互相判重。
+# 左值是归一化后的版本类别，右值是识别用的同义词。
+_VERSION_ALIASES = (
+    ('live', ('live', '现场', '演唱会', 'concert')),
+    ('remix', ('remix', '混音', 'dj', 'bootleg', 'rework')),
+    ('instrumental', ('instrumental', '伴奏', 'karaoke', 'offvocal', '纯音乐')),
+    ('acoustic', ('acoustic', 'unplugged', '不插电')),
+    ('demo', ('demo', '小样', 'session', 'outtake', '未发行')),
+    ('cover', ('cover', '翻唱')),
+    ('feat', ('feat', 'featuring', 'ft.', 'ft ')),
+)
+
+_AUDIO_EXTS = AUDIO_EXTENSIONS
 
 
 def normalize_text(text):
@@ -26,10 +43,46 @@ def normalize_text(text):
 
 
 def normalize_key(text):
-    """标准化文本并去掉括号噪声，用于去重时的宽松比对"""
+    """标准化文本并去掉括号噪声，用于宽松比对"""
     if not text:
         return ''
     return normalize_text(_NOISE.sub('', str(text)))
+
+
+def _normalize_marker(text):
+    """版本词匹配：去掉空白与常见标点，避免 ft. / ft 之类的写法差异"""
+    return re.sub(r'[\s._\-·•]+', '', str(text).lower())
+
+
+def version_markers(text):
+    """提取文本中的版本标记类别，例如 live / remix / instrumental / feat"""
+    if not text:
+        return ()
+    found = []
+    for group in _BRACKET.findall(str(text)):
+        probe = _normalize_marker(group)
+        for canonical, aliases in _VERSION_ALIASES:
+            if any(_normalize_marker(alias) in probe for alias in aliases):
+                found.append(canonical)
+                break
+    return tuple(sorted(set(found)))
+
+
+def version_key(text):
+    """去重键：保留版本标记，去掉下载序号和其他无关括号内容
+
+    "晴天"            -> "晴天"
+    "晴天 (1)"        -> "晴天"
+    "晴天 (Live)"     -> "晴天|live"
+    "晴天（现场版）"  -> "晴天|live"
+    "晴天 (Remix)"    -> "晴天|remix"
+    """
+    if not text:
+        return ''
+    raw = str(text)
+    markers = version_markers(raw)
+    base = normalize_text(_BRACKET.sub('', raw))
+    return f'{base}|{",".join(markers)}' if markers else base
 
 
 def split_artist(artist):

@@ -16,6 +16,86 @@
 - Web GUI 界面
 - Docker 部署支持
 
+## [0.7.0] - 2026-10-31
+
+路径命名与分流行为调整：变量名按语义重命名，完整文件不再进入独立的待入库目录。
+
+### 变更
+
+- **配置路径重命名**：`FINAL_DIR` → `LIBRARY_DIR`、`TEMP_DIR` → `WORKSPACE_DIR`、
+  `UNREADY_DIR` → `INCOMPLETE_DIR`、`DUP_DIR` → `DUPLICATE_DIR`；删除 `READY_DIR`。
+- **环境变量与 INI 同步**：`MUSIC_HELPER_LIBRARY_DIR`、`MUSIC_HELPER_WORKSPACE_DIR`、
+  `MUSIC_HELPER_INCOMPLETE_DIR`、`MUSIC_HELPER_DUPLICATE_DIR`；`paths.library_dir`、
+  `paths.workspace_dir`、`paths.incomplete_dir`、`paths.duplicate_dir`。
+- **解密暂存变量重命名**：`NETEASE_TEMP_DIR` → `NETEASE_STAGING_DIR`、
+  `QQ_TEMP_DIR` → `QQ_STAGING_DIR`。
+- **分流行为**：只把未达入库标准的文件移入 `INCOMPLETE_DIR`；完整文件留在
+  `WORKSPACE_DIR`，默认按年代/年份整理，不再移动到 `READY_DIR`。
+- **`--manual-archive`**：直接扫描 `WORKSPACE_DIR`；完整文件按标签重命名后并入
+  `LIBRARY_DIR`，未达标文件移入 `INCOMPLETE_DIR`。
+- `--only-archive` / `--skip-organize` 改为作用于 `WORKSPACE_DIR`。
+- 日志与报告中的目录标签同步为「工作区」「待补全」。
+- 文档与 `config.example.ini` 全部改用新名称；`tests/test_pipeline.py` 按新语义断言
+  完整文件原地保留。
+
+### 兼容
+
+- `MAIN_DIR`、`TEMP_COMPLETED_DIR`、`TEMP_MOVE_DIR`、`TEMP_REVIEW_DIR` 仍作为别名存在，
+  分别指向 `LIBRARY_DIR`、`WORKSPACE_DIR`、`DUPLICATE_DIR`、`INCOMPLETE_DIR`。
+- 旧环境变量（`MUSIC_HELPER_FINAL_DIR` 等）与旧 INI 键（`final_dir` 等）不再读取，
+  升级时需要同步改名。
+
+## [0.6.0] - 2026-10-31
+
+第三轮改造：配置外置为 `config.ini`，目录按角色重新命名，流水线改为
+「解密 → 拷贝 → 去重 → 补标签 → 检查 → 分流 → 归档 + 人工确认入库」。
+
+### 新增
+
+- **`config.ini` 支持**：`configparser`（`interpolation=None`）读取，优先级固定为
+  环境变量 > `config.ini` > 默认值；`MUSIC_HELPER_CONFIG` 可指定文件，`config.reload()`
+  可在测试/嵌入场景重新加载。随仓库提供 `config.example.ini`。
+- **语义目录**：`TEMP_DIR`、`READY_DIR`、`UNREADY_DIR`、`DUP_DIR`、`FINAL_DIR`、`TOOLS_DIR`。
+  `READY_DIR` / `UNREADY_DIR` / `DUP_DIR` 默认放在 `TEMP_DIR` 之外，避免 `soundalike -temp`
+  递归扫描结果目录造成重复处理。
+- **`core.check.readiness_problems()`**：入库判定唯一实现。歌曲名/歌手/专辑/年份齐全且
+  文件名与标签不矛盾才进 `READY_DIR`；封面、歌词不参与。
+- **`main._split_ready()` / `flow_manual_archive()`**：主流程结束后分流；`--manual-archive`
+  才把 `READY_DIR` 并入 `FINAL_DIR`，默认保持人工确认后入库。
+- `tests/test_check.py`、`tests/test_pipeline.py`，以及 `config.ini` 优先级、相对路径解析用例。
+
+### 变更
+
+- **流水线重写**：解密 → 普通文件拷贝 → 声纹去重 → 补标签 → 检查修复 → READY/UNREADY 分流
+  → READY 按年代/年份归档。
+- **`services/soundalike.py`**：固定 `-db config.DB_PATH`、`cwd=dirname(DB_PATH)`、
+  `-move-interactive DUP_DIR`、`-temp TEMP_DIR`，位置参数 `FINAL_DIR`；库不存在时由工具
+  自行建库；`--checkdb` 改为 `-check -db DB_PATH FINAL_DIR`。
+- **解密暂存区**：`<TEMP_DIR>/_decrypt/{netease,qq}`；扫描与归档跳过 `_decrypt`。
+- **目录迁移**：`services/tagger.py` → `tagger/__init__.py`；`test/` → `tests/`；
+  `um.exe`、`soundalike.exe`、`hook_qq_music.js` → `tools/`。
+- **版本感知去重键**：`core/naming.version_markers()` / `version_key()` 保留
+  Live/Remix/伴奏/acoustic/demo/cover/feat 标记，`Track.key` 改用该键。
+- `--dry-run` 跳过 `soundalike`（外部工具无 dry-run），普通文件拷贝只统计不执行。
+- `pyproject.toml`：`testpaths = ["tests"]`，ruff 排除 `tmp`；CI 增加 `dev` 分支，
+  compileall 覆盖 `tagger` / `tests`。
+- **文档重写**：`docs/workflow.md`、`docs/rules.md`、`docs/usage.md`、
+  `docs/configuration.md`、`docs/architecture.md`、`docs/fingerprint.md`、
+  `docs/troubleshooting.md`、`docs/README.md`。
+
+### 修复
+
+- `config.py` 不再导入业务模块，消除循环导入与「缺可选依赖就起不来」。
+- `soundalike._exec` 捕获 `OSError`，兼容 `str` 与 `os.PathLike` 混用。
+- `utils.ensure_dirs()` 在非 Windows 上跳过 `D:\...` 字面量路径。
+- 归档、歌词、标签、重复规则收敛到 `core/` 单一实现，不再有并行版本。
+
+### 删除
+
+- `services/tagger.py`（迁至 `tagger/`）、`test/`（迁至 `tests/`）。
+- 根目录 `WORKFLOW.md`、`docs/requirements.md`、`docs/features.md`（内容并入
+  `docs/workflow.md` 与 `docs/rules.md`）。
+
 ## [0.5.0] - 2026-10-30
 
 第二轮全仓审计：统一目录命名、删掉与流水线无关的一次性脚本、修正三处「只在特定工作目录

@@ -17,6 +17,8 @@ from core.naming import (
     parse_filename,
     sanitize_component,
     split_artist,
+    version_key,
+    version_markers,
 )
 from core.scoring import match_artist, match_score, tag_score
 
@@ -84,6 +86,21 @@ class TestNaming(unittest.TestCase):
 
     def test_normalize_key_strips_noise(self):
         self.assertEqual(normalize_key('晴天 (Live)'), '晴天')
+
+    def test_version_markers(self):
+        self.assertEqual(version_markers('晴天 (Live)'), ('live',))
+        self.assertEqual(version_markers('晴天（现场版）'), ('live',))
+        self.assertEqual(version_markers('晴天 (Remix)'), ('remix',))
+        self.assertEqual(version_markers('晴天 (伴奏)'), ('instrumental',))
+        self.assertEqual(version_markers('晴天 (feat. 方文山)'), ('feat',))
+        self.assertEqual(version_markers('晴天 (电影主题曲)'), ())
+
+    def test_version_key_keeps_version_but_drops_download_suffix(self):
+        self.assertEqual(version_key('晴天'), '晴天')
+        self.assertEqual(version_key('晴天 (1)'), '晴天')
+        self.assertEqual(version_key('晴天 (Live)'), '晴天|live')
+        self.assertEqual(version_key('晴天（现场版）'), '晴天|live')
+        self.assertEqual(version_key('晴天 (Live) (1)'), '晴天|live')
 
     def test_is_audio(self):
         self.assertTrue(is_audio('a.FLAC'))
