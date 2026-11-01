@@ -79,5 +79,72 @@ class TestSetupLogging(unittest.TestCase):
             self.assertEqual(normal.level, logging.INFO)
 
 
+class TestPlatformTools(unittest.TestCase):
+    """外部程序的跨平台校验：缺文件 / 拿错平台 / 缺可执行位"""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix='mh_tools_')
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+
+    def _write(self, name, head):
+        path = os.path.join(self.root, name)
+        with open(path, 'wb') as handle:
+            handle.write(head + b'\x00' * 32)
+        return path
+
+    def test_binary_kind_reads_magic(self):
+        self.assertEqual(utils_mod.binary_kind(self._write('a.exe', b'MZ')), 'windows')
+        self.assertEqual(utils_mod.binary_kind(self._write('a.macho', b'\xcf\xfa\xed\xfe')), 'macho')
+        self.assertEqual(utils_mod.binary_kind(self._write('a.elf', b'\x7fELF')), 'elf')
+        self.assertEqual(utils_mod.binary_kind(self._write('a.sh', b'#!/bin/sh')), 'script')
+        self.assertIsNone(utils_mod.binary_kind(self._write('a.bin', b'\x00\x01\x02\x03')))
+
+    def test_missing_file_explains_platform(self):
+        problem = utils_mod.tool_problem(os.path.join(self.root, 'nope.exe'), '声纹工具')
+        self.assertIn('找不到', problem)
+        self.assertIn(utils_mod.platform_label(), problem)
+
+    def test_wrong_platform_binary_is_rejected(self):
+        """把 Windows PE 丢给 macOS 会报 Exec format error，提前拦住"""
+        pe = self._write('soundalike', b'MZ')
+        with mock.patch.object(utils_mod.os, 'name', 'posix'), \
+                mock.patch.object(utils_mod.sys, 'platform', 'darwin'):
+            problem = utils_mod.tool_problem(pe, '声纹工具')
+        self.assertIn('Exec format error', problem)
+        self.assertIn('Windows PE', problem)
+
+    @unittest.skipIf(os.name == 'nt', 'Windows 没有可执行位，chmod 只改只读标志')
+    def test_matching_binary_passes(self):
+        macho = self._write('soundalike', b'\xcf\xfa\xed\xfe')
+        os.chmod(macho, 0o755)
+        with mock.patch.object(utils_mod.os, 'name', 'posix'), \
+                mock.patch.object(utils_mod.sys, 'platform', 'darwin'):
+            self.assertEqual(utils_mod.tool_problem(macho, '声纹工具'), '')
+
+    @unittest.skipIf(os.name == 'nt', 'Windows 没有可执行位，chmod 只改只读标志')
+    def test_missing_exec_bit_hints_chmod(self):
+        macho = self._write('soundalike', b'\xcf\xfa\xed\xfe')
+        os.chmod(macho, 0o644)
+        with mock.patch.object(utils_mod.os, 'name', 'posix'), \
+                mock.patch.object(utils_mod.sys, 'platform', 'darwin'):
+            problem = utils_mod.tool_problem(macho, '声纹工具')
+        self.assertIn('chmod +x', problem)
+
+    def test_platform_label(self):
+        with mock.patch.object(utils_mod.sys, 'platform', 'darwin'):
+            self.assertEqual(utils_mod.platform_label(), 'macOS')
+        with mock.patch.object(utils_mod.os, 'name', 'nt'), \
+                mock.patch.object(utils_mod.sys, 'platform', 'win32'):
+            self.assertEqual(utils_mod.platform_label(), 'Windows')
+
+    def test_resolve_tool_prefers_existing_path(self):
+        path = self._write('um', b'\x7fELF')
+        self.assertEqual(utils_mod.resolve_tool(path, 'um'), path)
+
+    def test_resolve_tool_falls_back_to_path(self):
+        missing = os.path.join(self.root, 'nope', 'nothing-here-xyz')
+        self.assertEqual(utils_mod.resolve_tool(missing, 'nothing-here-xyz'), missing)
+
+
 if __name__ == '__main__':
     unittest.main()

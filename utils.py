@@ -14,6 +14,7 @@
 import logging
 import os
 import re
+import shutil
 import sys
 from datetime import datetime
 
@@ -43,6 +44,86 @@ def ensure_dirs():
         os.makedirs(path, exist_ok=True)
         created.append(path)
     return created
+
+
+# ==================== 外部程序（跨平台） ====================
+# tools/ 里的程序是「同一个程序的多个平台产物」（soundalike.exe / soundalike-darwin-arm64、
+# um.exe / um-darwin-arm64）。config.py 负责按平台挑默认路径，这里负责在真正执行前
+# 校验「这份产物在本机能跑」——三种典型故障：文件没随仓库带过来、从 Windows 克隆后
+# 缺可执行位、拿错了平台的文件（Mach-O 丢给 Windows / PE 丢给 macOS）。
+
+_MACHO_MAGIC = (b'\xfe\xed\xfa\xce', b'\xfe\xed\xfa\xcf',
+                b'\xce\xfa\xed\xfe', b'\xcf\xfa\xed\xfe',
+                b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca')
+_BINARY_NAMES = {'windows': 'Windows PE', 'macho': 'Mach-O', 'elf': 'ELF', 'script': '脚本'}
+
+
+def platform_label():
+    """当前平台的可读名称（日志/报错用）"""
+    if sys.platform == 'darwin':
+        return 'macOS'
+    if os.name == 'nt':
+        return 'Windows'
+    return sys.platform
+
+
+def native_binary_kind():
+    """当前平台期望的可执行文件格式"""
+    if os.name == 'nt':
+        return 'windows'
+    return 'macho' if sys.platform == 'darwin' else 'elf'
+
+
+def binary_kind(path):
+    """按文件头判断可执行文件格式：windows / macho / elf / script，认不出返回 None"""
+    try:
+        with open(path, 'rb') as handle:
+            head = handle.read(4)
+    except OSError:
+        return None
+    if head[:2] == b'MZ':
+        return 'windows'
+    if head in _MACHO_MAGIC:
+        return 'macho'
+    if head == b'\x7fELF':
+        return 'elf'
+    if head[:2] == b'#!':
+        return 'script'
+    return None
+
+
+def tool_problem(path, label='外部程序'):
+    """检查外部程序能否在本机执行；可用返回空串，否则返回能照着做的提示"""
+    if not path:
+        return f'未配置{label}的路径'
+    if not os.path.exists(path):
+        return (f'找不到{label}: {path}（当前平台 {platform_label()}，'
+                f'确认 tools/ 里带了该平台的产物，或用环境变量指向别处）')
+    kind = binary_kind(path)
+    native = native_binary_kind()
+    if kind and kind not in (native, 'script'):
+        return (f'{label}与当前平台不匹配: {path} 是 {_BINARY_NAMES[kind]}，'
+                f'而本机是 {platform_label()}，执行会报 Exec format error')
+    if os.name != 'nt' and not os.access(path, os.X_OK):
+        return f'{label}缺少可执行权限: {path}（运行 chmod +x "{path}"）'
+    return ''
+
+
+def resolve_tool(path, name=''):
+    """配置里的路径优先；文件不存在时在 PATH 里找同名程序（brew/系统包的场景）
+
+    返回实际要执行的路径——找不到时仍是原路径，让调用方拿它拼报错信息。
+    """
+    if path and os.path.exists(path):
+        return path
+    candidate = name or (os.path.basename(path) if path else '')
+    if candidate and os.name != 'nt' and candidate.endswith('.exe'):
+        candidate = candidate[:-4]
+    if candidate:
+        found = shutil.which(candidate)
+        if found:
+            return found
+    return path
 
 
 def _make_handler(kind, path, level, fmt):

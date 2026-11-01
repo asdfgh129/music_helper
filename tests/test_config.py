@@ -6,6 +6,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -28,8 +29,29 @@ class TestConfig(unittest.TestCase):
         self.assertTrue(config.AUDIO_EXTENSIONS <= config.MUSIC_EXTENSIONS)
 
     def test_executables_defined(self):
-        self.assertTrue(config.SOUNDALIKE_EXE.endswith('.exe'))
-        self.assertTrue(config.UM_EXE.endswith('.exe'))
+        """外部程序按平台取名：Windows 是 .exe，macOS 是按架构命名的二进制"""
+        if os.name == 'nt':
+            self.assertTrue(config.SOUNDALIKE_EXE.endswith('.exe'), config.SOUNDALIKE_EXE)
+            self.assertTrue(config.UM_EXE.endswith('.exe'), config.UM_EXE)
+        elif sys.platform == 'darwin':
+            self.assertIn('soundalike-darwin-', config.SOUNDALIKE_EXE)
+            self.assertIn('um-darwin-', config.UM_EXE)
+
+    def test_default_um_picks_arch_on_macos(self):
+        """um 是纯 Go 程序，macOS 上按架构挑 tools/um-darwin-<arch>"""
+        with patch.object(config.sys, 'platform', 'darwin'), \
+                patch.object(config.platform, 'machine', return_value='arm64'):
+            self.assertTrue(config._default_um().endswith('um-darwin-arm64'))
+        with patch.object(config.sys, 'platform', 'darwin'), \
+                patch.object(config.platform, 'machine', return_value='x86_64'):
+            self.assertTrue(config._default_um().endswith('um-darwin-amd64'))
+
+    def test_fpcalc_defined(self):
+        """fpcalc 路径来自 config，缺文件时调用方回退到 PATH"""
+        self.assertTrue(config.FPCALC_EXE)
+        self.assertEqual(config.FPCALC_EXE,
+                         os.path.normpath(os.path.join(config.TOOLS_DIR,
+                                                       'fpcalc.exe' if os.name == 'nt' else 'fpcalc')))
 
     def test_mutagen_available_is_bool(self):
         self.assertIsInstance(MUTAGEN_AVAILABLE, bool)
