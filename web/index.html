@@ -50,12 +50,22 @@
   .hidden{display:none} .hint{font-size:12px;color:var(--muted);margin-top:8px}
   .kind{color:var(--accent)}
   .note{background:var(--panel2);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:6px;padding:10px 12px;color:var(--muted);font-size:13px}
+  .progress{height:10px;background:var(--panel2);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin:8px 0}
+  .progress > div{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));width:0;transition:width .4s}
+  .task-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;background:var(--panel2);cursor:pointer}
+  .task-item:hover{border-color:var(--accent)}
+  .task-item .name{flex:1;word-break:break-all}
+  .task-item .meta{font-size:11px;color:var(--muted);white-space:nowrap}
+  .log-line{white-space:pre-wrap}
+  .log-line.ERR{color:var(--err)} .log-line.WARN{color:var(--warn)} .log-line.DEBUG{color:var(--muted)}
+  input.txt{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;width:220px}
+  details summary{user-select:none}
 </style>
 </head>
 <body>
 <header>
   <h1>music_helper · Web UI</h1>
-  <span class="tag">FastAPI · 阶段 0-3</span>
+  <span class="tag">FastAPI · 阶段 0-4</span>
 </header>
 
 <main>
@@ -129,6 +139,38 @@
         <button class="ghost" id="report-back">← 返回列表</button>
       </div>
       <pre id="report-content"></pre>
+    </div>
+  </section>
+
+  <!-- ⑥ 运行任务（阶段4） -->
+  <section class="card">
+    <h2>⑥ 运行任务 <span class="badge">后台串行队列 + 实时日志/进度</span></h2>
+    <div class="row">
+      <select id="task-kind"></select>
+      <label class="chk"><input type="checkbox" id="task-dryrun" checked> dry-run（不改动文件）</label>
+      <input id="task-month" class="txt" placeholder="月份 YYYYMM（留空=当前月）">
+      <button id="task-run">启动任务</button>
+    </div>
+    <details>
+      <summary class="muted" style="cursor:pointer">高级选项</summary>
+      <div class="row" style="margin-top:8px">
+        <label class="chk"><input type="checkbox" id="opt-skip-vip"> 跳过解密与文件拷贝</label>
+        <label class="chk"><input type="checkbox" id="opt-skip-fp"> 跳过去重</label>
+        <label class="chk"><input type="checkbox" id="opt-skip-tag"> 跳过标签更新</label>
+        <label class="chk"><input type="checkbox" id="opt-skip-check"> 跳过检查</label>
+        <label class="chk"><input type="checkbox" id="opt-skip-org"> 跳过归档</label>
+        <label class="chk"><input type="checkbox" id="opt-no-move"> 不移动不一致文件</label>
+        <label class="chk"><input type="checkbox" id="opt-trash-dup"> 重复文件进回收站</label>
+      </div>
+    </details>
+
+    <div class="box" id="task-current">
+      <div class="muted">从上方选择动作并启动。长时任务（解密/去重/标签）在后台串行执行，日志实时刷新；非 dry-run 会真实改动文件。</div>
+    </div>
+
+    <div class="box">
+      <h3 style="color:#fff;font-size:14px;margin:6px 0 10px">近期任务</h3>
+      <div id="task-list"><span class="muted">加载中…</span></div>
     </div>
   </section>
 </main>
@@ -313,7 +355,100 @@ async function viewReport(name){
 $('report-back').onclick = () => { $('report-view').classList.add('hidden'); $('reports-list').classList.remove('hidden'); };
 
 // 初始化
-loadConfig(); loadPlatform(); loadReports();
+loadConfig(); loadPlatform(); loadReports(); loadTasksMeta();
+
+// ---------- ⑥ 运行任务（阶段4） ----------
+let activeTaskId = null, pollTimer = null;
+async function loadTasksMeta(){
+  const d = await api('/api/tasks');
+  if(!d.ok) return;
+  const sel = $('task-kind');
+  if(!sel.options.length){
+    (d.supported||[]).forEach(a=>{
+      const o = document.createElement('option');
+      o.value = a.kind; o.textContent = `${a.label} — ${a.desc}`;
+      sel.appendChild(o);
+    });
+  }
+  renderTaskList(d.tasks||[]);
+}
+function statusPill(s){
+  const map = {queued:['info','排队中'], running:['info','运行中'], done:['ok','完成'], error:['err','失败']};
+  const [cls,txt] = map[s] || ['info', s];
+  return `<span class="pill ${cls}">${txt}</span>`;
+}
+function renderTaskList(tasks){
+  const el = $('task-list');
+  if(!tasks.length){ el.innerHTML = '<span class="muted">暂无任务。</span>'; return; }
+  el.innerHTML = tasks.map(t=>`
+    <div class="task-item" data-id="${t.id}">
+      <span class="name">${t.label}</span>
+      ${statusPill(t.status)}
+      ${t.status==='running'?`<span class="muted">${t.progress}% · ${t.stage}</span>`:''}
+      <span class="meta">${t.id}</span>
+    </div>`).join('');
+  document.querySelectorAll('#task-list .task-item').forEach(e=>{
+    e.onclick = () => { activeTaskId = e.dataset.id; pollTask(); };
+  });
+}
+function escapeHtml(s){
+  return (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+}
+$('task-run').onclick = async () => {
+  const kind = $('task-kind').value;
+  const opts = {
+    dry_run: $('task-dryrun').checked,
+    month: ($('task-month').value||'').trim() || null,
+    skip_vip: $('opt-skip-vip').checked,
+    skip_fingerprint: $('opt-skip-fp').checked,
+    skip_tag_update: $('opt-skip-tag').checked,
+    skip_check: $('opt-skip-check').checked,
+    skip_organize: $('opt-skip-org').checked,
+    no_move: $('opt-no-move').checked,
+    trash_dup: $('opt-trash-dup').checked,
+  };
+  $('task-current').innerHTML = '提交中…';
+  const d = await api('/api/tasks', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({kind, opts})});
+  if(!d.ok){ $('task-current').innerHTML = `<span class="err">${d.error||'提交失败'}</span>`; return; }
+  activeTaskId = d.task_id;
+  pollTask();
+};
+async function pollTask(){
+  if(!activeTaskId) return;
+  if(pollTimer){ clearTimeout(pollTimer); pollTimer = null; }
+  const d = await api('/api/tasks/'+activeTaskId);
+  if(!d.ok){ $('task-current').innerHTML = `<span class="err">${d.error||'任务不存在'}</span>`; return; }
+  const t = d;
+  const logs = (t.logs||[]).map(l=>`<div class="log-line ${l.level}">${escapeHtml(l.msg)}</div>`).join('');
+  let resultHtml = '';
+  if(t.result){
+    if(t.result.type === 'report'){
+      resultHtml = `<h3 style="color:#fff;font-size:14px;margin-top:10px">报告：${escapeHtml(t.result.title)}</h3>
+        <pre>${(t.result.summary||[]).map(x=>x.join('：')).join('\n')}</pre>`;
+    } else if(t.result.type === 'decrypt'){
+      resultHtml = '<pre>' + (t.result.items||[]).map(i=>`${i.name} · 加密 ${i.encrypted} · 产出 ${i.produced} · ${i.ok?'成功':'失败'} ${escapeHtml(i.message)}`).join('\n') + '</pre>';
+    } else {
+      resultHtml = `<pre>${escapeHtml(t.result.text||'')}</pre>`;
+    }
+  }
+  $('task-current').innerHTML = `
+    <div class="row">
+      <strong>${t.label}</strong> ${statusPill(t.status)}
+      ${t.error?`<span class="pill err">${escapeHtml(t.error)}</span>`:''}
+    </div>
+    <div class="muted">任务 ${t.id} · 阶段：${t.stage}</div>
+    <div class="progress"><div style="width:${t.progress}%"></div></div>
+    ${resultHtml}
+    <pre id="task-log">${logs}</pre>`;
+  const pre = $('task-log');
+  if(pre) pre.scrollTop = pre.scrollHeight;
+  if(t.status === 'running' || t.status === 'queued'){
+    pollTimer = setTimeout(pollTask, 1500);
+  } else {
+    loadTasksMeta();  // 任务结束，刷新列表
+  }
+}
 </script>
 </body>
 </html>

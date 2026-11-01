@@ -13,6 +13,9 @@ music_helper Web UI —— FastAPI 实现（阶段 0 → 阶段 3）
   GET  /api/reports       历史报告列表（log/reports）
   GET  /api/reports/view  单份报告预览（.md / .csv）
   POST /api/decrypt       按 OS 路由的解密动作（默认 dry_run 预览；复用 services.decrypt）
+  GET  /api/tasks         近期任务列表 + 支持的动作清单（阶段 4）
+  POST /api/tasks         提交后台任务（流水线/检查/解密/去重…），立即返回 task_id
+  GET  /api/tasks/{id}    轮询任务：状态 / 阶段进度 / 实时日志 / 结果（阶段 4）
 
 运行：
     python -m uvicorn web.api:app --host 127.0.0.1 --port 8000
@@ -36,6 +39,7 @@ import utils
 import core.scan as scanner
 import core.check as checker
 import core.ops as ops
+from web.tasks import manager, supported_actions
 
 # 初始化日志（供解密等需要 logger 的流程使用；失败也降级，不阻塞启动）
 try:
@@ -73,6 +77,11 @@ class PlanReq(BaseModel):
 class DecryptReq(BaseModel):
     target: str = "netease"           # netease | qq
     dry_run: bool = True
+
+
+class TaskReq(BaseModel):
+    kind: str                           # pipeline | check | decrypt | dedupe | dedupe-report | manual-archive
+    opts: dict = {}                     # dry_run / month / skip_* / no_move / trash_dup / fix / limit ...
 
 
 # --------------------------------------------------------------------------- #
@@ -346,6 +355,35 @@ def api_decrypt(req: DecryptReq):
             "name": res.name, "encrypted": res.encrypted,
             "produced": res.produced, "result_ok": res.ok,
             "message": res.message}
+
+
+@app.get("/api/tasks")
+def api_tasks():
+    """列出近期任务 + 支持的动作清单"""
+    items = [t.to_dict(tail=0) for t in manager.list()]
+    return {"ok": True, "tasks": items, "supported": supported_actions()}
+
+
+@app.post("/api/tasks")
+def api_task_submit(req: TaskReq):
+    """提交一个后台任务（串行执行），立即返回 task_id 供前端轮询"""
+    if not any(a["kind"] == req.kind for a in supported_actions()):
+        raise HTTPException(status_code=400, detail=f"不支持的动作: {req.kind}")
+    try:
+        task = manager.submit(req.kind, req.opts)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"任务提交失败: {exc}")
+    return {"ok": True, "task_id": task.id, "kind": task.kind, "label": task.label,
+            "status": task.status}
+
+
+@app.get("/api/tasks/{task_id}")
+def api_task_get(task_id: str):
+    """轮询单个任务：状态 / 阶段进度 / 日志 / 结果"""
+    task = manager.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return {"ok": True, **task.to_dict()}
 
 
 @app.get("/", response_class=HTMLResponse)
