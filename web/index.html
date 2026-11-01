@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>music_helper · Web UI</title>
+<style>
+  :root{
+    --bg:#1e1e1e; --panel:#252526; --panel2:#2d2d30; --border:#3c3c3c;
+    --text:#d4d4d4; --muted:#9b9b9b; --accent:#569cd6; --accent2:#4ec9b0;
+    --ok:#6a9955; --warn:#d7ba7d; --err:#f48771; --chip:#37373d;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.6 -apple-system,Segoe UI,Roboto,"Microsoft YaHei",sans-serif}
+  header{padding:16px 24px;border-bottom:1px solid var(--border);
+    display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+  header h1{font-size:18px;margin:0;color:#fff;font-weight:600}
+  header .tag{font-size:12px;color:var(--muted);background:var(--chip);padding:2px 8px;border-radius:10px}
+  main{padding:20px 24px;display:grid;gap:20px;max-width:1180px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px 18px}
+  .card h2{margin:0 0 12px;font-size:15px;color:#fff;font-weight:600;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .card h2 .badge{font-size:11px;font-weight:400;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--muted);font-weight:500}
+  td.val{color:var(--accent2);word-break:break-all}
+  .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px}
+  button{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:8px 14px;font-size:13px;cursor:pointer}
+  button:hover{filter:brightness(1.1)}
+  button.ghost{background:var(--panel2);color:var(--text);border:1px solid var(--border)}
+  button.danger{background:#9a3b3b}
+  label.chk{color:var(--muted);display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px}
+  select{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:13px}
+  .pill{font-size:12px;padding:2px 9px;border-radius:10px}
+  .pill.ok{background:rgba(106,153,85,.18);color:var(--ok)}
+  .pill.err{background:rgba(244,135,113,.18);color:var(--err)}
+  .pill.warn{background:rgba(215,186,125,.18);color:var(--warn)}
+  .pill.info{background:rgba(86,156,214,.18);color:var(--accent)}
+  .muted{color:var(--muted)} .err{color:var(--err)} .ok{color:var(--ok)}
+  .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin-bottom:12px}
+  .stat{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:12px}
+  .stat .n{font-size:22px;color:var(--accent2);font-weight:600} .stat .l{font-size:12px;color:var(--muted);margin-top:2px}
+  pre{background:#1b1b1b;border:1px solid var(--border);border-radius:8px;padding:14px;overflow:auto;max-height:420px;
+    font:12px/1.5 Consolas,Menlo,monospace;color:#d4d4d4;white-space:pre-wrap}
+  .report-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);
+    border-radius:8px;margin-bottom:8px;cursor:pointer;background:var(--panel2)}
+  .report-item:hover{border-color:var(--accent)}
+  .report-item .name{flex:1;word-break:break-all} .report-item .meta{font-size:12px;color:var(--muted);white-space:nowrap}
+  .hidden{display:none} .hint{font-size:12px;color:var(--muted);margin-top:8px}
+  .kind{color:var(--accent)}
+  .note{background:var(--panel2);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:6px;padding:10px 12px;color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <h1>music_helper · Web UI</h1>
+  <span class="tag">FastAPI · 阶段 0-3</span>
+</header>
+
+<main>
+  <!-- ① 配置 -->
+  <section class="card">
+    <h2>① 配置状态 <span class="badge">config.validate + 外部程序预检</span></h2>
+    <div id="config-body">加载中…</div>
+  </section>
+
+  <!-- ② 运行环境 / 解密能力（OS 感知） -->
+  <section class="card">
+    <h2>② 运行环境与解密能力 <span class="badge">OS 感知：解密随运行平台分支</span></h2>
+    <div id="platform-body" class="muted">加载中…</div>
+    <div class="box" id="decrypt-box">
+      <div class="row">
+        <select id="dec-target">
+          <option value="netease">网易云 (.ncm)</option>
+          <option value="qq">QQ 音乐 (.mflac/.mgg)</option>
+        </select>
+        <label class="chk"><input type="checkbox" id="dec-dryrun" checked> dry-run 预览（不改动文件）</label>
+        <button id="dec-run">运行解密</button>
+      </div>
+      <div id="decrypt-body" class="muted">选择目标后点击运行。dry-run 仅统计将解密的加密文件数量。</div>
+    </div>
+  </section>
+
+  <!-- ③ 库扫描统计 -->
+  <section class="card">
+    <h2>③ 库扫描统计 <span class="badge">core.scan.scan（只读）</span></h2>
+    <div class="row">
+      <button id="scan-lib">扫描音乐库</button>
+      <button id="scan-ws" class="ghost">扫描工作区</button>
+      <label class="chk"><input type="checkbox" id="with-tags"> 读取标签（较慢，给出缺失统计）</label>
+    </div>
+    <div id="scan-body" class="muted">点击按钮开始扫描。</div>
+  </section>
+
+  <!-- ④ 检查与修复 -->
+  <section class="card">
+    <h2>④ 检查与修复 <span class="badge">check_library → Plan(dry_run) → Plan.execute</span></h2>
+    <div class="row">
+      <select id="chk-target">
+        <option value="workspace">工作区</option>
+        <option value="library">音乐库</option>
+      </select>
+      <button id="chk-run">运行检查</button>
+    </div>
+    <div id="check-body" class="muted">选择目标后运行检查。检查本身不改动任何文件。</div>
+
+    <div class="box hidden" id="plan-box">
+      <div class="row">
+        <label class="chk"><input type="checkbox" id="opt-move-bad"> 把严重缺失/矛盾文件移入待补全目录</label>
+        <label class="chk"><input type="checkbox" id="opt-del-dup"> 重复文件直接进回收站</label>
+        <label class="chk"><input type="checkbox" id="opt-rename-tags" checked> 文件名缺结构时按标签重写</label>
+      </div>
+      <div class="row">
+        <button id="plan-preview" class="ghost">生成计划预览（dry-run）</button>
+        <button id="plan-exec" class="danger">确认执行</button>
+      </div>
+      <div id="plan-body" class="muted">先运行检查，再生成计划预览，确认无误后执行。</div>
+    </div>
+  </section>
+
+  <!-- ⑤ 历史报告 -->
+  <section class="card">
+    <h2>⑤ 历史报告 <span class="badge">log/reports</span></h2>
+    <div id="reports-list" class="muted">加载中…</div>
+    <div id="report-view" class="hidden">
+      <div class="row" style="margin-top:14px">
+        <strong id="report-name"></strong>
+        <button class="ghost" id="report-back">← 返回列表</button>
+      </div>
+      <pre id="report-content"></pre>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+async function api(path, opts){
+  const r = await fetch(path, opts);
+  return r.json();
+}
+function fmtBytes(n){
+  if(n == null) return '-';
+  const u=['B','KB','MB','GB','TB']; let i=0;
+  while(n>=1024 && i<u.length-1){ n/=1024; i++; }
+  return (i? n.toFixed(1): n) + ' ' + u[i];
+}
+
+// ---------- ① 配置 ----------
+async function loadConfig(){
+  const d = await api('/api/config');
+  if(!d.ok){ $('config-body').innerHTML = '<span class="err">加载失败</span>'; return; }
+  const problems = d.problems||[];
+  const pStatus = problems.length ? `<span class="pill err">${problems.length} 项告警</span>` : `<span class="pill ok">配置可用</span>`;
+  const pList = problems.length ? `<ul class="err" style="margin:8px 0">${problems.map(p=>`<li>${p}</li>`).join('')}</ul>` : '';
+  const tools = (d.tools||[]).map(t=>{
+    const cls = t.ok?'ok':'err';
+    const pill = t.ok?'<span class="pill ok">可用</span>':'<span class="pill err">不可用</span>';
+    return `<tr><td>${t.name}</td><td class="val">${t.path}</td><td class="${cls}">${pill}<br><span class="muted">${t.detail}</span></td></tr>`;
+  }).join('');
+  const rows = Object.entries(d.config).map(([k,v])=>`<tr><td>${k}</td><td class="val">${v}</td></tr>`).join('');
+  $('config-body').innerHTML = `
+    <div style="margin-bottom:10px">${pStatus}</div>${pList}
+    <table><thead><tr><th>配置项</th><th>值</th></tr></thead><tbody>${rows}</tbody></table>
+    <h3 style="margin:16px 0 8px;color:#fff;font-size:14px">外部程序预检</h3>
+    <table><thead><tr><th>程序</th><th>路径</th><th>状态</th></tr></thead><tbody>${tools}</tbody></table>`;
+}
+
+// ---------- ② 运行环境 / 解密能力 ----------
+async function loadPlatform(){
+  const d = await api('/api/platform');
+  if(!d.ok){ $('platform-body').innerHTML='<span class="err">加载失败</span>'; return; }
+  const ne = d.netease, qq = d.qq;
+  $('platform-body').innerHTML = `
+    <div style="margin-bottom:8px">运行平台：<span class="pill info">${d.os}</span>
+      ${d.is_windows?'<span class="pill info">Windows</span>':''}${d.is_macos?'<span class="pill info">macOS</span>':''}</div>
+    <div class="note">${d.note}</div>
+    <div class="box">
+      <div class="stat-grid">
+        <div class="stat"><div class="n">${ne.available?'✓':'✗'}</div><div class="l">网易云解密 (um)${ne.available?'':'：工具缺失'}</div></div>
+        <div class="stat"><div class="n">${d.um_available?'✓':'✗'}</div><div class="l">um 二进制</div></div>
+      </div>
+      <table>
+        <thead><tr><th>目标</th><th>本机将使用的后端</th><th>加密源目录</th></tr></thead>
+        <tbody>
+          <tr><td>网易云 .ncm</td><td class="val">${ne.backend}</td><td class="val">${ne.vip_dir}</td></tr>
+          <tr><td>QQ .mflac/.mgg</td><td class="val">${qq.backend}</td><td class="val">${qq.vip_dir}</td></tr>
+        </tbody>
+      </table>
+    </div>`;
+}
+$('dec-run').onclick = async () => {
+  const target = $('dec-target').value;
+  const dry_run = $('dec-dryrun').checked;
+  $('decrypt-body').innerHTML = '运行中…';
+  const d = await api('/api/decrypt', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({target, dry_run})});
+  if(!d.ok){ $('decrypt-body').innerHTML = `<span class="err">${d.error||'失败'}</span>`; return; }
+  $('decrypt-body').innerHTML = `
+    <div class="stat-grid">
+      <div class="stat"><div class="n">${d.encrypted}</div><div class="l">加密文件数</div></div>
+      <div class="stat"><div class="n">${d.produced}</div><div class="l">已产出</div></div>
+    </div>
+    <div class="${d.result_ok?'ok':'err'}">${d.name} · ${d.result_ok?'成功':'失败'} · ${d.dry_run?'[dry-run] ':''}${d.message}</div>
+    ${dry_run?'<div class="hint">当前为 dry-run 预览，未改动任何文件。取消勾选 dry-run 并确认客户端就绪后再执行真实解密。</div>':''}`;
+};
+
+// ---------- ③ 扫描 ----------
+async function doScan(target){
+  const withTags = $('with-tags').checked;
+  $('scan-body').innerHTML = '扫描中…';
+  const d = await api(`/api/scan?target=${target}&with_tags=${withTags?1:0}`);
+  if(!d.ok){ $('scan-body').innerHTML = `<span class="err">${d.error}</span>`; return; }
+  const extRows = Object.entries(d.ext_counts||{}).map(([e,c])=>`<tr><td>${e||'(无)'}</td><td>${c}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">无文件</td></tr>';
+  let tagBlock='';
+  if(d.with_tags){
+    tagBlock = `<div class="stat"><div class="n">${d.missing_title}</div><div class="l">缺歌名</div></div>
+      <div class="stat"><div class="n">${d.missing_artist}</div><div class="l">缺歌手</div></div>
+      <div class="stat"><div class="n">${d.missing_cover}</div><div class="l">缺封面</div></div>`;
+  }
+  $('scan-body').innerHTML = `
+    <div class="muted" style="margin-bottom:8px">目录：${d.directory}</div>
+    <div class="stat-grid">
+      <div class="stat"><div class="n">${d.count}</div><div class="l">音频文件数</div></div>
+      <div class="stat"><div class="n">${fmtBytes(d.total_bytes)}</div><div class="l">总大小</div></div>
+      ${tagBlock}
+    </div>
+    <table><thead><tr><th>扩展名</th><th>数量</th></tr></thead><tbody>${extRows}</tbody></table>`;
+}
+$('scan-lib').onclick = () => doScan('library');
+$('scan-ws').onclick  = () => doScan('workspace');
+
+// ---------- ④ 检查与修复 ----------
+$('chk-run').onclick = async () => {
+  const target = $('chk-target').value;
+  $('check-body').innerHTML = '检查中…（大库可能需要几十秒）';
+  const d = await api('/api/check', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({target})});
+  if(!d.ok){ $('check-body').innerHTML = `<span class="err">${(d.detail||d.error)||'失败'}</span>`; return; }
+  const c = d.counts||{};
+  const countsLine = Object.entries(c).map(([k,v])=>`<span class="pill info">${k}: ${v}</span>`).join(' ');
+  const findings = (d.findings||[]).slice(0,500).map(f=>`
+    <tr><td class="kind">${f.kind}</td><td>${f.path}</td><td>${f.detail}</td>
+      <td>${f.severe?'<span class="pill err">严重</span>':(f.fixable?'<span class="pill warn">可修复</span>':'')}</td></tr>`).join('');
+  const groups = (d.groups||[]).map(g=>`
+    <tr><td class="kind">${g.kind}</td><td>${g.keep_name}</td>
+      <td>保留 ${g.keep_name}；待处理 ${g.drop.length} 个${g.duration_unknown?'（时长未知→人工）':''}</td></tr>`).join('');
+  $('check-body').innerHTML = `
+    <div style="margin-bottom:8px">目标：${d.directory} · 扫描 ${d.scanned} 个文件</div>
+    <div style="margin-bottom:10px">${countsLine||'<span class="muted">无问题</span>'}</div>
+    <h3 style="color:#fff;font-size:14px">检查结果（前 ${Math.min(500,(d.findings||[]).length)} 条）</h3>
+    <table><thead><tr><th>类型</th><th>文件</th><th>说明</th><th>级别</th></tr></thead><tbody>${findings||'<tr><td colspan="4" class="muted">无</td></tr>'}</tbody></table>
+    ${groups?`<h3 style="color:#fff;font-size:14px;margin-top:14px">重复组</h3>
+      <table><thead><tr><th>类型</th><th>保留</th><th>说明</th></tr></thead><tbody>${groups}</tbody></table>`:''}`;
+  $('plan-box').classList.remove('hidden');
+};
+
+function planOpts(){
+  return {
+    target: $('chk-target').value,
+    move_bad: $('opt-move-bad').checked,
+    delete_duplicates: $('opt-del-dup').checked,
+    rename_by_tags: $('opt-rename-tags').checked,
+    dry_run: true,
+  };
+}
+$('plan-preview').onclick = async () => {
+  $('plan-body').innerHTML = '生成计划预览…';
+  const d = await api('/api/plan/preview', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(planOpts())});
+  if(!d.ok){ $('plan-body').innerHTML = `<span class="err">${(d.detail||d.error)||'失败'}</span>`; return; }
+  const actions = (d.actions||[]).map(a=>`<div>${a}</div>`).join('') || '<span class="muted">无需处理</span>';
+  $('plan-body').innerHTML = `
+    <div class="stat"><div class="n">${d.count}</div><div class="l">计划操作数（dry-run）</div></div>
+    <pre>${actions}</pre>
+    <div class="hint">以上为预览，未改动任何文件。确认无误后点击「确认执行」。</div>`;
+};
+$('plan-exec').onclick = async () => {
+  if(!confirm('确认执行？破坏性操作将通过 core.ops.Plan 进行并记录到 journal。')) return;
+  $('plan-body').innerHTML = '执行中…';
+  const d = await api('/api/plan/execute', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(planOpts())});
+  if(!d.ok){ $('plan-body').innerHTML = `<span class="err">${(d.detail||d.error)||'失败'}</span>`; return; }
+  $('plan-body').innerHTML = `
+    <div class="pill ${ (d.failed||[]).length?'err':'ok'}">${d.summary}</div>
+    ${ (d.done||[]).length?`<h3 style="color:#fff;font-size:14px;margin-top:10px">已完成 (${d.done.length})</h3><pre>${d.done.map(x=>'<div>'+x+'</div>').join('')}</pre>`:'' }
+    ${ (d.failed||[]).length?`<h3 style="color:var(--err);font-size:14px;margin-top:10px">失败 (${d.failed.length})</h3><pre>${d.failed.map(x=>'<div>'+x+'</div>').join('')}</pre>`:'' }
+    <div class="hint">journal: ${d.journal}</div>`;
+};
+
+// ---------- ⑤ 报告 ----------
+async function loadReports(){
+  const d = await api('/api/reports');
+  if(!d.ok){ $('reports-list').innerHTML = '<span class="err">失败</span>'; return; }
+  const list = d.reports||[];
+  if(!list.length){ $('reports-list').innerHTML = '<span class="muted">暂无报告。</span>'; return; }
+  $('reports-list').innerHTML = list.map(r=>`
+    <div class="report-item" data-name="${encodeURIComponent(r.name)}">
+      <span class="pill ${r.type==='csv'?'warn':'ok'}">${r.type}</span>
+      <span class="name">${r.name}</span>
+      <span class="meta">${fmtBytes(r.size)} · ${r.mtime_str}</span>
+    </div>`).join('');
+  document.querySelectorAll('.report-item').forEach(el=>{ el.onclick=()=>viewReport(decodeURIComponent(el.dataset.name)); });
+}
+async function viewReport(name){
+  const d = await api('/api/reports/view?name='+encodeURIComponent(name));
+  if(!d.ok){ alert(d.error||'加载失败'); return; }
+  $('reports-list').classList.add('hidden');
+  $('report-view').classList.remove('hidden');
+  $('report-name').textContent = d.name;
+  $('report-content').textContent = d.content;
+}
+$('report-back').onclick = () => { $('report-view').classList.add('hidden'); $('reports-list').classList.remove('hidden'); };
+
+// 初始化
+loadConfig(); loadPlatform(); loadReports();
+</script>
+</body>
+</html>
