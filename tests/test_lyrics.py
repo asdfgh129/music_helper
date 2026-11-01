@@ -56,6 +56,24 @@ class TestLyrics(unittest.TestCase):
         self._touch('readme.txt')
         self.assertEqual(lyrics.orphan_lrc([self.root]), [])
 
+    def test_uppercase_lrc_recognized(self):
+        """大写扩展名 .LRC 也应被识别，并与小写音频配对不算孤立"""
+        self._touch('a.flac')
+        self._touch('a.LRC')
+        self.assertEqual(lyrics.orphan_lrc([self.root]), [])
+
+    def test_case_insensitive_matching(self):
+        """音频文件名大小写不同仍视为配对（优化后用集合判重，需保持语义）"""
+        self._touch('Song.FLAC')
+        self._touch('song.lrc')
+        self.assertEqual(lyrics.orphan_lrc([self.root]), [])
+
+    def test_orphan_with_different_extension_audio(self):
+        """同名音频是另一种格式时，.lrc 不算孤立"""
+        self._touch('a.mp3')
+        self._touch('a.lrc')
+        self.assertEqual(lyrics.orphan_lrc([self.root]), [])
+
 
 if __name__ == '__main__':
     unittest.main()

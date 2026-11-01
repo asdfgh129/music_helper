@@ -5,10 +5,14 @@
 """
 
 import base64
+import os
+import shutil
+import tempfile
 import unittest
+from unittest import mock
 
-from core.model import Track
 import tagger
+from core.model import Track
 
 
 class FakeQQ:
@@ -32,13 +36,36 @@ class FakeNetease:
         self.songs = songs
         self.lyric = lyric
         self.lyric_calls = 0
+        self.fetch_id3_calls = 0
 
     def fetch_id3_by_title(self, title):
+        self.fetch_id3_calls += 1
         return self.songs
 
     def fetch_lyric(self, song_id):
         self.lyric_calls += 1
         return self.lyric
+
+
+class FakeFingerprint:
+    """假的声纹匹配器（也可模拟异常）"""
+
+    def __init__(self, recordings=None, raise_error=False):
+        self.recordings = recordings or []
+        self.calls = 0
+        self.raise_error = raise_error
+
+    def match_file(self, path):
+        self.calls += 1
+        if self.raise_error:
+            raise RuntimeError('boom')
+        recs = self.recordings
+
+        class _Match:
+            success = True
+            recordings = recs
+
+        return _Match()
 
 
 class TestParseMusicBrainz(unittest.TestCase):
@@ -178,6 +205,171 @@ class TestMissingTagFields(unittest.TestCase):
         track = Track(path='C:/not/exists/x.flac',
                       tags={'title': 't', 'artist': 'a', 'album': 'b', 'year': '2000'})
         self.assertEqual(tagger.missing_tag_fields(track), ['封面'])
+
+
+FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixtures', '1.flac')
+
+
+def _copy_fixture():
+    dst = os.path.join(tempfile.mkdtemp(prefix='mh_upd_'), 'song.flac')
+    shutil.copy(FIXTURE, dst)
+    return dst
+
+
+class TestParseMusicBrainzGenre(unittest.TestCase):
+    """MusicBrainz 的 genre 可能是字符串/列表/字典列表，必须统一成字符串"""
+
+    def test_string_passthrough(self):
+        self.assertEqual(
+            tagger.parse_musicbrainz_recording({'title': 'x', 'genre': 'Pop'})['genre'], 'Pop')
+
+    def test_list_of_strings(self):
+        rec = {'title': 'x', 'genre': ['Pop', 'Rock']}
+        self.assertEqual(tagger.parse_musicbrainz_recording(rec)['genre'], 'Pop, Rock')
+
+    def test_list_of_dicts(self):
+        rec = {'title': 'x', 'genre': [{'name': 'Pop'}, {'name': 'Rock'}]}
+        self.assertEqual(tagger.parse_musicbrainz_recording(rec)['genre'], 'Pop, Rock')
+
+    def test_no_genre_absent(self):
+        self.assertNotIn('genre', tagger.parse_musicbrainz_recording({'title': 'x'}))
+
+
+class TestFetchBestShortCircuit(unittest.TestCase):
+    def test_short_circuits_on_perfect_score(self):
+        """某个平台已满分就不应再问另一个平台"""
+        qq = FakeQQ([{'name': '晴天', 'singer': [{'name': '周杰伦'}], 'mid': 'm'}])
+        netease = FakeNetease([{'name': '晴天', 'artist': '周杰伦'}])
+        with mock.patch.object(tagger, 'tag_score', return_value=100):
+            best = tagger.fetch_best_tags(qq, netease, '晴天', '周杰伦')
+        self.assertEqual(best['source'], 'QQ音乐')
+        self.assertEqual(netease.fetch_id3_calls, 0)
+
+
+class TestTaggerUpdate(unittest.TestCase):
+    """Tagger.update 端到端：声纹 / 在线平台 / 封面 / 歌词 / 合并策略"""
+
+    def _recording(self, score=100):
+        return {
+            'title': '晴天', 'score': score,
+            'artist-credit': [{'artist': {'name': '周杰伦'}}],
+            'releases': [{'title': '叶惠美', 'date': '2003-07-31', 'id': 'abc'}],
+            'genre': 'Pop',
+        }
+
+    def _make_tagger(self, fingerprint=None, qq=None, netease=None,
+                     with_fingerprint=True, dry_run=False):
+        t = tagger.Tagger(dry_run=dry_run, with_fingerprint=with_fingerprint)
+        t._fingerprint_ready = True
+        t._fingerprint = fingerprint
+        t._online_ready = True
+        t._qq = qq
+        t._netease = netease
+        return t
+
+    def test_fingerprint_fills_and_writes(self):
+        track = Track(path=_copy_fixture())
+        self.addCleanup(shutil.rmtree, os.path.dirname(track.path), True)
+        t = self._make_tagger(fingerprint=FakeFingerprint([self._recording()]))
+        res = t.update(track)
+
+        self.assertTrue(res.updated)
+        self.assertEqual(res.source, 'MusicBrainz(100)')
+        self.assertIn('album', res.fields)
+        got = tagger.core_tags.read_tags(track.path)
+        self.assertEqual(got['album'], '叶惠美')
+        self.assertEqual(got['year'], '2003')
+        self.assertEqual(got['artist'], '周杰伦')
+        self.assertEqual(got['genre'], 'Pop')
+
+    def test_merge_preserves_existing_title(self):
+        """已有非空字段不被声纹结果覆盖，只填空缺"""
+        track = Track(path=_copy_fixture(), tags={'title': '我的歌', 'artist': '我'})
+        self.addCleanup(shutil.rmtree, os.path.dirname(track.path), True)
+        t = self._make_tagger(fingerprint=FakeFingerprint([self._recording()]))
+        res = t.update(track)
+
+        got = tagger.core_tags.read_tags(track.path)
+        # 声纹想写 '晴天'，但文件已有歌名，所以磁盘上既不是 '晴天' 也不是内存里的
+        # '我的歌'（track.tags 只是内存，未变化则不写盘），而是 fixture 原有歌名
+        self.assertEqual(got['title'], '小城故事')   # 未被声纹覆盖
+        self.assertEqual(got['album'], '叶惠美')      # 缺失专辑被补全
+        self.assertNotIn('title', res.fields)
+        self.assertIn('album', res.fields)
+
+    def test_online_fills_lyrics_and_cover(self):
+        lyric = base64.b64encode('歌词内容'.encode()).decode()
+        qq = FakeQQ([{'name': '晴天', 'singer': [{'name': '周杰伦'}],
+                      'album': {'title': '叶惠美'}, 'mid': 'm1'}],
+                    lyric={'lyric': lyric})
+        track = Track(path=_copy_fixture(), tags={'title': '晴天', 'artist': '周杰伦'})
+        self.addCleanup(shutil.rmtree, os.path.dirname(track.path), True)
+        t = self._make_tagger(with_fingerprint=False, qq=qq, netease=None)
+
+        with mock.patch.object(tagger, 'download_cover',
+                              return_value=b'\x89PNG\r\n\x1a\n' + b'\x00' * 20):
+            res = t.update(track)
+
+        self.assertIn('album', res.fields)
+        self.assertTrue(res.lyric)
+        self.assertTrue(res.cover)
+        # 歌词文件确实落盘
+        self.assertTrue(os.path.exists(track.lrc_path))
+        with open(track.lrc_path, 'r', encoding='utf-8') as handle:
+            self.assertEqual(handle.read(), '歌词内容')
+        # 封面确实写入
+        self.assertTrue(tagger.core_tags.has_cover(track.path))
+
+    def test_dry_run_does_not_write(self):
+        lyric = base64.b64encode('歌词内容'.encode()).decode()
+        qq = FakeQQ([{'name': '晴天', 'singer': [{'name': '周杰伦'}],
+                      'album': {'title': '叶惠美'}, 'mid': 'm1'}],
+                    lyric={'lyric': lyric})
+        track = Track(path=_copy_fixture(), tags={'title': '晴天', 'artist': '周杰伦'})
+        self.addCleanup(shutil.rmtree, os.path.dirname(track.path), True)
+        t = self._make_tagger(with_fingerprint=False, qq=qq, dry_run=True)
+
+        with mock.patch.object(tagger, 'download_cover',
+                              return_value=b'\x89PNG\r\n\x1a\n' + b'\x00' * 20):
+            res = t.update(track)
+
+        # 仍然标记「会改动」，但磁盘上一概不动
+        self.assertTrue(res.updated)
+        self.assertTrue(res.lyric)
+        self.assertTrue(res.cover)
+        self.assertFalse(os.path.exists(track.lrc_path))
+        self.assertNotEqual(tagger.core_tags.read_tags(track.path).get('album'), '叶惠美')
+        self.assertFalse(tagger.core_tags.has_cover(track.path))
+
+    def test_skip_when_already_complete(self):
+        """已完整（核心标签+封面+歌词齐）应直接跳过，不再查声纹/网络"""
+        track = Track(path=_copy_fixture(),
+                      tags={'title': 'T', 'artist': 'A', 'album': 'X',
+                            'year': '2000', 'genre': 'Pop'},
+                      has_cover=True)
+        with open(track.lrc_path, 'w', encoding='utf-8') as handle:
+            handle.write('x')
+        self.addCleanup(shutil.rmtree, os.path.dirname(track.path), True)
+
+        fp = FakeFingerprint([self._recording()])
+        qq = FakeQQ([{'name': 'x', 'singer': [{'name': 'y'}]}])
+        t = self._make_tagger(fingerprint=fp, qq=qq, netease=None)
+
+        res = t.update(track)
+        self.assertFalse(res.updated)
+        self.assertEqual(fp.calls, 0)  # 声纹未触发
+        # 没有任何标签被写入
+        self.assertNotEqual(tagger.core_tags.read_tags(track.path).get('title'), '晴天')
+
+    def test_fingerprint_error_is_isolated(self):
+        """声纹抛异常不应中断，应降级到在线/空结果"""
+        track = Track(path=_copy_fixture(), tags={'title': '晴天', 'artist': '周杰伦'})
+        self.addCleanup(shutil.rmtree, os.path.dirname(track.path), True)
+        t = self._make_tagger(fingerprint=FakeFingerprint(raise_error=True),
+                              qq=None, netease=None)
+        res = t.update(track)  # 不应抛异常
+        self.assertFalse(res.updated)
+        self.assertIn('声纹查询失败', res.error)
 
 
 if __name__ == '__main__':

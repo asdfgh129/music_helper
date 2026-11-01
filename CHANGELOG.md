@@ -87,6 +87,26 @@
   记录流程、算法（指纹 → 16 位截断倒排 → 位相似度 → 连通分量）、阈值、声纹库结构、
   平台支持，以及 2026-10-31 的审核结论与待改项。
 
+### 优化
+
+- **标签/歌词更新流程审计后的几处优化**（`tagger/__init__.py`、`core/lyrics.py`）：
+  - `Tagger.update()` 复用扫描阶段缓存的 `track.has_cover`，不再为每个文件多开一次音频去重探测封面；文件名解析 `parse_filename` 也只调一次。
+  - `Tagger.update()` 增加「已完整即跳过」短路：核心标签 + 封面 + 歌词都齐的文件，`_merge`
+    本来也不会覆盖非空字段，远程查询也不会写出任何东西，直接跳过省去声纹/网络开销。
+  - `fetch_best_tags()` 在某一平台已拿满分（100）时立刻停止问另一个平台，省一次网络往返。
+  - `download_cover()` 改用 `stream` 模式，先读响应头 `Content-Length`，声明体积超过
+    `MAX_COVER_SIZE` 就不把整张图拉进内存；并补了 `User-Agent`。
+  - `orphan_lrc()` 先一次性收集所有音频文件主名再用集合判重，避免对每首 `.lrc` 都做
+    `len(AUDIO_EXTENSIONS)` 次 `os.path.exists` 磁盘探测（大库下数量级差异）。
+  - **修复**：MusicBrainz 的 `genre` 可能是字符串 / 标签名列表 / `{'name': ...}` 字典列表，
+    原先直接写进标签会变成 `[...]` 这类脏值；新增 `_normalize_genre()` 统一成逗号分隔字符串。
+  - 歌词写入前增加 `.strip()` 守卫，避免写出空白 `.lrc`；封面/歌词写入仅在非 dry-run 时发生。
+- **测试补齐**：`tests/test_tags.py` 新增 `write_tags`/`write_cover` 写回校验、`_normalize_year`
+  与 `download_cover` 体积拦截；`tests/test_tagger.py` 新增 `Tagger.update()` 端到端用例
+  （声纹填词、合并保留已有字段、在线平台填词 + 封面 + 歌词、dry-run 不落盘、已完整跳过、
+  声纹异常隔离、MusicBrainz genre 归一化）；`tests/test_lyrics.py` 补充 `orphan_lrc` 大小写与
+  多格式配对用例。`Tagger.update()` 此前完全无单测覆盖。
+
 ### 修复
 
 - **QQ 解密「一个都解不开」的根因查清了**（上一版记的「Open 第 2 个 bool 传 true 必抛 /

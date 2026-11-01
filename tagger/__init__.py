@@ -48,6 +48,28 @@ class UpdateResult:
 
 # ---------------- MusicBrainz 解析 ----------------
 
+def _normalize_genre(genre):
+    """把 MusicBrainz 的 genre 归一成字符串
+
+    MusicBrainz 返回的 genre 可能是字符串、标签名列表（['pop', 'rock']）、
+    或 ``{'name': 'pop', ...}`` 的字典列表。直接写进标签会变成 ``[...]`` 这类
+    不可读的脏值，所以统一成逗号分隔的字符串。
+    """
+    if isinstance(genre, str):
+        return genre
+    if isinstance(genre, (list, tuple)):
+        names = []
+        for item in genre:
+            if isinstance(item, dict):
+                name = item.get('name') or item.get('text')
+            else:
+                name = item
+            if name:
+                names.append(str(name))
+        return ', '.join(names)
+    return str(genre)
+
+
 def parse_musicbrainz_recording(recording):
     """把 FingerprintMatcher 返回的 recording 转成统一标签字典"""
     tags = {}
@@ -74,7 +96,7 @@ def parse_musicbrainz_recording(recording):
                 tags['album_img'] = f'https://coverartarchive.org/release/{release["id"]}/front-500.jpg'
 
         if recording.get('genre'):
-            tags['genre'] = recording['genre']
+            tags['genre'] = _normalize_genre(recording['genre'])
     except Exception:  # noqa: BLE001 - 结构异常时返回已解析部分
         pass
     return tags
@@ -187,9 +209,14 @@ def fetch_best_tags(qq_api, netease_api, title, artist):
             tags = fetcher(api, title, artist)
         except Exception:  # noqa: BLE001 - 单平台失败不影响另一个
             continue
-        if tags:
-            tags['source'] = name
-            candidates.append((tag_score(tags, title, artist), tags))
+        if not tags:
+            continue
+        tags['source'] = name
+        score = tag_score(tags, title, artist)
+        candidates.append((score, tags))
+        # 某个平台已拿到满分就不再问另一个平台，省一次网络往返
+        if score >= 100:
+            break
 
     if not candidates:
         return None
@@ -200,14 +227,24 @@ def fetch_best_tags(qq_api, netease_api, title, artist):
 
 
 def download_cover(url):
-    """下载封面，超过 MAX_COVER_SIZE 直接放弃"""
+    """下载封面，超过 MAX_COVER_SIZE 直接放弃
+
+    用 stream 模式先读响应头，声明体积超限就不把整张图拉进内存；
+    对不返回 Content-Length 的服务器仍会下载后按实际大小兜底拦截。
+    """
     try:
         import requests
     except ImportError:
         return None
+    headers = {'User-Agent': f'music-helper/{config.__version__}'}
     try:
-        response = requests.get(url, timeout=15)
+        response = requests.get(url, timeout=15, stream=True, headers=headers)
         if response.status_code != 200:
+            response.close()
+            return None
+        size = response.headers.get('Content-Length')
+        if size and int(size) > config.MAX_COVER_SIZE:
+            response.close()
             return None
         data = response.content
         if not data or len(data) > config.MAX_COVER_SIZE:
@@ -282,6 +319,12 @@ class Tagger:
         merged = dict(current)
         extra = {}
 
+        # 已经齐活（核心标签 + 封面 + 歌词都在）：_merge 从不覆盖非空字段，
+        # 远程查询也不会写出任何东西，直接跳过以省去声纹/网络开销
+        if (track.title and track.artist and track.album and track.year
+                and track.tag('genre') and track.has_cover is True and track.has_lrc):
+            return result
+
         # 第一步：声纹
         matcher = self._get_fingerprint()
         if matcher:
@@ -301,8 +344,9 @@ class Tagger:
         # 第二步：在线平台
         if not result.source:
             qq, netease = self._get_online()
-            title = merged.get('title') or parse_filename(track.filename)[1]
-            artist = merged.get('artist') or parse_filename(track.filename)[0]
+            fn_artist, fn_title = parse_filename(track.filename)
+            title = merged.get('title') or fn_title
+            artist = merged.get('artist') or fn_artist
             if title and (qq or netease):
                 try:
                     found = fetch_best_tags(qq, netease, title, artist)
@@ -323,9 +367,12 @@ class Tagger:
                 core_tags.write_tags(track.path, changed)
             track.tags.update(changed)
 
-        # 封面
+        # 封面：优先用扫描阶段缓存的 has_cover，避免为每行封面判断再开一次文件
         cover_url = extra.get('album_img')
-        if cover_url and not core_tags.has_cover(track.path):
+        has_cover_now = (track.has_cover
+                         if track.has_cover is not None
+                         else core_tags.has_cover(track.path))
+        if cover_url and not has_cover_now:
             data = download_cover(cover_url)
             if data and not self.dry_run:
                 result.cover = core_tags.write_cover(track.path, data)
@@ -335,12 +382,13 @@ class Tagger:
                 result.cover = True
 
         # 歌词
-        if extra.get('lyrics') and not track.has_lrc:
+        lyrics_text = extra.get('lyrics')
+        if lyrics_text and lyrics_text.strip() and not track.has_lrc:
             result.lyric = True
             if not self.dry_run:
                 try:
                     with open(track.lrc_path, 'w', encoding='utf-8') as handle:
-                        handle.write(extra['lyrics'])
+                        handle.write(lyrics_text)
                 except OSError:
                     result.lyric = False
 
