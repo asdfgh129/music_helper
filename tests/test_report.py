@@ -54,6 +54,36 @@ class TestReport(unittest.TestCase):
         self.assertEqual(rows[0], ['类型', '路径', '说明'])
         self.assertEqual(rows[1][0], '重复文件')
 
+    def test_long_table_is_truncated_in_markdown(self):
+        """大库上不能生成上万行的 Markdown 表格，正文只留前 N 条"""
+        result = checker.CheckResult()
+        for index in range(checker.MAX_TABLE_ROWS + 5):
+            result.add(checker.KIND_NO_LRC, f'C:/lib/Artist - Song{index}.flac', '没有同名 .lrc')
+        report = Report('大库')
+        checker.report_into(result, report)
+        text = report.render()
+
+        self.assertEqual(text.count('没有同名 .lrc'), checker.MAX_TABLE_ROWS)
+        self.assertIn(f'共 {checker.MAX_TABLE_ROWS + 5} 条', text)
+        self.assertIn('review-*.csv', text)
+
+        rows = [row for section in report.sections if section.export for row in section.rows]
+        self.assertEqual(len(rows), checker.MAX_TABLE_ROWS + 5)   # CSV 仍是全量
+
+    def test_duplicate_section_lists_full_path(self):
+        """重复明细要带路径，跨年代目录同名时文件名不足以定位"""
+        tracks = [
+            track('C:/lib/2000-2009/2000/Artist - Song.flac', 200, 9000,
+                  title='Song', artist='Artist'),
+            track('C:/lib/tmp/Artist - Song.mp3', 200, 1000,
+                  title='Song', artist='Artist'),
+        ]
+        result = checker.check_library(tracks, [], check_lyrics=False)
+        report = Report('重复')
+        checker.report_into(result, report)
+        markdown = report.render()
+        self.assertIn('C:/lib/tmp/Artist - Song.mp3', markdown)
+
 
 class TestCheck(unittest.TestCase):
     def test_filename_format_finding(self):
@@ -105,6 +135,46 @@ class TestCheck(unittest.TestCase):
         plan = Plan('fix', dry_run=True)
         checker.plan_fixes(result, plan, review_dir=None, rename_canonical=False)
         self.assertTrue(plan.is_empty)
+
+    def test_filename_without_artist_finding_is_fixable_by_tags(self):
+        tracks = [track('C:/lib/晴天.flac', title='晴天', artist='周杰伦',
+                        album='叶惠美', year='2003')]
+        result = checker.check_library(tracks, [], check_lyrics=False, check_duplicates=False)
+        finding = result.by_kind(checker.KIND_FILENAME)[0]
+        self.assertTrue(finding.fixable)
+        self.assertIn('周杰伦 - 晴天.flac', finding.detail)
+
+    def test_plan_fixes_renames_by_tags_only_when_allowed(self):
+        tracks = [track('C:/lib/晴天.flac', title='晴天', artist='周杰伦',
+                        album='叶惠美', year='2003')]
+        result = checker.check_library(tracks, [], check_lyrics=False, check_duplicates=False)
+
+        conservative = Plan('fix', dry_run=True)
+        checker.plan_fixes(result, conservative, review_dir=None, rename_by_tags=False)
+        self.assertTrue(conservative.is_empty)
+
+        aggressive = Plan('fix', dry_run=True)
+        checker.plan_fixes(result, aggressive, review_dir=None, rename_by_tags=True)
+        renames = [op for op in aggressive if op.action == 'rename']
+        self.assertEqual(len(renames), 1)
+        self.assertTrue(renames[0].dst.endswith('周杰伦 - 晴天.flac'))
+
+    def test_duration_unknown_group_is_not_moved(self):
+        """时长读不出来多半是损坏文件，只报告，不自动搬走"""
+        tracks = [
+            track('C:/lib/A - B.flac', 0, 9000, title='B', artist='A', album='x', year='2000'),
+            track('C:/lib/A - B (1).flac', 0, 5000, title='B', artist='A', album='x', year='2000'),
+        ]
+        result = checker.check_library(tracks, [], check_lyrics=False)
+        self.assertEqual(len(result.by_kind(checker.KIND_DUP)), 1)
+        self.assertIn('时长未知', result.by_kind(checker.KIND_DUP)[0].detail)
+
+        plan = Plan('fix', dry_run=True)
+        checker.plan_fixes(result, plan, review_dir='C:/review', move_bad=True,
+                           delete_duplicates=True)
+        actions = [op.action for op in plan]
+        self.assertNotIn('trash', actions)
+        self.assertNotIn('move', actions)
 
 
 if __name__ == '__main__':

@@ -79,6 +79,15 @@ class TestScan(unittest.TestCase):
         self.assertGreater(track.mtime, 0)
         self.assertEqual(track.ext, '.flac')
 
+    def test_cover_not_probed_without_tags(self):
+        """只用文件名时不该为封面付出一次文件解析"""
+        self._touch('a.flac')
+        self.assertIsNone(scanner.scan([self.root], with_tags=False)[0].has_cover)
+
+    def test_cover_filled_when_reading_tags(self):
+        self._touch('a.flac', content='not a real flac')
+        self.assertIs(scanner.scan([self.root], with_tags=True)[0].has_cover, False)
+
 
 if __name__ == '__main__':
     unittest.main()

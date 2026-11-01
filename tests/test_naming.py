@@ -8,10 +8,12 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.naming import (
+    artist_tokens,
     canonicalize,
     format_filename,
     is_audio,
     is_canonical,
+    is_placeholder_artist,
     normalize_key,
     normalize_text,
     parse_filename,
@@ -105,6 +107,30 @@ class TestNaming(unittest.TestCase):
     def test_is_audio(self):
         self.assertTrue(is_audio('a.FLAC'))
         self.assertFalse(is_audio('a.txt'))
+
+    def test_is_audio_extended_formats(self):
+        for ext in ('.m4a', '.opus', '.wma', '.dsf'):
+            self.assertTrue(is_audio(f'a{ext}'), ext)
+
+
+class TestArtistTokens(unittest.TestCase):
+    def test_alias_in_brackets(self):
+        tokens = artist_tokens('周杰伦 (Jay Chou)')
+        self.assertIn('周杰伦', tokens)
+        self.assertIn('jaychou', tokens)
+
+    def test_multi_artist(self):
+        self.assertEqual(artist_tokens('A & B'), {'a', 'b'})
+
+    def test_placeholder_artists(self):
+        for name in ('Various Artists', '群星', 'VA', '未知艺人'):
+            self.assertTrue(is_placeholder_artist(name), name)
+        for name in ('周杰伦', 'Taylor Swift', '周杰伦 feat. 杨瑞代'):
+            self.assertFalse(is_placeholder_artist(name), name)
+
+    def test_empty_artist(self):
+        self.assertEqual(artist_tokens(''), set())
+        self.assertFalse(is_placeholder_artist(''))
 
 
 class TestScoring(unittest.TestCase):

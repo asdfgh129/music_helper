@@ -29,6 +29,12 @@ class TestDedupe(unittest.TestCase):
         self.assertEqual(strip_suffix('晴天（2）'), '晴天')
         self.assertEqual(strip_suffix('晴天'), '晴天')
 
+    def test_strip_underscore_suffix(self):
+        """copy_items / Plan 重名时加的是 _1，必须和 (1) 一样能被识别"""
+        self.assertEqual(strip_suffix('晴天_1'), '晴天')
+        self.assertEqual(strip_suffix('晴天_12'), '晴天')
+        self.assertEqual(strip_suffix('Track_1 (Live)'), 'Track_1 (Live)')
+
     def test_same_tag_and_duration_is_duplicate(self):
         a = track('a.flac', 200, 5000, title='晴天', artist='周杰伦')
         b = track('b.flac', 201, 4000, title='晴天', artist='周杰伦')
@@ -75,6 +81,48 @@ class TestDedupe(unittest.TestCase):
         groups = find_by_filename([a, b])
         self.assertEqual(len(groups), 1)
         self.assertEqual(groups[0].kind, '文件名')
+
+    def test_filename_dimension_ignores_case_and_spaces(self):
+        a = track('C:/lib/a/Artist - Song.flac', 200, 5000)
+        b = track('C:/lib/b/artist - song.flac', 200, 5000)
+        self.assertEqual(len(find_by_filename([a, b])), 1)
+
+    def test_underscore_suffix_group(self):
+        a = track('C:/lib/a/A - B.flac', 200, 5000)
+        b = track('C:/lib/a/A - B_1.flac', 200, 5000)
+        self.assertEqual(len(find_by_filename([a, b])), 1)
+
+    def test_unnamed_file_only_compared_in_same_dir(self):
+        """`Intro.flac` 没有歌手信息，跨目录同名多半是不同曲目，不应判重"""
+        a = track('C:/lib/1980/x/Intro.flac', 200, 5000)
+        b = track('C:/lib/1990/y/Intro.flac', 200, 5000)
+        self.assertEqual(find_by_filename([a, b]), [])
+
+        same_dir = [
+            track('C:/lib/x/Intro.flac', 200, 5000),
+            track('C:/lib/x/Intro (1).flac', 200, 5000),
+        ]
+        self.assertEqual(len(find_by_filename(same_dir)), 1)
+
+    def test_canonical_file_compared_across_dirs(self):
+        a = track('C:/lib/1980/x/Artist - Song.flac', 200, 5000)
+        b = track('C:/lib/1990/y/Artist - Song.flac', 200, 5000)
+        self.assertEqual(len(find_by_filename([a, b])), 1)
+
+    def test_find_duplicates_keeps_unclaimed_remainder(self):
+        """标签维度认领了一个文件，文件名维度剩下的两个仍应成组，不能整组丢掉"""
+        tagged = track('C:/a/S - T.flac', 200, 5000, title='T', artist='S')
+        loose_mp3 = track('C:/a/S - T.mp3', 200, 3000)
+        loose_ogg = track('C:/a/S - T.ogg', 200, 2000)
+        other = track('C:/d/S - T.flac', 200, 5000, title='T', artist='S')
+
+        groups = find_duplicates([tagged, loose_mp3, loose_ogg, other])
+        self.assertEqual(len(groups), 2)
+        kinds = sorted(group.kind for group in groups)
+        self.assertEqual(kinds, ['文件名', '标签'])
+        filename_group = next(g for g in groups if g.kind == '文件名')
+        self.assertEqual(len(filename_group.drop), 1)
+        self.assertEqual(filename_group.keep.ext, '.ogg')
 
     def test_find_duplicates_merges_strategies(self):
         a = track('晴天.flac', 200, 5000, title='晴天', artist='周杰伦')

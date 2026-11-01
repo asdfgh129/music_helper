@@ -65,6 +65,31 @@ class TestSplitIncomplete(unittest.TestCase):
         self.assertFalse(os.path.exists(self.incomplete_dir))
 
 
+class TestCheckEntry(unittest.TestCase):
+    """检查入口必须拒绝不存在的目录，否则「零问题」会被误读成「库很健康」"""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix='mh_check_')
+        self.missing = os.path.join(self.root, 'no-such-library')
+        self.args = SimpleNamespace(dry_run=True, fix=False, no_move=False,
+                                    trash_dup=False, report_dir=None, limit=0)
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_flow_check_returns_none_when_library_missing(self):
+        with patch.object(config, 'LIBRARY_DIR', self.missing):
+            self.assertIsNone(main.flow_check(self.args))
+
+    def test_require_dir_rejects_missing(self):
+        self.assertFalse(main._require_dir(self.missing, '音乐库'))
+        self.assertTrue(main._require_dir(self.root, '音乐库'))
+
+    def test_only_check_file_name_returns_error_code(self):
+        with patch.object(config, 'LIBRARY_DIR', self.missing):
+            self.assertEqual(main.main(['--only-check-file-name', 'master']), 1)
+
+
 class TestManualArchive(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix='mh_archive_')
