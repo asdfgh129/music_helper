@@ -10,10 +10,13 @@
 
 注意：归还与清理都只针对「本次运行移入暂存区的那几个文件」，不会遍历 VIP 目录或
 暂存区顶层，因此不会误搬用户的其他文件。
+
+外部程序：网易云的 `.ncm` 三平台都调 `um`（`decrypto/um.py` 负责按平台取程序并预检）；
+QQ 由 `decrypto/qq.py` 自己选通道——Windows 优先 Frida，其余情况用 `um` 离线解密。
+本模块不判断平台，只负责编排与加密原文件的去向。
 """
 
 import os
-import subprocess
 import time
 from dataclasses import dataclass
 
@@ -50,34 +53,8 @@ def _snapshot(directory, exclude=None):
     return result
 
 
-def _run(cmd, logger=None):
-    if logger:
-        logger.info(f'执行命令: {" ".join(str(part) for part in cmd)}')
-    try:
-        completed = subprocess.run(
-            [str(part) for part in cmd],
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            timeout=config.SUBPROCESS_TIMEOUT,
-            check=False,
-        )
-    except FileNotFoundError:
-        return None, f'找不到可执行文件: {cmd[0]}'
-    except subprocess.TimeoutExpired:
-        return None, f'执行超时（>{config.SUBPROCESS_TIMEOUT}s）'
-
-    if logger:
-        if completed.stdout:
-            logger.info(f'标准输出:\n{completed.stdout.strip()}')
-        if completed.stderr:
-            logger.warning(f'标准错误:\n{completed.stderr.strip()}')
-    return completed, ''
-
-
 def decrypt_netease(month=None, dry_run=False, logger=None):
-    """网易云 .ncm 解密"""
+    """网易云 .ncm 解密（um，三平台同一套参数）"""
     return _decrypt(
         name='网易云',
         vip_dir=config.NETEASE_VIP_DIR,
@@ -86,9 +63,17 @@ def decrypt_netease(month=None, dry_run=False, logger=None):
         month=month,
         dry_run=dry_run,
         logger=logger,
-        runner=lambda: _run([config.UM_EXE, '-i', config.NETEASE_STAGING_DIR,
-                             '-o', config.WORKSPACE_DIR], logger),
+        runner=lambda: _run_um(config.NETEASE_STAGING_DIR, config.WORKSPACE_DIR, logger),
     )
+
+
+def _run_um(input_dir, output_dir, logger=None):
+    """调 um 解密一个目录（.ncm 不需要 mmkv 与密钥）"""
+    try:
+        from decrypto import um
+    except Exception as exc:  # noqa: BLE001
+        return None, f'um 解密模块不可用: {exc}'
+    return um.run(input_dir, output_dir, mmkv='', key='', logger=logger)
 
 
 def decrypt_qq(month=None, dry_run=False, logger=None):
@@ -102,7 +87,29 @@ def decrypt_qq(month=None, dry_run=False, logger=None):
         dry_run=dry_run,
         logger=logger,
         runner=lambda: _run_qq(logger),
+        precheck=lambda: _precheck_qq(logger),
     )
+
+
+def _precheck_qq(logger=None):
+    """解密前检查客户端是否安装/启动/已登录
+
+    放在搬运文件之前，环境不就绪就直接跳过——否则会白搬一趟（虽然会还原）。
+    检查逻辑全部在 decrypto/qq_client.py，这里只做结果转换。
+    """
+    try:
+        from decrypto import qq_client
+    except Exception as exc:  # noqa: BLE001 - 模块问题交给 runner 报错
+        if logger:
+            logger.debug(f'qq_client 不可用: {exc}')
+        return True, ''
+    try:
+        ready = qq_client.ensure_ready(logger)
+    except Exception as exc:  # noqa: BLE001
+        return False, f'QQ 音乐环境检查失败: {exc}'
+    if ready:
+        return True, ''
+    return False, 'QQ 音乐环境未就绪（未安装 / 未启动 / 未登录），已跳过解密'
 
 
 def _run_qq(logger=None):
@@ -111,13 +118,16 @@ def _run_qq(logger=None):
     except Exception as exc:  # noqa: BLE001
         return None, f'decrypto 模块不可用: {exc}'
     try:
-        run_decrypt(config.QQ_STAGING_DIR, config.WORKSPACE_DIR, logger=logger)
+        # 环境已由 _precheck_qq 检查过，这里不再重复启动/等待
+        run_decrypt(config.QQ_STAGING_DIR, config.WORKSPACE_DIR, logger=logger,
+                    ensure_client=False)
     except Exception as exc:  # noqa: BLE001
         return None, f'解密异常: {exc}'
     return None, ''
 
 
-def _decrypt(name, vip_dir, tmp_dir, vip_exts, month, dry_run, logger, runner):
+def _decrypt(name, vip_dir, tmp_dir, vip_exts, month, dry_run, logger, runner,
+             precheck=None):
     result = DecryptResult(name=name)
 
     if not os.path.isdir(vip_dir):
@@ -138,12 +148,22 @@ def _decrypt(name, vip_dir, tmp_dir, vip_exts, month, dry_run, logger, runner):
                    journal_path=config.JOURNAL_PATH, trash_dir=config.TRASH_DIR)
     for track in encrypted:
         move_in.add_move(track.path, os.path.join(tmp_dir, track.filename), '移入解密暂存区')
-    move_in.execute()
 
     if dry_run:
         result.ok = True
         result.message = f'[dry-run] 拟解密 {len(encrypted)} 个文件'
         return result
+
+    # 环境检查放在搬运之前：不就绪时加密文件原地不动
+    if precheck:
+        ok, message = precheck()
+        if not ok:
+            result.message = message
+            if logger:
+                logger.error(message)
+            return result
+
+    move_in.execute()
 
     started = time.time()
     completed, error = runner()

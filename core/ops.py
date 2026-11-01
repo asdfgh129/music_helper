@@ -9,6 +9,7 @@
 4. 支持 dry_run，先出计划再执行。
 """
 
+import errno
 import json
 import os
 import shutil
@@ -58,6 +59,37 @@ def _unique_path(path):
     while os.path.exists(f'{stem}_{index}{ext}'):
         index += 1
     return f'{stem}_{index}{ext}'
+
+
+def _same_path(left, right):
+    """两个路径是否指向同一个文件（Windows 上忽略大小写）"""
+    return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
+
+
+def _move_file(src, dst):
+    """移动单个文件
+
+    同盘用 os.replace（原子改名）；跨盘先复制到 .part、校验大小，再改名、最后删源。
+    `shutil.move` 跨盘时直接往目标路径写，中途被打断会留下一个截断的目标文件。
+    """
+    try:
+        os.replace(src, dst)
+        return
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+
+    part = dst + '.part'
+    try:
+        shutil.copy2(src, part)
+        if os.path.getsize(part) != os.path.getsize(src):
+            raise OSError('复制后大小不一致，已放弃这次移动')
+        os.replace(part, dst)
+    except BaseException:
+        if os.path.exists(part):
+            os.unlink(part)          # 只清理自己刚建出来的临时文件
+        raise
+    os.unlink(src)
 
 
 class Plan:
@@ -132,13 +164,23 @@ class Plan:
             os.makedirs(self.trash_dir, exist_ok=True)
             dst = _unique_path(os.path.join(self.trash_dir, os.path.basename(op.src)))
         else:
-            dst = _unique_path(op.dst)
-            parent = os.path.dirname(dst)
+            parent = os.path.dirname(op.dst)
             if parent:
                 os.makedirs(parent, exist_ok=True)
+            if op.action == RENAME:
+                if _same_path(op.src, op.dst):
+                    dst = op.dst          # 只改大小写，目标「已存在」就是它自己
+                elif os.path.exists(op.dst):
+                    # 静默加 _1 会造出一个查不出来的重复文件，宁可失败也要留痕
+                    raise RuntimeError(
+                        f'目标已存在，拒绝改名以免产生重复: {os.path.basename(op.dst)}')
+                else:
+                    dst = op.dst
+            else:
+                dst = _unique_path(op.dst)
 
         op.dst = dst
-        shutil.move(op.src, dst)
+        _move_file(op.src, dst)
         self._move_companion_lrc(op.src, dst)
         self._journal(op, True, '')
         return True
@@ -153,7 +195,7 @@ class Plan:
             return
         dst_lrc = _unique_path(os.path.splitext(dst)[0] + '.lrc')
         try:
-            shutil.move(src_lrc, dst_lrc)
+            _move_file(src_lrc, dst_lrc)
         except Exception:  # noqa: BLE001 - 歌词失败不影响主文件
             pass
 

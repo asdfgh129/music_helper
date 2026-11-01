@@ -1,5 +1,7 @@
 # 运行依赖
-frida>=16.0.0            # QQ 音乐解密（Frida 注入）
+# frida 上限钉死：17.25.0 在 Windows 10 21H2 上注入任何进程都会
+# "Unable to locate the ntdll loader TLS routines" 直接崩掉（17.3.2 正常）
+frida>=17.0.0,<17.25.0  # QQ 音乐解密（Frida 注入）
 requests>=2.31.0         # 各平台 API / 封面下载
 mutagen>=1.45.1          # 标签读写（core/tags.py）
 music-tag>=0.4.3         # music_tagger 平台客户端（PyPI 最高版本为 0.4.3）

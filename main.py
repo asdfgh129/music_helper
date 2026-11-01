@@ -41,6 +41,7 @@ EPILOG = '''
   python main.py --only-archive          # 只对工作区做年份归档
   python main.py --init                  # 初始化/更新声纹库
   python main.py --checkdb               # 检查声纹库与文件一致性
+  python main.py --soundalike-report     # 只列出重复候选组，不移动文件
 '''
 
 
@@ -75,7 +76,10 @@ def build_parser():
     parser.add_argument('--check', action='store_true', help=f'检查最终库 {config.LIBRARY_DIR}')
     parser.add_argument('--fix', action='store_true', help='--check 时执行修复动作（默认只报告）')
     parser.add_argument('--init', action='store_true', help='初始化/更新声纹库（不含工作区）')
-    parser.add_argument('--soundalike', action='store_true', help='运行声纹去重')
+    parser.add_argument('--soundalike', action='store_true',
+                        help='运行声纹去重（音质差的自动移入 DUPLICATE_DIR，音质相同才询问）')
+    parser.add_argument('--soundalike-report', action='store_true',
+                        help='只列出声纹候选组，不移动文件（会刷新声纹库缓存）')
     parser.add_argument('--checkdb', action='store_true', help='检查声纹库与目录文件一致性')
     parser.add_argument('--archive', action='store_true', help='WORKSPACE_DIR 归档（等同于默认流程）')
     parser.add_argument('--archive-manual', '--manual-archive', dest='manual_archive',
@@ -130,6 +134,19 @@ def _limited(tracks, args):
     return tracks
 
 
+def _require_dir(path, what):
+    """检查目标目录是否存在
+
+    扫描不存在的目录只会得到空列表，报告看起来「零问题」，
+    比报错更危险：用户会以为库是健康的。
+    """
+    if os.path.isdir(path):
+        return True
+    utils.main_logger.error(f'{what}不存在，无法检查: {path}')
+    utils.main_logger.error('检查 config.ini 的 paths.* 或对应的 MUSIC_HELPER_* 环境变量')
+    return False
+
+
 def _copy_normal_files(month, args, dry_run=False):
     """下载目录中的普通文件拷贝到 WORKSPACE_DIR（排除 VIP 子目录）"""
     items = []
@@ -177,7 +194,7 @@ def _check(directories, args, title, allow_fix, report=None, move_bad=False,
         review_dir: 标签严重缺失/文件名矛盾的目标目录
         dup_dir: 重复文件的目标目录
     """
-    tracks = _limited(scanner.scan(directories), args)
+    tracks = _limited(scanner.scan(directories, with_tags=not only_filename), args)
     utils.main_logger.info(f'扫描到 {len(tracks)} 个音频文件')
     result = checker.check_library(
         tracks, directories,
@@ -198,6 +215,8 @@ def _check(directories, args, title, allow_fix, report=None, move_bad=False,
             move_bad=move_bad,
             delete_duplicates=args.trash_dup,
             dup_dir=dup_dir if dup_dir is not None else config.DUPLICATE_DIR,
+            # 只查文件名时没读标签，无法按标签补全文件名
+            rename_by_tags=not only_filename,
         )
         _execute(plan, args)
 
@@ -276,11 +295,42 @@ def flow_decrypt(month, args, report=None):
 
 
 def flow_dedupe(args, with_temp=True):
-    utils.main_logger.info(f'运行声纹去重（含工作区: {with_temp}）')
+    """声纹去重
+
+    取舍规则（由 soundalike 执行）：音质能分出高下时，较差的那份直接移入
+    `DUPLICATE_DIR`，不需要人工确认；只有同格式同码率（分不出高下）时才要求
+    挑一个保留，非交互运行下则一个都不动。
+
+    `-temp` 用「第一个音乐目录」推算相对路径，跨盘会直接失败，所以不同盘时
+    先退化成只比对 LIBRARY_DIR，并说明工作区这轮不参与。
+    """
+    if with_temp and not soundalike.temp_supported():
+        utils.main_logger.warning(
+            f'工作区 {config.WORKSPACE_DIR} 与音乐库 {config.LIBRARY_DIR} 不在同一盘，'
+            f'soundalike -temp 无法处理，本次只比对音乐库')
+        with_temp = False
+    dry_run = bool(getattr(args, 'dry_run', False))
+    if dry_run:
+        utils.main_logger.info(f'[试运行] 声纹去重只打印将移动的文件，不移动、不改库（含工作区: {with_temp}）')
+    else:
+        utils.main_logger.info(f'运行声纹去重（含工作区: {with_temp}，音质差的自动移走）')
     if not soundalike.db_exists():
         utils.main_logger.info(f'声纹库不存在，将由 soundalike 扫描 {config.LIBRARY_DIR} 自动建库')
-    result = soundalike.run(debug=args.debug, with_temp=with_temp)
+    result = soundalike.run(debug=args.debug, with_temp=with_temp, dry_run=dry_run)
     utils.main_logger.info(f'声纹去重: {result.summary()}')
+    return result
+
+
+def flow_dedupe_report(args):
+    """只列声纹候选组，不动文件（`--soundalike-report`）"""
+    with_temp = soundalike.temp_supported()
+    if not with_temp:
+        utils.main_logger.warning(
+            f'工作区 {config.WORKSPACE_DIR} 与音乐库 {config.LIBRARY_DIR} 不在同一盘，'
+            f'本次只比对音乐库')
+    utils.main_logger.info('声纹去重（只列候选组，不移动文件）')
+    result = soundalike.report(debug=args.debug, with_temp=with_temp)
+    utils.main_logger.info(f'声纹候选清单: {result.summary()}')
     return result
 
 
@@ -299,11 +349,8 @@ def flow_pipeline(month, args):
         utils.main_logger.info('已跳过 VIP 解密与普通文件拷贝')
 
     if not args.skip_fingerprint:
-        if args.dry_run:
-            utils.main_logger.info('[试运行] 跳过声纹去重（外部工具无 dry-run）')
-        else:
-            result = flow_dedupe(args, with_temp=True)
-            report.add_summary('声纹去重', result.summary())
+        result = flow_dedupe(args, with_temp=True)
+        report.add_summary('声纹去重', result.summary())
     else:
         utils.main_logger.info('已跳过声纹去重')
 
@@ -333,7 +380,14 @@ def flow_pipeline(month, args):
 
 
 def flow_check(args):
-    """最终库检查"""
+    """最终库检查
+
+    Returns:
+        Report；目标目录不存在时返回 None（调用方据此给出非 0 退出码）
+    """
+    if not _require_dir(config.LIBRARY_DIR, '音乐库'):
+        return None
+
     report = Report(f'最终库检查（{config.LIBRARY_DIR}）')
     start = time.time()
 
@@ -434,6 +488,10 @@ def main(argv=None):
         result = flow_dedupe(args, with_temp=True)
         return 0 if result.ok else 1
 
+    if args.soundalike_report:
+        result = flow_dedupe_report(args)
+        return 0 if result.ok else 1
+
     if args.only_decrypt:
         month = _resolve_month(args)
         if month is None:
@@ -448,6 +506,8 @@ def main(argv=None):
 
     if args.only_check_file_name:
         target = config.LIBRARY_DIR if args.only_check_file_name == 'master' else config.WORKSPACE_DIR
+        if not _require_dir(target, '目标目录'):
+            return 1
         _check([target], args, '文件名检查', allow_fix=args.fix, only_filename=True,
                review_dir=config.INCOMPLETE_DIR, dup_dir=config.DUPLICATE_DIR)
         return 0
@@ -462,8 +522,7 @@ def main(argv=None):
         return 0
 
     if args.check:
-        flow_check(args)
-        return 0
+        return 0 if flow_check(args) is not None else 1
 
     month = _resolve_month(args)
     if month is None:

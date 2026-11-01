@@ -30,10 +30,16 @@ G:\QQMusic\（普通文件）           ┘             └─► G:\Tmp      �
 
 1. 在 `NETEASE_VIP_DIR` / `QQ_VIP_DIR` 顶层按扩展名找加密文件（不递归）；
 2. 把本次要处理的文件移入 `NETEASE_STAGING_DIR` / `QQ_STAGING_DIR`（都在 `<WORKSPACE_DIR>\_decrypt` 下）；
-3. 网易云调用 `um.exe -i <暂存目录> -o <WORKSPACE_DIR>`；QQ 调用 Frida 脚本输出到 `WORKSPACE_DIR`；
-4. 用**运行前后的文件快照差集**判断是否真的产出，不只看外部程序返回码；
-5. 加密原文件按 `encrypted_source_mode` 归还 / 回收 / 保留；
-6. 失败时把本次移入的加密文件原样还回 VIP 目录。
+3. 网易云调用 `um -i <暂存目录> -o <WORKSPACE_DIR>`（三平台同一套参数）；
+4. QQ 按平台选通道：Windows 优先 Frida 注入正在运行的客户端；macOS / Linux，以及 Windows 上
+   没装 frida 或客户端没开时，用 `um` **逐个文件**离线解密（`.mflac → .flac`、`.mgg → .ogg`）。
+   新版 qmc 需要 `qmc_mmkv` + `qmc_mmkv_key`，见 [configuration.md](configuration.md#31-qq-音乐解密凭据qmc_mmkv--qmc_mmkv_key)；
+5. 用**运行前后的文件快照差集**判断是否真的产出，不只看外部程序返回码；
+6. 加密原文件按 `encrypted_source_mode` 归还 / 回收 / 保留；
+7. 失败时把本次移入的加密文件原样还回 VIP 目录。
+
+为什么 QQ 逐个文件调：`um` 处理整个目录时，只要有一个文件解不开就 `FATAL` 退出，后面的
+文件全都不处理。逐个调能把坏文件隔离出去，其他文件照常产出，日志也能精确到文件。
 
 ### 2.3 拷贝普通文件
 
@@ -45,16 +51,36 @@ G:\QQMusic\（普通文件）           ┘             └─► G:\Tmp      �
 调用：
 
 ```text
-soundalike.exe -db <DB_PATH> -move-interactive <DUPLICATE_DIR> -temp <WORKSPACE_DIR> <LIBRARY_DIR>
+soundalike -db <DB_PATH> -fpcalc-length <FPCALC_LENGTH> -file-regexp <RE> \
+           -move-interactive <DUPLICATE_DIR> [-dry-run] -temp <WORKSPACE_DIR> <LIBRARY_DIR>
 ```
 
 - `-db` 固定指向 `DB_PATH`，程序的工作目录也设到库文件所在目录，避免「库建在启动目录」；
+- `-fpcalc-length` 固定取 `config.FPCALC_LENGTH`，与补标签用的指纹长度保持一致；
+- `-file-regexp` 由 `config.AUDIO_EXTENSIONS` 并入 soundalike 内置格式后生成，保证
+  `.dsf/.dff` 这类格式也参与比对（内置正则不含 dsf）；
 - `-temp` 让工作区参与比对，但不写入声纹库；
 - `LIBRARY_DIR` 作为音乐目录参与建库与比对；
-- 重复文件由 soundalike 交互式移入 `DUPLICATE_DIR`（`--trash-dup` 不影响这一步）；
-- `DB_PATH` 不存在时，soundalike 会扫描 `LIBRARY_DIR` 自动建库，这就是首次初始化。
+- `DB_PATH` 不存在时，soundalike 会扫描 `LIBRARY_DIR` 自动建库，这就是首次初始化；
+- 调用时会把 `tools/` 临时前置到 `PATH`，让外部程序找到随仓库分发的 `fpcalc`。
 
-该步骤**没有 dry-run**：`--dry-run` 下整步跳过，并在日志中说明。
+**谁保留谁移走以音质为准**，移走音质差的那份不需要人工确认：
+
+1. 格式层级：`.dsf/.dff`(DSD) > `.wav/.aif`(PCM) > `.flac/.ape`(无损压缩) >
+   `.m4a`(AAC/ALAC) > `.mp3/.ogg/.opus` > `.wma`；
+2. 同层级比码率（`size*8/duration` 估算），差 ≥2% 才算更好；
+3. 比最好那份差的，直接移入 `DUPLICATE_DIR`，不问；
+4. 只有音质**完全一样**的几个才列序号问「保留哪个」，回车 = 全部保留；
+5. 认不出的扩展名不参与自动判断，整组退回人工。
+
+`-temp` 依赖「相对第一个音乐目录」推算路径，**跨盘会直接失败**。检测到
+`WORKSPACE_DIR` 与 `LIBRARY_DIR` 不同盘时，本步骤退化为只比对音乐库，并在日志里告警。
+
+`--dry-run` 会真跑一次试运行：复用库里已有指纹、打印完整计划（含自动移走的那部分），
+但不动文件、不写库；`--soundalike-report` 是它的别名。
+
+算法细节（倒排筛选、位相似度、连通分量、阈值）与已知缺陷见
+[fingerprint.md](fingerprint.md#8-声纹查重soundalike)。
 
 ### 2.5 补标签
 
@@ -79,11 +105,14 @@ soundalike.exe -db <DB_PATH> -move-interactive <DUPLICATE_DIR> -temp <WORKSPACE_
 `--fix` 只在检查阶段开启修复计划：
 
 - 重复文件：`--trash-dup` 进回收站，否则移入 `DUPLICATE_DIR`；
+- 「时长未知」的重复组只报告，不移动——读不出时长多半是文件损坏，交人工；
 - **只有**歌曲名/歌手缺失、文件名与标签矛盾这类 `severe` 问题才移入 `INCOMPLETE_DIR`；
 - 缺封面、缺专辑、缺年份只报告，不移动文件；
-- 单个 `-` 的文件名做分隔符规范化。
+- 单个 `-` 的文件名做分隔符规范化；
+- 文件名缺「歌手 - 歌名」结构、但标签齐全可信时，按标签补全文件名。
 
 主流水线默认执行这些修复（`--no-move` 可关闭移动，`--dry-run` 只出计划）。
+规则细节见 [rules.md](rules.md#7-修复范围)。
 
 ### 2.7 待补全分流
 
@@ -91,8 +120,8 @@ soundalike.exe -db <DB_PATH> -move-interactive <DUPLICATE_DIR> -temp <WORKSPACE_
 
 | 条件 | 去向 |
 |---|---|
-| 有歌曲名、歌手、专辑、年份，且文件名与标签不矛盾 | 留在 `WORKSPACE_DIR` |
-| 缺少任一核心字段，或文件名与标签矛盾 | `INCOMPLETE_DIR` |
+| 有歌曲名、歌手、专辑、年份（年份可解析），且文件名与标签不矛盾 | 留在 `WORKSPACE_DIR` |
+| 缺少任一核心字段、年份解析不出，或文件名与标签矛盾 | `INCOMPLETE_DIR` |
 
 封面与歌词不参与判断。分离后 `WORKSPACE_DIR` 顶层只剩完整文件与非音频文件。
 
@@ -113,10 +142,11 @@ soundalike.exe -db <DB_PATH> -move-interactive <DUPLICATE_DIR> -temp <WORKSPACE_
 
 ## 4. 最终库检查（`--check`）
 
-1. `soundalike -check -db <DB_PATH> <LIBRARY_DIR>` 校验声纹库与文件系统一致性；
-2. 对 `LIBRARY_DIR` 执行与 2.6 相同的检查；
-3. `--fix` 时按同一套修复规则移动/改名/回收；
-4. 生成 Markdown 报告与 CSV 待处理清单。
+1. 目录校验：`LIBRARY_DIR` 不存在直接报错退出（退出码 1），不会产出一份「零问题」的假报告；
+2. `soundalike -check -db <DB_PATH> <LIBRARY_DIR>` 校验声纹库与文件系统一致性（`--dry-run` 跳过）；
+3. 对 `LIBRARY_DIR` 执行与 2.6 相同的检查；
+4. `--fix` 时按同一套修复规则移动/改名/回收；
+5. 生成 Markdown 报告与 CSV 待处理清单。
 
 ## 5. 失败处理与可回滚性
 

@@ -99,6 +99,48 @@ def split_artist(artist):
     return [a for a in result if a]
 
 
+# 合辑/未知歌手这类占位串没有可比性，一致性检查遇到时应放弃该维度而不是判矛盾
+_PLACEHOLDER_ARTISTS = frozenset({
+    'variousartists', 'various', 'va', '群星', '合集', '合辑', '精选集',
+    'unknown', 'unknownartist', '未知', '未知艺人', '佚名', 'anonymous',
+})
+
+
+def is_placeholder_artist(text):
+    """是否为「群星/未知」这类占位歌手名
+
+    `合辑`里每个文件的标签歌手都是 `Various Artists`，而文件名通常是具体歌手；
+    这类差异不是错误，按矛盾处理会把整张合辑搬进待补全目录。
+    """
+    if not text:
+        return False
+    entries = split_artist(text) or [str(text)]
+    return all(normalize_text(name) in _PLACEHOLDER_ARTISTS for name in entries)
+
+
+def artist_tokens(artist):
+    """把歌手串拆成可比较的 token 集合
+
+    收录三种写法：拆分后的每个歌手、去掉别名括号的主名、括号里的别名。
+    `周杰伦 (Jay Chou)` -> {'周杰伦(jaychou)', '周杰伦', 'jaychou'}
+    """
+    tokens = set()
+    for name in split_artist(artist):
+        norm = normalize_text(name)
+        if norm:
+            tokens.add(norm)
+        base = normalize_text(_BRACKET.sub('', name))
+        if base:
+            tokens.add(base)
+        for inner in _BRACKET.findall(name):
+            for part in split_artist(inner):
+                norm_inner = normalize_text(part)
+                if norm_inner:
+                    tokens.add(norm_inner)
+    return tokens
+
+
+
 def parse_filename(filename):
     """解析文件名为 (artist, title)
 

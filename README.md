@@ -22,7 +22,8 @@ Python 音乐库流水线：**解密 → 去重 → 补标签 → 检查 → 分
 - **待补全分流**：核心标签齐全且无矛盾的文件留在工作区，其余移入 `INCOMPLETE_DIR`。
 - **按年份归档**：`<年代>/<年份>/` 两级目录，例如 `1980-1989/1985/`。
 - **人工确认入库**：`--manual-archive` 才把工作区文件并入最终库。
-- **VIP 解密**：网易云 `.ncm`（`um.exe`）、QQ 音乐 `.mflac/.mgg`（Frida）。
+- **VIP 解密**：网易云 `.ncm`（`um.exe`）、QQ 音乐 `.mflac/.mgg`（Frida 注入运行中的
+  客户端）。QQ 这条链路会自动检查客户端是否安装、启动、登录，缺哪一步补哪一步。
 
 ## 快速开始
 
@@ -89,7 +90,8 @@ music_helper/
 ├── decrypto/               # QQ 音乐 Frida 调用与来源检索
 ├── fingerprint/            # AcoustID / MusicBrainz 指纹匹配
 ├── music_tagger/           # 平台客户端（QQ 音乐、网易云）
-├── tools/                  # um.exe、soundalike.exe、Frida hook
+├── tools/                  # um.exe、soundalike.exe、fpcalc、Frida hook
+├── third_party/            # 上述外部程序的源码（um / soundalike / chromaprint）
 ├── tests/                  # 单元测试 + manual/ 手工脚本 + fixtures/ 样本
 ├── docs/                   # 用户与开发文档
 ├── scripts/                # 文档校验、git 出境代理
@@ -125,13 +127,27 @@ music_helper/
 
 ## 已知限制
 
-- QQ 解密依赖 Frida 与正在运行的 QQMusic 客户端，仅 Windows。
-- `soundalike.exe` 是 Windows 二进制；macOS/Linux 上无法执行，只能跳过该步骤。
+- QQ 解密依赖 Frida 与正在运行的 QQMusic 客户端，**仅 Windows**。解密前会自动做三件事
+  （见 `decrypto/qq_client.py`）：
+  1. 检测客户端是否安装——Windows 读注册表 `Install` 值 + 常见路径；没装就装
+     `tools/QQMusic_Setup_1951.exe`，再打 `tools/Q音屏蔽更新.zip` 补丁（客户端升级会让
+     Frida 依赖的 MSVC 修饰导出名变化，脚本随即失效，所以补丁是解密能力的一部分）。
+  2. 客户端没启动就启动它。
+  3. 确认已登录——未登录时 `EncAndDesMediaFile::Open` 直接抛 `system error`，每个文件都会
+     失败；所以未登录会提示扫码并轮询等待（`qq_login_timeout` 控制等待时长）。
+
+  macOS 版是 Mach-O，没有 `QQMusicCommon.dll` 也没有那套导出名，Frida 定位不到函数，
+  因此 **macOS 固定走 `um` 离线解密**：安装/启动/打补丁照做，登录态只能提示用户自行确认。
+  想要免密钥效果，用 `tools/QQMusicMac_Mgr_8.8.0_20230903.dmg` 装 2023.09.03 及更早的
+  客户端——那之前的版本下载的 `.mflac` 密钥内嵌在文件里，`um` 直接能解。
+- 声纹工具是三平台二进制（`tools/soundalike.exe`、`tools/soundalike-darwin-<arch>`），
+  Linux 上需要自己编一份放进 `tools/`。
 - 声纹工具是黑盒，同曲不同版本（Live/Remix/伴奏）可能给出高相似度，详见
   [docs/fingerprint.md](docs/fingerprint.md)。
 - 在线标签查询只走 QQ 音乐与网易云。
-- 仓库内含测试样本 `tests/fixtures/1.flac` 与两个 exe（`tools/um.exe`、
-  `tools/soundalike.exe`），保持随仓库分发以便开箱即用。
+- 仓库内含测试样本 `tests/fixtures/1.flac` 与 `tools/` 下的三平台外部程序，保持随仓库分发
+  以便开箱即用；它们的源码在 `third_party/`，重编方法与旧版 QQ 音乐客户端的说明见
+  [third_party/README.md](third_party/README.md)。
 
 ## 开发与测试
 

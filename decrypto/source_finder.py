@@ -58,11 +58,16 @@ def _best_match_songmid(resp_json, artist: str, title: str):
     return best_mid
 
 def guess_song_url(file_basename: str) -> str | None:
-    artist, title = parse_filename_to_artist_title(file_basename)
-    resp = _qq_search_api(artist, title)
-    if not resp:
+    # 查链接属于附赠信息：网络不通、接口改版、返回非 JSON 都只该让链接为空，
+    # 不能让解密主流程跟着失败（_record 是在每个文件解完之后调用的）。
+    try:
+        artist, title = parse_filename_to_artist_title(file_basename)
+        resp = _qq_search_api(artist, title)
+        if not resp:
+            return None
+        mid = _best_match_songmid(resp, artist, title)
+        if not mid:
+            return None
+        return f"https://y.qq.com/n/ryqq/songDetail/{mid}"
+    except Exception:  # noqa: BLE001 - 查询失败不影响解密
         return None
-    mid = _best_match_songmid(resp, artist, title)
-    if not mid:
-        return None
-    return f"https://y.qq.com/n/ryqq/songDetail/{mid}"

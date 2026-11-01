@@ -39,7 +39,10 @@ def month_of(path):
 
 
 def build_track(path, with_tags=True):
-    """构造 Track 对象"""
+    """构造 Track 对象
+
+    with_tags=True 时只打开文件一次，同时拿到标签、时长与封面探测结果。
+    """
     stat = os.stat(path)
     track = Track(
         path=os.path.abspath(path),
@@ -47,8 +50,10 @@ def build_track(path, with_tags=True):
         mtime=stat.st_mtime,
     )
     if with_tags:
-        track.tags = tags_reader.read_tags(track.path)
-        track.duration = tags_reader.duration(track.path)
+        tags, duration, cover = tags_reader.read_meta(track.path)
+        track.tags = tags
+        track.duration = duration
+        track.has_cover = cover
     return track
 
 

@@ -19,6 +19,8 @@ class Track:
     duration: float = 0.0
     size: int = 0
     mtime: float = 0.0
+    # 扫描阶段顺带记录的封面探测结果；None 表示「还没探测」，需要时现场读
+    has_cover: object = None
 
     # ---------- 基础属性 ----------
 

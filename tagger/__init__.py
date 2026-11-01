@@ -11,6 +11,7 @@
 缺失时只降级对应能力，不影响程序启动。
 """
 
+import os
 from dataclasses import dataclass, field
 
 import config
@@ -19,6 +20,16 @@ from core.naming import parse_filename
 from core.scoring import tag_score
 
 TAG_KEYS = ('title', 'artist', 'album', 'year', 'genre')
+
+
+def _fpcalc_hint():
+    """tools/fpcalc 存在就返回它，否则返回 None 让上游查 PATH
+
+    macOS 上 fpcalc 随仓库放在 tools/，不在 PATH 里；Windows 一般装在
+    System32，所以这里只在文件确实存在时才覆盖。
+    """
+    path = getattr(config, 'FPCALC_EXE', '')
+    return path if path and os.path.isfile(path) else None
 
 
 @dataclass
@@ -231,7 +242,8 @@ class Tagger:
             return None
         try:
             from fingerprint import FingerprintMatcher
-            self._fingerprint = FingerprintMatcher()
+            # tools/fpcalc 存在时优先用它，否则回退到 PATH 查找
+            self._fingerprint = FingerprintMatcher(fpcalc_path=_fpcalc_hint())
         except Exception:  # noqa: BLE001 - 缺 acoustid/fpcalc 时降级
             self._fingerprint = None
         return self._fingerprint
@@ -317,6 +329,8 @@ class Tagger:
             data = download_cover(cover_url)
             if data and not self.dry_run:
                 result.cover = core_tags.write_cover(track.path, data)
+                # 同步扫描阶段缓存的封面结果，别让后续判定还在用「没有封面」
+                track.has_cover = result.cover
             elif data:
                 result.cover = True
 

@@ -42,7 +42,7 @@
 | `core/model.py` | 统一的 `Track` 抽象 | `Track(dirpath, ext, stem, key, year_int, has_lrc, tag())` |
 | `core/scan.py` | 一次遍历建索引 | `scan(paths, month, with_tags, recursive, extensions)` |
 | `core/naming.py` | 文件名规则（唯一实现） | `parse_filename`、`canonicalize`、`format_filename`、`version_key` |
-| `core/tags.py` | 标签读写 + 封面 + 时长（唯一实现） | `read_tags`、`write_tags`、`write_cover`、`has_cover`、`duration` |
+| `core/tags.py` | 标签读写 + 封面 + 时长（唯一实现） | `read_meta`、`read_tags`、`write_tags`、`write_cover`、`has_cover`、`duration` |
 | `core/lyrics.py` | 歌词缺失 / 孤立 | `missing_lrc`、`orphan_lrc` |
 | `core/dedupe.py` | 本地重复判定 | `find_by_tag`、`find_by_filename`、`find_duplicates` |
 | `core/organize.py` | 年代/年份归档 | `plan_organize(tracks, base_dir, plan)` |
@@ -55,9 +55,8 @@
 
 | 模块 | 职责 | 依赖 |
 |---|---|---|
-| `services/decrypt.py` | 网易云 / QQ 解密编排 | `tools/um.exe`、`decrypto`（Frida） |
-| `services/soundalike.py` | 声纹去重、库一致性 | `tools/soundalike.exe` |
-
+| `services/decrypt.py` | 网易云 / QQ 解密编排 | `tools/um`（三平台）、`decrypto`（Frida，仅 Windows） |
+| `services/soundalike.py` | 声纹去重、库一致性 | `tools/soundalike`（Windows 为 `soundalike.exe`）、`fpcalc` |
 ### `tagger/`
 
 | 模块 | 职责 | 依赖 |
@@ -74,16 +73,23 @@
 
 | 目录 | 是什么 | 为什么不在 `core` / `services` |
 |---|---|---|
-| `decrypto/` | QQ 音乐解密的 Python 调用与来源检索 | 半独立上游代码，自带 CLI；由 `services/decrypt.py` 调用 |
+| `decrypto/` | QQ 音乐解密的 Python 调用与来源检索；`qq_client.py` 负责客户端安装检测 / 启动 / 登录确认 | 半独立上游代码，自带 CLI；由 `services/decrypt.py` 调用 |
 | `fingerprint/` | AcoustID / MusicBrainz 指纹匹配 | 自带 HTTP 客户端与解析，被 `tagger/` 借用 |
 | `music_tagger/` | QQ 音乐 / 网易云平台客户端 | 上游项目名沿用；包内只剩客户端 |
-| `tools/` | `um.exe`、`soundalike.exe`、Frida hook | 外部二进制与脚本，不参与 Python 分层 |
+| `tools/` | `um`（三平台）、`soundalike`（三平台）、`fpcalc`、Frida hook | 外部二进制与脚本，不参与 Python 分层 |
 | `scripts/` | `check_docs.py`、`git_uplink.py` | 开发者工具，不参与运行时 |
 | `tests/` | 单元测试 + `tests/manual/` 手工脚本 + `tests/fixtures/` 样本 | 不随程序分发 |
 
 命名约定：自有代码目录一律小写（`core`、`services`、`tagger`、`decrypto`、`fingerprint`、
 `music_tagger`、`scripts`、`tests`、`docs`）。外部程序文件名保持上游原样（`um.exe`、
-`soundalike.exe`），改它会连带上游脚本失效。
+`soundalike.exe`），改它会连带上游脚本失效。同一程序的多平台产物用 Go 的
+`<名字>-<GOOS>-<GOARCH>` 后缀区分（`soundalike-darwin-arm64`），由 `config.py` 按平台挑选。
+
+**平台选择只有两处实现**：`config.py` 的 `_default_*()` 负责「默认路径按 `sys.platform` +
+`platform.machine()` 挑」，`utils.tool_problem()` 负责「这份产物在本机能不能跑」。业务模块
+（`services/soundalike.py`、`decrypto/um.py`）不许自己再判断 `sys.platform`，只调这两处；
+唯一的例外是 `decrypto/qq.py` 的 `decrypt_backend()`——它选的是**方案**（Frida / um），
+不是路径。
 
 ## 3. 数据流
 
@@ -121,7 +127,9 @@ result = plan.execute()      # PlanResult(done, skipped, failed)
 约定：
 
 - `src == dst` 的操作会被忽略（规范化后比较）；
-- 目标已存在时自动加 `_1/_2` 后缀，**永不覆盖**；
+- `move` 目标已存在时自动加 `_1/_2` 后缀，**永不覆盖**；
+- `rename` 目标已存在时**直接失败**并写入 journal，不会加后缀造出重复文件名；
+- `move` 移动同盘用 `os.replace`（原子改名），跨盘先写 `.part`、校验大小、再改名、最后删源；
 - `trash` 不是删除，是把文件移到 `TRASH_DIR`，保留文件名；
 - 音频移动/改名时同步搬运同名 `.lrc`；
 - 单条失败不中断整批，失败原因进 `journal.jsonl` 的 `error` 字段；
@@ -177,7 +185,9 @@ result = plan.execute()      # PlanResult(done, skipped, failed)
 
 1. 在 `services/` 下新建模块，参考 `services/soundalike.py`：`subprocess.run` 必带
    `timeout` 与 `check=False`，自行判断 `returncode`；
-2. 路径放 `config.py`，同时支持 `config.ini` 与环境变量覆盖；
+2. 路径放 `config.py`，同时支持 `config.ini` 与环境变量覆盖；只按 `PATH` 找同目录依赖的
+   程序（如 `soundalike` 找 `fpcalc`），在 `subprocess.run(env=...)` 里把 `TOOLS_DIR` 前置进
+   `PATH`，不要要求用户自己配；
 3. 失败返回结构化结果，不要把异常抛到 `main`。
 
 ### 新增 CLI 开关
@@ -196,3 +206,19 @@ result = plan.execute()      # PlanResult(done, skipped, failed)
 | 标签改了不生效 | 读到的 `FPCALC_LENGTH` 是循环导入的回退值 | 已修复；新增配置项时不要反向依赖 |
 | `--fix` 把半库搬空 | 曾把缺封面/缺专辑也判为需移动 | 只有 `severe` 才移动 |
 | 结果目录被重复扫描 | `INCOMPLETE_DIR`、`DUPLICATE_DIR` 嵌在 `WORKSPACE_DIR` 内 | 默认放在 `WORKSPACE_DIR` 同级，见 [configuration.md](configuration.md) |
+| 合辑整张被搬进待补全 | 标签歌手是 `Various Artists`、文件名是具体歌手，曾被判「歌手矛盾」 | 占位歌手不参与一致性判定，见 [rules.md](rules.md#31-歌手维度是宽松的) |
+| 库里凭空多出 `xxx_1.flac` | 改名撞车时静默加后缀 | 改名撞车改为失败留痕，见 [rules.md](rules.md#72-改名撞车一律失败) |
+| 检查报告全是 0 | 目标目录配错，扫描空目录得到空结果 | `--check` 目录不存在时直接以退出码 1 结束 |
+| 每首歌被解析三遍 | `read_tags` + `duration` + `has_cover` 各开一次文件 | `read_meta()` 一次读完，扫描阶段专用 |
+| 新格式整类「缺标签」 | 只在 `config.py` 加了扩展名，`core/tags.py` 没有读取器 | `tests/test_tags.py` 检查每个扩展名都有读取器 |
+| 声纹去重「跑到一半就失败」 | `-temp` 用第一个音乐目录推算相对路径，跨盘时 `filepath.Rel` 报错 | 调用前用 `services.soundalike.temp_supported()` 判断同盘，不同盘退化为只比对音乐库 |
+| 声纹去重「卡住不动」 | 外部程序 stdout 被 `capture_output` 吞掉，提示语又不带换行 | 交互式运行（有 TTY）时不捕获输出，直接交给终端 |
+| 声纹库改了长度打不开 | `Settings` 表锁定了 `-fpcalc-length` / `-algorithm` | 参数必须来自 `config.FPCALC_LENGTH`；改参数要删 `music.db` 重建 |
+| macOS 上声纹工具「Exec format error」 | 只有 `soundalike.exe`，且 `fpcalc` 不在 PATH | `tools/soundalike-darwin-*` + 调用时注入 `tools/` 到 PATH |
+| 预览过一遍就再也查不出重复 | 预览（`--soundalike-report`）也会把指纹写进库，而扫描只比对「新文件/变化过的文件」 | 预览统一走 `-dry-run`：复用库里指纹但不写库 |
+| 未知扩展名被当成「最差的格式」 | 老 `formatPriority` 对不认识的扩展名返回 `-1`，`.dsf` 因此被判成比 mp3 还差 | 改成层级表 + 未知格式不参与自动判断，整组退回人工 |
+| 跨盘移动「另一个程序正在使用此文件」 | `copyAndRemoveFile` 用 `defer sf.Close()`，`os.Remove` 时源句柄还开着 | 显式关句柄后再删；`moveFile` 还拒绝覆盖已有文件 |
+| macOS 上「可执行文件却跑不起来」 | 配置指向了别的平台的产物，或克隆后丢了 exec 位 | 统一用 `utils.tool_problem()` 预检（缺文件 / 缺 `chmod +x` / PE 与 Mach-O 不匹配），并在报错里写清怎么修 |
+| QQ 解密在 mac 上「找不到进程」 | Frida 方案只认 `QQMusic.exe` + `QQMusicCommon.dll` | `decrypt_backend()` 按平台选方案，macOS 固定走 `decrypto/um.py`；Frida 起不来时自动退回 um |
+| 拿源文件路径直接调 `EncAndDesMediaFile::Open`，文件被清成 0 字节 | `Open` 会截断/重写传入路径，不是只读 | 一律先复制到暂存副本，只对副本 Open；探针脚本同理（`tests/manual/manual_frida_openprobe.py` 已强制走副本） |
+| 只配 mmkv 没配密钥，连旧版 qmc 也解不开 | `um` 只要拿到 `--qmc-mmkv` 就会去开 vault，缺 key 直接 `unexpected EOF` | `um.run()` 只在 mmkv 与 key **同时存在**时才传这两个参数 |
