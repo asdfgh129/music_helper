@@ -32,3 +32,9 @@ Thumbs.db
 # ===== 本地代理/工作区数据 =====
 .sisyphus/
 .workbuddy/
+
+# ===== 第三方安装包（体积大且无法校验真伪，见 third_party/qqmusic/README.md）=====
+# 源码在 third_party/ 下照常入库；只有安装包这类大二进制排除在外。
+third_party/qqmusic/*.exe
+third_party/qqmusic/*.dmg
+third_party/qqmusic/*.zip
