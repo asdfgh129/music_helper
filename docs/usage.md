@@ -153,3 +153,58 @@ MSVC 修饰导出名），实际解密固定走 `um` 离线；登录态无法程
    `soundalike -temp` 重复扫描。
 5. **`LIBRARY_DIR` 不要等于 `WORKSPACE_DIR` / `DUPLICATE_DIR`**：`soundalike` 会拒绝相同目录，且容易自我搬运。
 6. **`--month` 不筛选标签/检查**：它只按修改时间筛选解密与拷贝；后续步骤处理工作区全部文件。
+
+## 8. Web UI
+
+除 CLI 外，本项目提供基于 FastAPI 的 Web UI：本机启动服务后，浏览器打开 `localhost` 即可查看配置、运行检查、预览并确认修复计划、触发流水线并实时看进度。Web 端复用全部业务代码，不复制任何逻辑。
+
+### 8.1 启动
+
+```bash
+pip install -r requirements-dev.txt      # 仅需首次：安装 fastapi / uvicorn
+cd /path/to/music_helper
+python -m uvicorn web.api:app --host 127.0.0.1 --port 8000
+# 浏览器打开 http://127.0.0.1:8000/
+```
+
+> 注意：`uvicorn` 脚本通常不在 PATH，请用 `python -m uvicorn` 启动。服务只绑定 `127.0.0.1`，不对外暴露。
+
+### 8.2 只读（阶段 0）
+
+| 操作 | 接口 | 说明 |
+|---|---|---|
+| 配置校验 | `GET /api/config` | `config.validate()` + 外部程序预检（声纹/fpcalc/um） |
+| 运行环境与解密能力 | `GET /api/platform` | 返回运行 OS 与解密能力矩阵（按平台路由 Frida/um） |
+| 库/工作区扫描统计 | `GET /api/scan?target=library\|workspace` | 文件数、总大小、扩展名分布，可带 `with_tags=1` |
+| 报告列表 | `GET /api/reports` | 列出 `log/reports/` 下的 `.md`/`.csv` |
+| 报告预览 | `GET /api/reports/view?name=` | 返回某份报告正文 |
+
+### 8.3 检查与修复（阶段 1-2）
+
+| 操作 | 接口 | 说明 |
+|---|---|---|
+| 运行检查 | `POST /api/check` | 跑 `core.check`，返回 findings（缓存结果） |
+| 生成计划预览 | `POST /api/plan/preview` | `core.ops.Plan(dry_run=True)` 的 `describe()`，「将发生什么」 |
+| 确认执行 | `POST /api/plan/execute` | 经 `core.ops.Plan.execute()`，返回完成/跳过/失败 + journal 路径 |
+
+### 8.4 解密（OS 感知）
+
+| 操作 | 接口 | 说明 |
+|---|---|---|
+| 解密 | `POST /api/decrypt` | 按本机 OS 路由到 `services.decrypt`；默认 `dry_run` 仅统计待解密文件 |
+
+### 8.5 后台任务（阶段 4）
+
+| 操作 | 接口 | 说明 |
+|---|---|---|
+| 提交任务 | `POST /api/tasks` | `{"kind":"check\|pipeline\|decrypt-qq\|decrypt-netease", "opts":{...}}` 立即返回 `task_id` |
+| 查询任务 | `GET /api/tasks/{id}` | 轮询状态、`progress`（0–100）、实时 `log`、结果 |
+| 任务列表 | `GET /api/tasks` | 已支持动作 + 近期任务 |
+
+支持的 `kind`：`check`（检查）、`pipeline`（完整流水线）、`decrypt-qq` / `decrypt-netease`（解密）。长时操作（打标签联网、声纹）走串行任务队列，前端按 `task_id` 轮询进度与日志，不会阻塞界面。
+
+### 8.6 安全约定
+
+- 所有破坏性动作都走 `core.ops.Plan` + `log/journal.jsonl`，Web 没有自己的删除/移动实现。
+- 接口默认 `dry_run`；非 dry-run 执行前会 `utils.ensure_dirs()` 保证目录存在。
+- `pipeline` 任务默认 `skip_vip / skip_tag_update / skip_organize` 之外的步骤仍受各 flow 内部安全逻辑约束，与 CLI 行为一致。

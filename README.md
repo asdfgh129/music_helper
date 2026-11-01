@@ -24,6 +24,8 @@ Python 音乐库流水线：**解密 → 去重 → 补标签 → 检查 → 分
 - **人工确认入库**：`--manual-archive` 才把工作区文件并入最终库。
 - **VIP 解密**：网易云 `.ncm`（`um.exe`）、QQ 音乐 `.mflac/.mgg`（Frida 注入运行中的
   客户端）。QQ 这条链路会自动检查客户端是否安装、启动、登录，缺哪一步补哪一步。
+- **Web UI**：本机启动 FastAPI 服务，浏览器查看配置、运行检查、预览并确认修复计划、触发流水线并实时看进度（见
+  [docs/usage.md](docs/usage.md#8-web-ui)）。解密能力随运行机器操作系统分支（Windows→Frida/um，macOS→um）。
 
 ## 快速开始
 
@@ -68,6 +70,7 @@ python main.py --manual-archive
 ```
 music_helper/
 ├── main.py                 # 唯一 CLI 入口，只做编排
+├── web/                    # FastAPI Web UI：只读/检查/计划/执行/解密/后台任务（不改业务代码）
 ├── config.py               # 纯配置：config.ini / 环境变量 / 默认值
 ├── config.example.ini      # 本地配置示例
 ├── utils.py                # 日志、目录创建、月份工具

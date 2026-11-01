@@ -7,9 +7,11 @@
 ## 1. 分层
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│ main.py          编排：解析参数 → 串流程 → 汇总报告          │
-└───────────────┬────────────────────────────┬───────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ 编排入口（两种形态，都只复用 core/services，不改业务代码）          │
+│ main.py   CLI：解析参数 → 串流程 → 汇总报告                       │
+│ web/      HTTP：FastAPI 路由 → 触发 core/services/main.flow_*      │
+└───────────────┬────────────────────────────┬─────────────────────┘
                 │                            │
 ┌───────────────▼──────────────┐  ┌──────────▼───────────────┐
 │ core/      纯逻辑，可单测     │  │ services/  有副作用       │
@@ -20,7 +22,7 @@
                 │                            │ 外部世界
 ┌───────────────▼────────────────────────────▼───────────────┐
 │ config.py 纯数据（不导入业务模块）                            │
-│ utils.py  日志、目录创建、月份工具                            │
+│ utils.py  日志、目录创建、月份工具、跨平台工具预检            │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -31,6 +33,7 @@
 | `core/` | 读元信息、计算、生成 `Plan` | 网络、外部 exe、`os.remove`、直接 `shutil.move` | 「同样输入是否总得到同样输出」 |
 | `services/`、`tagger/` | HTTP、调用 exe、写标签/封面/歌词 | 决定目录结构、决定哪些文件该删 | 「离开这台机器还能不能跑」 |
 | `main.py` | 解析参数、决定顺序、汇总 | 实现判定规则 | 「换一个入口，这些逻辑还要不要再写一遍」 |
+| `web/` | 路由、触发 `core`/`services`/`main.flow_*`、做展示 | 自己操作文件、绕过 `core.ops.Plan`、并发改配置 | 「换一个前端，这套接口还要不要再写一遍」 |
 | `config.py` | 路径、字符串、数字常量 | `import core` / `import services` / `import tagger` | 「导入它会不会引发循环依赖」 |
 
 ## 2. 模块清单
@@ -68,6 +71,20 @@
 
 外部依赖一律**延迟导入 + 失败降级**：缺 `requests` 只是不下载封面，缺 `fpcalc` 只是跳过声纹，
 缺 `mutagen` 只是读不到标签——主程序永远能启动。
+
+### `web/`
+
+| 模块 | 职责 | 关键接口 |
+|---|---|---|
+| `web/api.py` | FastAPI 应用：只读配置/扫描/报告 + 检查/计划/执行 + OS 感知解密 + 任务提交/查询 | 全部 `GET/POST /api/*` 路由（如 `GET /api/config`、`POST /api/check`、`GET /api/tasks/{id}`） |
+| `web/tasks.py` | 单工作者串行任务队列，按任务捕获 `utils.main_logger` 日志并推断进度 | `TaskManager.submit` / `poll`、`run_action(kind, opts)` |
+| `web/index.html` | 深色单文件仪表盘，原生 HTML/JS，无构建链 | — |
+
+设计要点：
+- **零业务代码改动**：`web/` 只 `import core` / `services` / `config` / `utils` 与 `main.flow_*`，从不自己操作文件；破坏性动作一律经 `core.ops.Plan` + `log/journal.jsonl`。
+- **单进程串行**：`config.py` 是模块级全局态，`web/tasks.py` 用单个 daemon 线程逐条执行任务队列，避免并发改配置/库。
+- **长任务异步化**：`POST /api/tasks` 立即返回 `task_id`，前端轮询 `GET /api/tasks/{id}` 拿状态 / `progress`（0–100）/ 实时日志 / 结果。
+- **OS 感知解密**：`GET /api/platform` 返回运行平台与解密能力矩阵；Web 不做平台假设，解密动作交给 `services.decrypt` 按本机 OS 路由（Windows→Frida/um，macOS→um，纯服务器→仅离线可解）。
 
 ### 附属目录与脚本
 
@@ -211,6 +228,26 @@ result = plan.execute()      # PlanResult(done, skipped, failed)
 | 检查报告全是 0 | 目标目录配错，扫描空目录得到空结果 | `--check` 目录不存在时直接以退出码 1 结束 |
 | 每首歌被解析三遍 | `read_tags` + `duration` + `has_cover` 各开一次文件 | `read_meta()` 一次读完，扫描阶段专用 |
 | 新格式整类「缺标签」 | 只在 `config.py` 加了扩展名，`core/tags.py` 没有读取器 | `tests/test_tags.py` 检查每个扩展名都有读取器 |
+
+## 8. Web UI
+
+Web UI 是 `main.py` 之外的第二个编排入口，形态为「本机跑服务、浏览器开 `localhost`」。它**不复制任何业务逻辑**，只把 `core` / `services` / `main.flow_*` 包装成 HTTP 接口。
+
+### 8.1 为什么单进程串行
+
+`config.py` 是模块级全局可变状态，且整套流水线假设「一台机器一个配置」。`web/` 因此只起一个 daemon 工作者线程逐条消费任务队列，天然串行——不做多租户、不并发改同一个库。需要并发时，正确做法是起多个进程各绑定不同 `MUSIC_HELPER_*` 环境变量，而非在单进程内并行。
+
+### 8.2 任务与日志
+
+长时操作（打标签联网、声纹跑外部二进制）通过任务队列处理：`POST /api/tasks` 入队即返 `task_id`；`GET /api/tasks/{id}` 轮询状态、`progress`（按阶段关键字从执行的 `utils.main_logger` 日志推断 0–100）、`log`（实时捕获的日志行）、`result`。任务运行时临时给根 logger 挂一个缓冲 Handler，结束后摘掉，因此多个任务不会串日志。
+
+### 8.3 安全边界
+
+Web 端没有自己的删除/移动实现，所有破坏性动作都走 `core.ops.Plan`：`/api/plan/execute` 与任务里的各 `flow_*` 都先生成计划、写 `log/journal.jsonl`，再执行。接口默认 `dry_run`，非 dry-run 前会 `utils.ensure_dirs()` 保证目录存在。
+
+### 8.4 解密随运行机器 OS 分支
+
+Web 不假设「只有 Windows 能解密」。`/api/platform` 返回运行平台（macOS / Windows / 其它）与对应解密能力；`/api/decrypt` 把动作交给 `services.decrypt`，由 `decrypto/qq.py:decrypt_backend()` 按本机 OS 选 Frida（Windows，需客户端已登录）或 um（macOS 离线免密钥）。纯服务器环境只处理离线可解的文件。
 | 声纹去重「跑到一半就失败」 | `-temp` 用第一个音乐目录推算相对路径，跨盘时 `filepath.Rel` 报错 | 调用前用 `services.soundalike.temp_supported()` 判断同盘，不同盘退化为只比对音乐库 |
 | 声纹去重「卡住不动」 | 外部程序 stdout 被 `capture_output` 吞掉，提示语又不带换行 | 交互式运行（有 TTY）时不捕获输出，直接交给终端 |
 | 声纹库改了长度打不开 | `Settings` 表锁定了 `-fpcalc-length` / `-algorithm` | 参数必须来自 `config.FPCALC_LENGTH`；改参数要删 `music.db` 重建 |
