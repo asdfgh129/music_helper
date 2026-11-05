@@ -139,8 +139,24 @@ def _new_outputs(output_dir, before):
         return []
 
 
+def _iter_sources(input_dir, files=None):
+    """待解密的源文件顺序迭代
+
+    `files` 非空时只处理指定的这几个文件——Web 向导按月份筛出的一批就是这种用法，
+    不必为了「只解密 3 个文件」而把整个 VIP 目录搬进暂存区。
+    """
+    if files:
+        for path in files:
+            yield os.path.abspath(path)
+        return
+    for root, _, names in os.walk(input_dir):
+        for name in sorted(names):
+            yield os.path.join(root, name)
+
+
 def run_decrypt(input_dir, output_dir, logger=None, ensure_client=True,
-                auto_install=True, wait_login_enabled=True, login_timeout=None):
+                auto_install=True, wait_login_enabled=True, login_timeout=None,
+                files=None):
     """解密 QQ 音乐文件（Windows 走 Frida，其他平台走 um 离线解密）
 
     解密前会做环境准备（`decrypto/qq_client.py`）：检测客户端是否安装、未装则装
@@ -155,6 +171,7 @@ def run_decrypt(input_dir, output_dir, logger=None, ensure_client=True,
         auto_install: 未安装客户端时是否自动安装
         wait_login_enabled: 未登录时是否等待用户登录
         login_timeout: 等待登录的秒数
+        files: 只处理这些文件（绝对路径列表）；None 表示遍历整个 input_dir
     """
     # 使用传入的logger，如果没有则使用logging模块
     log = logger if logger else logging
@@ -174,12 +191,13 @@ def run_decrypt(input_dir, output_dir, logger=None, ensure_client=True,
             log.error("QQ 音乐运行环境未就绪，本次跳过解密")
             return
 
-    if decrypt_backend() == 'frida' and _run_frida(os.path.abspath(input_dir), output_dir, log):
+    if decrypt_backend() == 'frida' and _run_frida(os.path.abspath(input_dir), output_dir,
+                                                   log, files=files):
         return
-    _run_um(os.path.abspath(input_dir), output_dir, log)
+    _run_um(os.path.abspath(input_dir), output_dir, log, files=files)
 
 
-def _run_um(input_dir, output_dir, log):
+def _run_um(input_dir, output_dir, log, files=None):
     """um 离线解密：逐个文件调用，坏文件不影响其他文件
 
     um 处理整个目录时，只要有一个文件解不开就 FATAL 退出，后面的文件全都不处理；
@@ -208,49 +226,48 @@ def _run_um(input_dir, output_dir, log):
     except OSError:
         pass
 
-    for root, _, files in os.walk(input_dir):
-        for file in sorted(files):
-            base, ext = os.path.splitext(file)
-            ext = ext.lower()
-            if ext not in QQ_OUTPUT_EXT:
-                continue
+    for source in _iter_sources(input_dir, files):
+        base, ext = os.path.splitext(os.path.basename(source))
+        ext = ext.lower()
+        if ext not in QQ_OUTPUT_EXT:
+            continue
 
-            output_name = base + QQ_OUTPUT_EXT[ext]
-            output_path = os.path.join(output_dir, output_name)
-            if os.path.exists(output_path):
-                log.info(f"已存在，跳过: {output_path}")
-                _record(output_name, log)
-                continue
-
-            source = os.path.join(root, file)
-            log.info(f"开始解密: {file}（um 离线）")
-            completed, error = um.run(source, output_dir, mmkv, key)
-            if error:
-                log.error(f"解密失败: {file} -> {error}")
-                continue
-            if completed.returncode != 0:
-                detail = um.failure_detail(completed)
-                log.error(f"解密失败: {file} -> {detail or f'返回码 {completed.returncode}'}")
-                if not (mmkv and key):
-                    log.warning(um.QMC_HINT)
-                continue
-
-            if os.path.exists(output_path):
-                log.info(f"解密成功: {output_path}")
-            else:
-                # um 会按解出来的实际类型命名，个别容器不是「把扩展名换掉」那么简单
-                produced = _new_outputs(output_dir, before_all)
-                before_all = set(os.listdir(output_dir))
-                if produced:
-                    log.info(f"解密成功: {os.path.join(output_dir, produced[0])}")
-                else:
-                    log.warning(f"{file} 没有产出（可能本来就不是加密文件）")
-                    continue
+        output_name = base + QQ_OUTPUT_EXT[ext]
+        output_path = os.path.join(output_dir, output_name)
+        if os.path.exists(output_path):
+            log.info(f"已存在，跳过: {output_path}")
             _record(output_name, log)
+            continue
+
+        log.info(f"开始解密: {os.path.basename(source)}（um 离线）")
+        completed, error = um.run(source, output_dir, mmkv, key)
+        if error:
+            log.error(f"解密失败: {os.path.basename(source)} -> {error}")
+            continue
+        if completed.returncode != 0:
+            detail = um.failure_detail(completed)
+            log.error(f"解密失败: {os.path.basename(source)} -> "
+                      f"{detail or f'返回码 {completed.returncode}'}")
+            if not (mmkv and key):
+                log.warning(um.QMC_HINT)
+            continue
+
+        if os.path.exists(output_path):
+            log.info(f"解密成功: {output_path}")
+        else:
+            # um 会按解出来的实际类型命名，个别容器不是「把扩展名换掉」那么简单
+            produced = _new_outputs(output_dir, before_all)
+            before_all = set(os.listdir(output_dir))
+            if produced:
+                log.info(f"解密成功: {os.path.join(output_dir, produced[0])}")
+            else:
+                log.warning(f"{os.path.basename(source)} 没有产出（可能本来就不是加密文件）")
+                continue
+        _record(output_name, log)
     log.info("所有任务已完成")
 
 
-def _run_frida(input_dir, output_dir, log):
+def _run_frida(input_dir, output_dir, log, files=None):
     """Frida 注入客户端逐个解密；返回 False 表示没跑起来（可退回 um）"""
     # frida 是可选依赖：延迟导入，缺了只让 QQ 解密不可用，不影响其余流程
     try:
@@ -285,56 +302,55 @@ def _run_frida(input_dir, output_dir, log):
     first_error = ''
 
     try:
-        for root, _, files in os.walk(input_dir):
-            for file in files:
-                base, ext = os.path.splitext(file)
-                ext = ext.lower()
-                if ext not in QQ_OUTPUT_EXT:
-                    continue
+        for src_abs_path in _iter_sources(input_dir, files):
+            file = os.path.basename(src_abs_path)
+            base, ext = os.path.splitext(file)
+            ext = ext.lower()
+            if ext not in QQ_OUTPUT_EXT:
+                continue
 
-                log.info(f"开始解密: {file}")
+            log.info(f"开始解密: {file}")
 
-                new_ext = QQ_OUTPUT_EXT[ext]
-                output_filename = base + new_ext
-                output_file_path = os.path.join(output_dir, output_filename)
+            new_ext = QQ_OUTPUT_EXT[ext]
+            output_filename = base + new_ext
+            output_file_path = os.path.join(output_dir, output_filename)
 
-                if os.path.exists(output_file_path):
-                    log.info(f"已存在，跳过: {output_file_path}")
-                    _record(output_filename, log)
-                    continue
+            if os.path.exists(output_file_path):
+                log.info(f"已存在，跳过: {output_file_path}")
+                _record(output_filename, log)
+                continue
 
-                src_abs_path = os.path.abspath(os.path.join(root, file))
-                # 用完整路径哈希：不同子目录下可能有同名文件，用文件名会互相覆盖
-                digest = hashlib.md5(src_abs_path.encode()).hexdigest()
-                temp_src_path = os.path.join(temp_dir, digest + ext)
+            # 用完整路径哈希：不同子目录下可能有同名文件，用文件名会互相覆盖
+            digest = hashlib.md5(src_abs_path.encode()).hexdigest()
+            temp_src_path = os.path.join(temp_dir, digest + ext)
 
-                tmp_output_path = os.path.abspath(os.path.join(temp_dir, digest + new_ext))
-                os.makedirs(os.path.dirname(tmp_output_path), exist_ok=True)
+            tmp_output_path = os.path.abspath(os.path.join(temp_dir, digest + new_ext))
+            os.makedirs(os.path.dirname(tmp_output_path), exist_ok=True)
 
-                # Open 会截断传入路径，所以只把副本交给它，源文件留在原地
+            # Open 会截断传入路径，所以只把副本交给它，源文件留在原地
+            try:
+                shutil.copyfile(src_abs_path, temp_src_path)
+            except OSError as exc:
+                log.error(f"复制到暂存区失败: {file} -> {exc}")
+                failed += 1
+                continue
+
+            try:
+                script.exports_sync.decrypt(temp_src_path, tmp_output_path)
+                os.replace(tmp_output_path, output_file_path)
+                log.info(f"解密成功: {output_file_path}")
+                _record(output_filename, log)
+                ok += 1
+            except Exception as e:
+                log.error(f"解密失败: {file} -> {e}")
+                failed += 1
+                first_error = first_error or str(e)
                 try:
-                    shutil.copyfile(src_abs_path, temp_src_path)
-                except OSError as exc:
-                    log.error(f"复制到暂存区失败: {file} -> {exc}")
-                    failed += 1
-                    continue
-
-                try:
-                    script.exports_sync.decrypt(temp_src_path, tmp_output_path)
-                    os.replace(tmp_output_path, output_file_path)
-                    log.info(f"解密成功: {output_file_path}")
-                    _record(output_filename, log)
-                    ok += 1
-                except Exception as e:
-                    log.error(f"解密失败: {file} -> {e}")
-                    failed += 1
-                    first_error = first_error or str(e)
-                    try:
-                        if os.path.exists(tmp_output_path):
-                            os.remove(tmp_output_path)
-                    except Exception:
-                        pass
-                    continue
+                    if os.path.exists(tmp_output_path):
+                        os.remove(tmp_output_path)
+                except Exception:
+                    pass
+                continue
     finally:
         session.detach()
         shutil.rmtree(temp_dir, ignore_errors=True)

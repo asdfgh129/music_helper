@@ -90,6 +90,16 @@ def _is_absolute(value):
     return bool(_WINDOWS_ABS.match(value)) or os.path.isabs(value)
 
 
+def is_absolute_path(value):
+    """`_is_absolute` 的公开别名（web 层校验用户输入的目录时用）"""
+    return _is_absolute(str(value or '').strip())
+
+
+def ini_path():
+    """当前生效的 config.ini 路径（环境变量 MUSIC_HELPER_CONFIG 优先）"""
+    return _ini_path()
+
+
 def _ini_path():
     return os.environ.get(_ENV_CONFIG_PATH) or DEFAULT_CONFIG_PATH
 
@@ -170,10 +180,14 @@ def reload():
     DUPLICATE_DIR = _path('MUSIC_HELPER_DUPLICATE_DIR', 'paths', 'duplicate_dir', r'G:\Tmp')
 
     # 下载目录
+    # VIP 子目录默认跟着下载目录走（客户端固定写 VipSOngsDownload），但允许单独配置：
+    # 有人把 VIP 下载单独指到别的盘，不配置时行为与旧版完全一致。
     NETEASE_DIR = _path('MUSIC_HELPER_NETEASE_DIR', 'paths', 'netease_dir', r'G:\Neteasymusic')
-    NETEASE_VIP_DIR = os.path.join(NETEASE_DIR, 'VipSOngsDownload')
+    NETEASE_VIP_DIR = _path('MUSIC_HELPER_NETEASE_VIP_DIR', 'paths', 'netease_vip_dir',
+                            os.path.join(NETEASE_DIR, 'VipSOngsDownload'))
     QQ_DIR = _path('MUSIC_HELPER_QQ_DIR', 'paths', 'qq_dir', r'G:\QQMusic')
-    QQ_VIP_DIR = os.path.join(QQ_DIR, 'VipSOngsDownload')
+    QQ_VIP_DIR = _path('MUSIC_HELPER_QQ_VIP_DIR', 'paths', 'qq_vip_dir',
+                       os.path.join(QQ_DIR, 'VipSOngsDownload'))
 
     # 解密暂存区：仍然在 WORKSPACE_DIR 内，按平台分开，避免两类加密文件互相干扰
     DECRYPT_STAGING_DIR = _path('MUSIC_HELPER_DECRYPT_DIR', 'paths', 'decrypt_dir',
@@ -272,6 +286,10 @@ def as_dict():
         '工作区': WORKSPACE_DIR,
         '待补全': INCOMPLETE_DIR,
         '重复文件': DUPLICATE_DIR,
+        '网易云目录': NETEASE_DIR,
+        '网易云VIP': NETEASE_VIP_DIR,
+        'QQ目录': QQ_DIR,
+        'QQVIP': QQ_VIP_DIR,
         '声纹库': DB_PATH,
         '报告目录': REPORT_DIR,
         '回收站': TRASH_DIR,

@@ -43,7 +43,7 @@
 | 模块 | 职责 | 关键接口 |
 |---|---|---|
 | `core/model.py` | 统一的 `Track` 抽象 | `Track(dirpath, ext, stem, key, year_int, has_lrc, tag())` |
-| `core/scan.py` | 一次遍历建索引 | `scan(paths, month, with_tags, recursive, extensions)` |
+| `core/scan.py` | 一次遍历建索引 | `scan(paths, month, month_from, month_to, with_tags, recursive, extensions)` |
 | `core/naming.py` | 文件名规则（唯一实现） | `parse_filename`、`canonicalize`、`format_filename`、`version_key` |
 | `core/tags.py` | 标签读写 + 封面 + 时长（唯一实现） | `read_meta`、`read_tags`、`write_tags`、`write_cover`、`has_cover`、`duration` |
 | `core/lyrics.py` | 歌词缺失 / 孤立 | `missing_lrc`、`orphan_lrc` |
@@ -51,7 +51,8 @@
 | `core/organize.py` | 年代/年份归档 | `plan_organize(tracks, base_dir, plan)` |
 | `core/check.py` | 检查、修复计划、入库判定 | `check_library`、`plan_fixes`、`report_into`、`readiness_problems` |
 | `core/report.py` | 报告渲染 | `Report.add/add_summary/add_review/save` |
-| `core/ops.py` | 破坏性动作唯一出口 | `Plan.add_move/add_rename/add_trash/execute`、`copy_items` |
+| `core/ops.py` | 破坏性动作唯一出口 | `Plan.add_move/add_rename/add_trash/execute`、`copy_items(on_item=…)` |
+| `core/library.py` | 「库是否已初始化」的唯一判据 | `status(library_dir, db_path)`、`decade_dirs`、`init_actions` |
 | `core/scoring.py` | 在线标签相似度打分 | `tag_score` |
 
 ### `services/`
@@ -59,7 +60,9 @@
 | 模块 | 职责 | 依赖 |
 |---|---|---|
 | `services/decrypt.py` | 网易云 / QQ 解密编排 | `tools/um`（三平台）、`decrypto`（Frida，仅 Windows） |
-| `services/soundalike.py` | 声纹去重、库一致性 | `tools/soundalike`（Windows 为 `soundalike.exe`）、`fpcalc` |
+| `services/soundalike.py` | 声纹去重、库一致性、建库/补库（`init_db`） | `tools/soundalike`（Windows 为 `soundalike.exe`）、`fpcalc` |
+| `services/steps.py` | Web 向导六步编排（CLI 与 Web 共用） | `core/*`、`services/*`、`tagger/` |
+| `services/settings_store.py` | `config.ini [paths]` 的唯一写入点（校验 + 落盘 + `config.reload()`） | 标准库 |
 ### `tagger/`
 
 | 模块 | 职责 | 依赖 |
@@ -76,14 +79,16 @@
 
 | 模块 | 职责 | 关键接口 |
 |---|---|---|
-| `web/api.py` | FastAPI 应用：只读配置/扫描/报告 + 检查/计划/执行 + OS 感知解密 + 任务提交/查询 | 全部 `GET/POST /api/*` 路由（如 `GET /api/config`、`POST /api/check`、`GET /api/tasks/{id}`） |
-| `web/tasks.py` | 单工作者串行任务队列，按任务捕获 `utils.main_logger` 日志并推断进度 | `TaskManager.submit` / `poll`、`run_action(kind, opts)` |
-| `web/index.html` | 深色单文件仪表盘，原生 HTML/JS，无构建链 | — |
+| `web/api.py` | FastAPI 应用：向导六步 + 只读配置/扫描/报告 + 检查/计划/执行 + OS 感知解密 + 任务提交/查询 | 全部 `GET/POST /api/*` 路由（如 `GET /api/wizard/state`、`POST /api/copy/run`、`GET /api/tasks/{id}`） |
+| `web/tasks.py` | 单工作者串行任务队列；既能按日志关键字推断阶段（CLI 流程），也能接收逐条进度（`Task.set_progress`，向导流程） | `TaskManager.submit` / `busy`、`_dispatch_wizard` |
+| `web/static/` | Vue 3 六步向导：`index.html` + `css/app.css` + `js/*.js`（每步一个组件），Vue 运行时在 `vendor/`，无构建链 | — |
+| `web/index.html` | 旧版深色单页仪表盘，仍在 `/legacy` 提供 | — |
 
 设计要点：
 - **零业务代码改动**：`web/` 只 `import core` / `services` / `config` / `utils` 与 `main.flow_*`，从不自己操作文件；破坏性动作一律经 `core.ops.Plan` + `log/journal.jsonl`。
 - **单进程串行**：`config.py` 是模块级全局态，`web/tasks.py` 用单个 daemon 线程逐条执行任务队列，避免并发改配置/库。
-- **长任务异步化**：`POST /api/tasks` 立即返回 `task_id`，前端轮询 `GET /api/tasks/{id}` 拿状态 / `progress`（0–100）/ 实时日志 / 结果。
+- **长任务异步化**：`POST /api/tasks` 立即返回 `task_id`，前端轮询 `GET /api/tasks/{id}` 拿状态 / `progress`（0–100）/ `done`+`total` / 实时日志 / 结果。
+- **业务编排不在 `web/`**：六步的「先算什么、再动什么」写在 `services/steps.py`，`web/` 只做参数校验与序列化；判定规则仍在 `core/`（例如「未初始化」只看 `core.library.status`）。
 - **OS 感知解密**：`GET /api/platform` 返回运行平台与解密能力矩阵；Web 不做平台假设，解密动作交给 `services.decrypt` 按本机 OS 路由（Windows→Frida/um，macOS→um，纯服务器→仅离线可解）。
 
 ### 附属目录与脚本
@@ -231,7 +236,9 @@ result = plan.execute()      # PlanResult(done, skipped, failed)
 
 ## 8. Web UI
 
-Web UI 是 `main.py` 之外的第二个编排入口，形态为「本机跑服务、浏览器开 `localhost`」。它**不复制任何业务逻辑**，只把 `core` / `services` / `main.flow_*` 包装成 HTTP 接口。
+Web UI 是 `main.py` 之外的第二个编排入口，形态为「本机跑服务、浏览器开 `localhost`」。它**不复制任何业务逻辑**：判定在 `core/`，编排在 `services/steps.py`，`web/` 只做参数校验与序列化。六步的操作细节见 [web-wizard.md](web-wizard.md)。
+
+界面是 Vue 3 的六步向导（目录设置 → 操作类型 → 拷贝 → 解密 → 标签歌词 → 归档），旧的单页仪表盘仍保留在 `/legacy`。前端不要构建链：Vue 运行时放在 `web/static/vendor/`，改一行 JS 刷新页面即可生效——这个项目没有 Node 工具链，加构建步骤等于给「先跑起来再说」加一道门。
 
 ### 8.1 为什么单进程串行
 
@@ -239,7 +246,9 @@ Web UI 是 `main.py` 之外的第二个编排入口，形态为「本机跑服�
 
 ### 8.2 任务与日志
 
-长时操作（打标签联网、声纹跑外部二进制）通过任务队列处理：`POST /api/tasks` 入队即返 `task_id`；`GET /api/tasks/{id}` 轮询状态、`progress`（按阶段关键字从执行的 `utils.main_logger` 日志推断 0–100）、`log`（实时捕获的日志行）、`result`。任务运行时临时给根 logger 挂一个缓冲 Handler，结束后摘掉，因此多个任务不会串日志。
+长时操作（打标签联网、声纹跑外部二进制）通过任务队列处理：`POST /api/tasks` 入队即返 `task_id`；`GET /api/tasks/{id}` 轮询状态、`progress`、`log`（实时捕获的日志行）、`result`。
+
+进度有两个来源：CLI 流程按 `_STAGES` 里的阶段关键字从日志**推断**；向导流程由业务代码通过 `Task.set_progress(done, total, item)` **直报**逐条进度（`done/total/item` 会原样传给前端）。后者更准，前者不需要改任何业务代码，两者可以共存。任务运行时临时给根 logger 挂一个缓冲 Handler，结束后摘掉，因此多个任务不会串日志。
 
 ### 8.3 安全边界
 

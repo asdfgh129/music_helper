@@ -220,14 +220,21 @@ class Plan:
             pass
 
 
-def copy_items(items, logger=None):
+def copy_items(items, logger=None, on_item=None):
     """按 (src, dst) 列表拷贝文件，返回成功条数
 
     拷贝不属于破坏性操作，因此不进 Plan，但仍统一处理重名与歌词伴随。
+
+    Args:
+        on_item: 逐条回调 `on_item(index, src, final, error)`；Web 向导用它把
+            每一行的结果（成功后的实际落点 / 失败原因）回填到列表里，
+            免得到结果时只剩一个「成功 N 个」。
     """
     copied = 0
-    for src, dst in items:
+    for index, (src, dst) in enumerate(items):
         if not os.path.exists(src):
+            if on_item:
+                on_item(index, src, '', '源文件不存在')
             continue
         try:
             os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -239,8 +246,12 @@ def copy_items(items, logger=None):
             copied += 1
             if logger:
                 logger.info(f'拷贝: {src} -> {final}')
+            if on_item:
+                on_item(index, src, final, '')
         except Exception as exc:  # noqa: BLE001
             if logger:
                 logger.error(f'拷贝失败 {src}: {exc}')
+            if on_item:
+                on_item(index, src, '', str(exc))
     return copied
 

@@ -13,10 +13,42 @@
 ### 计划中
 
 - 支持更多音乐平台（Spotify、Apple Music 等）
-- Web GUI 界面
 - Docker 部署支持
 
 ### 新增
+
+- **Web UI 改为 Vue 3 六步向导**（`web/static/`）：目录设置 → 操作类型 → 拷贝 → 解密 →
+  标签歌词 → 归档。每步都「先预览再执行」，长任务有逐条进度（`done/total` + 当前文件）与
+  实时日志；第 2 步的初始化/自检是子页面，做完自动回第 2 步；3、4 步允许跳过但必须显式确认。
+  前端不做构建：Vue 3.5.13 运行时随仓库放在 `web/static/vendor/`，离线可用；旧版单页仪表盘
+  保留在 `/legacy`。详细设计见新增的 [docs/web-wizard.md](docs/web-wizard.md)。
+- **目录设置界面化并持久化**：新增 `services/settings_store.py`，是 `config.ini [paths]` 的
+  唯一写入点——校验（必填/绝对路径/重复目录/互相嵌套）通过才写，先写 `.tmp` 再 `os.replace`，
+  写完 `config.reload()`，CLI 与 Web 读到同一份值。值写空等于删除该键、回落到默认值。
+- **VIP 目录可单独配置**：新增 `paths.netease_vip_dir` / `paths.qq_vip_dir` 与
+  `MUSIC_HELPER_NETEASE_VIP_DIR` / `MUSIC_HELPER_QQ_VIP_DIR`，留空仍跟随
+  `<下载目录>/VipSOngsDownload`（行为与旧版一致）。
+- **库初始化判定**（`core/library.py`）：「已初始化」= 库目录存在且（已有 `<年代>/<年份>`
+  结构 或 至少一个音频文件）；声纹库缺失只作为建议，不阻塞流程。`decade_dirs()` 顺带给出
+  年代/年份结构与音频数（带上限，避免为状态徽标走完整个大库）。
+- **直接解密**（`services/decrypt.decrypt_direct`）：VIP 目录 → 工作区，不再把加密文件搬进
+  `DECRYPT_STAGING_DIR`。跨盘时旧流程对同一批文件要做三次跨盘 IO（搬进暂存区、读一遍解密、
+  `return` 模式再搬回），直解只有一次读 + 一次写。核实结论与源码位置见
+  [docs/web-wizard.md](docs/web-wizard.md#41-关于um-不能跨盘解密)。
+- **解密可按文件列表执行**：`decrypto/qq.py:run_decrypt(files=…)`、
+  `services/decrypt.encrypted_candidates()`，支持按月份范围只处理选中的几个文件。
+- **建库/补库独立入口**：`services/soundalike.init_db()`——只扫描写指纹，不带
+  `-move-interactive`，因此不会在初始化时问「保留哪个」，也不改库外任何文件。
+- **标签补全可拆项**：`tagger.Tagger(write_cover=…, write_lyrics=…)`，向导的「标签与歌词」
+  页可以只补文本标签。
+- **月份范围扫描**：`core.scan.scan(month_from=, month_to=)`（闭区间，`month` 优先），
+  避免为一个月一个月的枚举把大目录扫很多遍。
+- **拷贝逐条回调**：`core.ops.copy_items(on_item=…)`，前端能把每行的实际落点/失败原因回填。
+- **任务逐条进度**：`web/tasks.Task.set_progress(done, total, item)`，向导类任务（`init` /
+  `copy` / `decrypt-direct` / `tags` / `archive`）直接上报进度，不再只靠日志关键字推断；
+  `TaskManager.busy()` 供「有任务在跑时禁止改目录」使用（接口返回 409）。
+- **目录浏览接口**：`GET /api/fs/list`（盘符 + 子目录 + 常用目录快捷入口，只列目录）、
+  `POST /api/fs/mkdir`，供选目录弹窗使用。
 
 - **QQ 解密前置环境全自动**：新增 `decrypto/qq_client.py`，`run_decrypt()` 解密前依次完成
   三件事，缺哪步补哪步：
@@ -190,6 +222,12 @@
 
 ### 变更
 
+- **普通文件拷贝只有一处实现**：`main._copy_normal_files` 改为调用
+  `services.steps.copy_pairs()`，与向导第 3 步共用「哪些算普通文件（排除 VIP 子目录）」这条规则。
+- **`web/api.py` 增加向导接口**，旧的只读/检查/计划/执行/解密接口全部保留；
+  `/` 改为 Vue 3 向导，旧仪表盘移到 `/legacy`。
+
+
 - **新增可播放格式**：`AUDIO_EXTENSIONS` 加入 `.opus`、`.m4a`、`.wma`、`.dsf`，并补齐对应的
   标签读写与封面探测。裸 `.aac`（ADTS）故意不支持：没有统一容器标签，纳入扫描会让整类文件
   被判成「缺标签」。
@@ -201,6 +239,11 @@
   `rename` 撞车一律失败（改名要求更正确，不能制造重复）。
 
 ### 文档
+
+- 新增 [docs/web-wizard.md](docs/web-wizard.md)：六步各自做什么、目录设置的持久化与校验规则、
+  初始化判据、跳过/回退语义、接口与文件清单，以及「um 能否跨盘解密」的源码核实结论。
+- 同步 [docs/usage.md](docs/usage.md#8-web-ui六步向导)、[docs/configuration.md](docs/configuration.md)、
+  [docs/architecture.md](docs/architecture.md)、[docs/README.md](docs/README.md) 与 [README.md](README.md)。
 
 - 新增 [docs/self-check.md](docs/self-check.md)：完整记录音乐库自检的流程、六个维度各自看什么、
   `severe` 分级与处置、报告解读、性能特征、已知局限与误判风险、以及自检自身的验证方法。

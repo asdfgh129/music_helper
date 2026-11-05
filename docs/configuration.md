@@ -42,6 +42,11 @@ MUSIC_HELPER_CONFIG=/path/to/test-config.ini python main.py --check --dry-run
 
 `config.reload()` 可在同一进程内重新读取 INI 与环境变量；正常 CLI 运行不需要手动调用。
 
+Web 向导第一步改的目录会**直接写回 `config.ini` 的 `[paths]`** 并立刻 `config.reload()`，
+写入点只有 `services/settings_store.py` 一处：值填空等于删除该项（回落到本文件的默认值），
+被环境变量覆盖的项保存后仍以环境变量为准（页面上会标出来）。详见
+[web-wizard.md](web-wizard.md#1-目录设置)。
+
 ## 2. 目录语义
 
 | 语义名 | 默认值 | 配置项 / 环境变量 | 作用 |
@@ -51,9 +56,9 @@ MUSIC_HELPER_CONFIG=/path/to/test-config.ini python main.py --check --dry-run
 | `INCOMPLETE_DIR` | `G:\Unready` | `paths.incomplete_dir` / `MUSIC_HELPER_INCOMPLETE_DIR` | 标签不全、文件名与标签矛盾，等待人工处理 |
 | `DUPLICATE_DIR` | `G:\Tmp` | `paths.duplicate_dir` / `MUSIC_HELPER_DUPLICATE_DIR` | 重复文件 |
 | `NETEASE_DIR` | `G:\Neteasymusic` | `paths.netease_dir` / `MUSIC_HELPER_NETEASE_DIR` | 网易云下载根目录 |
-| `NETEASE_VIP_DIR` | `<NETEASE_DIR>\VipSOngsDownload` | 随 `NETEASE_DIR` | 网易云加密文件目录 |
+| `NETEASE_VIP_DIR` | `<NETEASE_DIR>\VipSOngsDownload` | `paths.netease_vip_dir` / `MUSIC_HELPER_NETEASE_VIP_DIR` | 网易云加密文件目录 |
 | `QQ_DIR` | `G:\QQMusic` | `paths.qq_dir` / `MUSIC_HELPER_QQ_DIR` | QQ 音乐下载根目录 |
-| `QQ_VIP_DIR` | `<QQ_DIR>\VipSOngsDownload` | 随 `QQ_DIR` | QQ 加密文件目录 |
+| `QQ_VIP_DIR` | `<QQ_DIR>\VipSOngsDownload` | `paths.qq_vip_dir` / `MUSIC_HELPER_QQ_VIP_DIR` | QQ 加密文件目录 |
 | `DECRYPT_STAGING_DIR` | `<WORKSPACE_DIR>\_decrypt` | `paths.decrypt_dir` / `MUSIC_HELPER_DECRYPT_DIR` | 解密暂存区 |
 | `NETEASE_STAGING_DIR` | `<DECRYPT_STAGING_DIR>\netease` | 随上一项 | 网易云加密文件暂存 |
 | `QQ_STAGING_DIR` | `<DECRYPT_STAGING_DIR>\qq` | 随上一项 | QQ 加密文件暂存 |

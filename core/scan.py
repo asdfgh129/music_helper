@@ -38,6 +38,21 @@ def month_of(path):
         return ''
 
 
+def _month_ok(value, month, month_from, month_to):
+    """月份过滤：单月优先，其次区间（闭区间，格式 YYYYMM，字符串比较即可）"""
+    if month:
+        return value == month
+    if month_from or month_to:
+        if not value:
+            return False
+        if month_from and value < month_from:
+            return False
+        if month_to and value > month_to:
+            return False
+        return True
+    return True
+
+
 def build_track(path, with_tags=True):
     """构造 Track 对象
 
@@ -57,7 +72,8 @@ def build_track(path, with_tags=True):
     return track
 
 
-def scan(paths, month=None, with_tags=True, recursive=True, extensions=None):
+def scan(paths, month=None, with_tags=True, recursive=True, extensions=None,
+         month_from=None, month_to=None):
     """扫描目录中的音频文件
 
     Args:
@@ -66,6 +82,8 @@ def scan(paths, month=None, with_tags=True, recursive=True, extensions=None):
         with_tags: 是否读取标签与时长（关闭可显著加速纯文件名检查）
         recursive: 是否递归子目录
         extensions: 自定义扩展名集合（默认只认普通音频，传入 VIP 扩展名可扫描加密文件）
+        month_from / month_to: 月份区间（闭区间，YYYYMM）；`month` 优先。
+            向导里的「按月份范围」用它，避免为每个月各扫一遍大目录。
 
     Returns:
         list[Track]，按路径去重并排序
@@ -86,7 +104,7 @@ def scan(paths, month=None, with_tags=True, recursive=True, extensions=None):
             real = os.path.abspath(path)
             if real in seen:
                 continue
-            if month and month_of(real) != month:
+            if not _month_ok(month_of(real), month, month_from, month_to):
                 continue
             seen.add(real)
             try:

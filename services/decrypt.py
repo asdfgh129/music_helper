@@ -215,3 +215,198 @@ def _restore(encrypted, tmp_dir, vip_dir):
         if os.path.exists(leftover):
             restore.add_move(leftover, os.path.join(vip_dir, track.filename), '解密失败，原样归还')
     restore.execute()
+
+
+# --------------------------------------------------------------------------- #
+# 直接解密：VIP 目录 → 目标目录，不经过暂存区                                  #
+# --------------------------------------------------------------------------- #
+
+# 加密扩展名 -> 预期产物扩展名；空串表示「由文件内容决定」（.ncm 里可能是 mp3/flac）
+_EXPECT_EXT = {'.ncm': '', '.mflac': '.flac', '.mgg': '.ogg'}
+
+
+def target_info(target):
+    """解密目标 -> (名称, VIP 目录, 加密扩展名集合)"""
+    if target == 'netease':
+        return '网易云', config.NETEASE_VIP_DIR, config.NETEASE_VIP_EXTENSIONS
+    if target == 'qq':
+        return 'QQ音乐', config.QQ_VIP_DIR, config.QQ_VIP_EXTENSIONS
+    raise ValueError(f'未知解密目标: {target}')
+
+
+def _find_output(stem, output_dir):
+    """在目标目录里找该曲目的解密产物（扩展名由内容决定，逐一试）"""
+    for ext in sorted(config.AUDIO_EXTENSIONS):
+        path = os.path.join(output_dir, stem + ext)
+        if os.path.exists(path):
+            return path
+    return ''
+
+
+def candidate(target, track, output_dir=None):
+    """一个待解密文件的前端视图"""
+    output_dir = output_dir or config.WORKSPACE_DIR
+    stem, ext = os.path.splitext(track.filename)
+    expect_ext = _EXPECT_EXT.get(ext.lower(), '')
+    found = _find_output(stem, output_dir)
+    return {
+        'path': track.path,
+        'name': track.filename,
+        'stem': stem,
+        'size': track.size,
+        'ext': ext.lower(),
+        'expect': stem + expect_ext if expect_ext else f'{stem}（扩展名由内容决定）',
+        'existing': bool(found),
+        'existing_path': found,
+        'target_dir': output_dir,
+    }
+
+
+def encrypted_candidates(target, month_from=None, month_to=None, output_dir=None):
+    """VIP 目录里的待解密文件（不移动任何文件）"""
+    _name, vip_dir, exts = target_info(target)
+    if not os.path.isdir(vip_dir):
+        return []
+    tracks = scanner.scan([vip_dir], with_tags=False, recursive=False, extensions=exts,
+                          month_from=month_from, month_to=month_to)
+    return [candidate(target, track, output_dir) for track in tracks]
+
+
+def _emit(progress, done, total, item):
+    if progress:
+        try:
+            progress(done, total, item)
+        except Exception:  # noqa: BLE001 - 进度回调失败不该中断解密
+            pass
+
+
+def decrypt_direct(target, paths=None, month_from=None, month_to=None, logger=None,
+                   progress=None, output_dir=None):
+    """把 VIP 目录里的加密文件**直接**解密到工作区，省掉「搬进暂存区再解密」
+
+    与 `decrypt_netease` / `decrypt_qq` 的区别只有一处：不再把加密文件搬到
+    `DECRYPT_STAGING_DIR`。原来那条路在 VIP 目录和工作区不同盘时要多付两次
+    跨盘复制（搬进去一次、`ENCRYPTED_SOURCE_MODE=return` 时再搬回来一次），
+    而 um 本身是「读源文件 → 逐字节写目标文件」，跨不跨盘都能写。
+
+    Args:
+        paths: 只解密这些文件；None 表示按月份筛选整个 VIP 目录
+        progress: `progress(done, total, item)`，item 为单文件结果
+        output_dir: 解密产物落点，默认 WORKSPACE_DIR
+    """
+    name, vip_dir, _exts = target_info(target)
+    output_dir = output_dir or config.WORKSPACE_DIR
+    result = DecryptResult(name=name)
+
+    if not os.path.isdir(vip_dir):
+        result.message = f'VIP 目录不存在: {vip_dir}'
+        return result
+
+    candidates = encrypted_candidates(target, month_from, month_to, output_dir)
+    if paths:
+        wanted = {os.path.normcase(os.path.abspath(p)) for p in paths}
+        candidates = [item for item in candidates if os.path.normcase(item['path']) in wanted]
+
+    result.encrypted = len(candidates)
+    if not candidates:
+        result.ok = True
+        result.message = '没有待解密的加密文件'
+        return result
+
+    if precheck_error := _precheck_direct(target, logger):
+        result.message = precheck_error
+        return result
+
+    os.makedirs(output_dir, exist_ok=True)
+    total = len(candidates)
+    started = time.time()
+    outcomes = []
+
+    if target == 'qq' and _qq_backend() == 'frida':
+        # Frida 一次 attach 处理整批；过程中没有逐文件回调，结束后按产物判定
+        try:
+            from decrypto import run_decrypt
+            run_decrypt(vip_dir, output_dir, logger=logger, ensure_client=False,
+                        files=[item['path'] for item in candidates])
+        except Exception as exc:  # noqa: BLE001
+            result.message = f'解密异常: {exc}'
+            if logger:
+                logger.error(result.message)
+            return result
+        for index, item in enumerate(candidates, 1):
+            produced = _find_output(item['stem'], output_dir)
+            outcomes.append({'name': item['name'], 'ok': bool(produced),
+                             'output': produced,
+                             'message': '' if produced else '没有产出'})
+            _emit(progress, index, total, outcomes[-1])
+    else:
+        from decrypto import um
+        mmkv, key = um.qmc_credentials()
+        if target == 'netease':
+            # .ncm 不需要凭据；传了反而会让 um 去开一个用不上的 vault
+            mmkv, key = '', ''
+        for index, item in enumerate(candidates, 1):
+            completed, error = um.run(item['path'], output_dir, mmkv, key, logger=logger)
+            produced = ''
+            message = ''
+            if error:
+                message = error
+            elif completed is None or completed.returncode != 0:
+                message = um.failure_detail(completed) or 'um 返回失败'
+            else:
+                produced = _find_output(item['stem'], output_dir)
+                if not produced:
+                    message = '没有产出（可能不是加密文件）'
+                elif item['existing']:
+                    message = '已存在，跳过'
+            outcomes.append({'name': item['name'], 'ok': bool(produced),
+                             'output': produced, 'message': message})
+            _emit(progress, index, total, outcomes[-1])
+
+    produced_count = sum(1 for item in outcomes if item['ok'])
+    result.produced = produced_count
+    result.ok = produced_count > 0
+    result.message = f'耗时 {time.time() - started:.1f}s，成功 {produced_count}/{total}'
+
+    # 加密原文件去向：默认留在原地（直接解密天然满足「归还」的语义）
+    mode = (config.ENCRYPTED_SOURCE_MODE or 'return').lower()
+    if mode == 'trash' and produced_count:
+        cleanup = Plan(f'{name}-处理加密原文件', journal_path=config.JOURNAL_PATH,
+                       trash_dir=config.TRASH_DIR)
+        for item, outcome in zip(candidates, outcomes):
+            if outcome['ok']:
+                cleanup.add_trash(item['path'], '解密完成，加密原文件入回收站')
+        cleanup.execute()
+        result.message += '，加密原文件已入回收站'
+
+    if logger:
+        logger.info(f'{name}直接解密: {result.message}')
+    return result
+
+
+def _qq_backend():
+    try:
+        from decrypto.qq import decrypt_backend
+        return decrypt_backend()
+    except Exception:  # noqa: BLE001
+        return 'um'
+
+
+def _precheck_direct(target, logger):
+    """直接解密前的环境检查，返回错误信息（可用返回空串）
+
+    QQ 在 Windows 上依赖注入客户端，环境不就绪时一个文件也解不开；网易云用 um
+    离线解密，没有前置条件。
+    """
+    if target != 'qq' or _qq_backend() != 'frida':
+        return ''
+    try:
+        from decrypto import qq_client
+    except Exception:  # noqa: BLE001 - 模块缺失交给执行阶段报错
+        return ''
+    try:
+        if qq_client.ensure_ready(logger):
+            return ''
+    except Exception as exc:  # noqa: BLE001
+        return f'QQ 音乐环境检查失败: {exc}'
+    return 'QQ 音乐环境未就绪（未安装 / 未启动 / 未登录）'

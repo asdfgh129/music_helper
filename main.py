@@ -148,18 +148,18 @@ def _require_dir(path, what):
 
 
 def _copy_normal_files(month, args, dry_run=False):
-    """下载目录中的普通文件拷贝到 WORKSPACE_DIR（排除 VIP 子目录）"""
-    items = []
-    for base, vip_dir in ((config.NETEASE_DIR, config.NETEASE_VIP_DIR),
-                          (config.QQ_DIR, config.QQ_VIP_DIR)):
-        for track in scanner.scan([base], month=month, with_tags=False):
-            if vip_dir and os.path.abspath(track.path).startswith(os.path.abspath(vip_dir)):
-                continue
-            items.append((track.path, os.path.join(config.WORKSPACE_DIR, track.filename)))
+    """下载目录中的普通文件拷贝到 WORKSPACE_DIR（排除 VIP 子目录）
+
+    「哪些算普通文件」由 `services.steps.copy_pairs` 统一算，Web 向导的第 3 步
+    用的是同一份数据——否则同一条规则早晚会在两边长出两种实现。
+    """
+    from services import steps
+
+    pairs = steps.copy_pairs(month=month)
     if dry_run:
-        utils.main_logger.info(f'[试运行] 拟拷贝 {len(items)} 个普通文件')
-        return len(items)
-    copied = ops.copy_items(items, utils.main_logger)
+        utils.main_logger.info(f'[试运行] 拟拷贝 {len(pairs)} 个普通文件')
+        return len(pairs)
+    copied = ops.copy_items(pairs, utils.main_logger)
     utils.main_logger.info(f'普通文件拷贝完成: {copied} 个')
     return copied
 

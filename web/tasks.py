@@ -55,9 +55,25 @@ _LABELS = {
     "dedupe": "声纹去重",
     "dedupe-report": "声纹候选清单",
     "manual-archive": "手动归档入库",
+    # 向导六步（第 2a/2b 步单独成任务，方便复用同一条进度通道）
+    "init": "初始化库目录",
+    "copy": "拷贝下载文件到工作区",
+    "decrypt-direct": "直接解密到工作区",
+    "tags": "标签与歌词补全",
+    "archive": "按年份归档",
 }
 
 _SUPPORTED = [
+    {"kind": "init", "label": "初始化库目录",
+     "desc": "建目录结构 + 建声纹库（幂等，不动文件）", "default_dry_run": False},
+    {"kind": "copy", "label": "拷贝下载文件",
+     "desc": "下载目录（非 VIP）→ 工作区", "default_dry_run": False},
+    {"kind": "decrypt-direct", "label": "直接解密",
+     "desc": "VIP 目录 → 工作区，不经过暂存区", "default_dry_run": False},
+    {"kind": "tags", "label": "标签与歌词补全",
+     "desc": "声纹/在线平台补标签、封面、歌词", "default_dry_run": False},
+    {"kind": "archive", "label": "按年份归档",
+     "desc": "工作区 → <年代>/<年份>/（可入库）", "default_dry_run": False},
     {"kind": "pipeline", "label": "工作区完整流水线",
      "desc": "解密 → 去重 → 标签 → 检查 → 分流 → 归档", "default_dry_run": True},
     {"kind": "check", "label": "最终库检查",
@@ -71,6 +87,9 @@ _SUPPORTED = [
     {"kind": "manual-archive", "label": "手动归档入库",
      "desc": "WORKSPACE_DIR → LIBRARY_DIR（按年份）", "default_dry_run": True},
 ]
+
+# 走 services.steps 的向导任务（有逐条进度，结果直接是 JSON 字典）
+_WIZARD_KINDS = ("init", "copy", "decrypt-direct", "tags", "archive")
 
 
 def supported_actions():
@@ -124,6 +143,11 @@ class Task:
         self.stage_index = -1
         self.stage = "排队中"
         self.progress = 0
+        # 逐条进度：向导需要「第几个文件 / 一共几个 / 当前在做什么」
+        self.total = 0
+        self.done = 0
+        self.current = ""
+        self.items: List[dict] = []
         self.result = None
         self.error = None
 
@@ -139,11 +163,30 @@ class Task:
             if len(self.logs) > 4000:
                 del self.logs[: len(self.logs) - 4000]
 
+    def set_progress(self, done, total, item=None):
+        """业务回调：更新条数进度（比按日志关键字猜阶段准确得多）"""
+        self.done = int(done or 0)
+        self.total = int(total or 0)
+        if self.total:
+            self.progress = min(99, int(self.done / self.total * 100))
+        item = item or {}
+        name = item.get("name") or item.get("message") or ""
+        if name:
+            self.current = str(name)
+            self.stage = f"{self.done}/{self.total}"
+        if item:
+            self.items.append(item)
+            if len(self.items) > 2000:
+                del self.items[: len(self.items) - 2000]
+
+    def progress_cb(self):
+        return self.set_progress
+
     def to_dict(self, tail=200):
         with self._logs_lock:
-            logs = [{"ts": l.ts, "level": l.level, "msg": l.msg}
-                    for l in self.logs[-tail:]]
-            total = len(self.logs)
+            logs = [{"ts": line.ts, "level": line.level, "msg": line.msg}
+                    for line in self.logs[-tail:]]
+            total_logs = len(self.logs)
         return {
             "id": self.id,
             "kind": self.kind,
@@ -154,10 +197,14 @@ class Task:
             "finished_at": self.finished_at,
             "stage": self.stage,
             "progress": self.progress,
+            "total": self.total,
+            "done": self.done,
+            "current": self.current,
+            "items": self.items[-tail:],
             "result": self.result,
             "error": self.error,
             "logs": logs,
-            "log_total": total,
+            "log_total": total_logs,
         }
 
 
@@ -223,6 +270,38 @@ def _dispatch(kind, args, month):
     if kind == "manual-archive":
         return m.flow_manual_archive(args)
     raise ValueError("unknown kind: " + kind)
+
+
+def _dispatch_wizard(task):
+    """向导逐步任务：直接调 services.steps，进度走 task.set_progress"""
+    from services import steps
+
+    kind, opts = task.kind, task.opts
+    progress = task.progress_cb()
+    if kind == "init":
+        return steps.init_library(make_db=bool(opts.get("make_db", True)),
+                                  progress=progress)
+    if kind == "copy":
+        return steps.run_copy(paths=opts.get("paths") or None,
+                              month=opts.get("month") or None,
+                              month_from=opts.get("month_from") or None,
+                              month_to=opts.get("month_to") or None,
+                              progress=progress)
+    if kind == "decrypt-direct":
+        months = (opts.get("month_from") or None, opts.get("month_to") or None)
+        return steps.run_decrypt(months=months, paths=opts.get("paths") or None,
+                                 progress=progress)
+    if kind == "tags":
+        return steps.run_fill_tags(paths=opts.get("paths") or None,
+                                   with_fingerprint=bool(opts.get("with_fingerprint", True)),
+                                   write_cover=bool(opts.get("write_cover", True)),
+                                   write_lyrics=bool(opts.get("write_lyrics", True)),
+                                   progress=progress)
+    if kind == "archive":
+        return steps.run_archive(into_library=bool(opts.get("into_library", True)),
+                                 move_incomplete=bool(opts.get("move_incomplete", True)),
+                                 progress=progress)
+    raise ValueError("unknown wizard kind: " + kind)
 
 
 def _capture_result(res):
@@ -294,6 +373,10 @@ class TaskManager:
         with self._lock:
             return [self._tasks[tid] for tid in reversed(self._order)]
 
+    def busy(self):
+        """有没有排队/执行中的任务（向导里禁止在跑任务时改配置）"""
+        return any(task.status in ("queued", "running") for task in self.list())
+
     def _loop(self):
         while True:
             task = self._queue.get()
@@ -309,26 +392,32 @@ class TaskManager:
         task.status = "running"
         task.started_at = time.time()
         task.stage = "启动"
-        args = _build_args(task.opts)
-        month = _resolve_month(task.opts, args)
         logger = utils.main_logger
         handler = _TaskHandler(task)
         handler.setLevel(logging.DEBUG)
+        wizard = task.kind in _WIZARD_KINDS
+        args = None if wizard else _build_args(task.opts)
         try:
             logger.addHandler(handler)
-            if not args.dry_run:
+            # 向导步骤自己负责建目录（init 就是干这个的）；CLI 流程沿用老规矩：
+            # 只有真执行（非试运行）才建目录
+            if args is not None and not args.dry_run:
                 try:
                     utils.ensure_dirs()
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: BLE001 - 建目录失败交给具体步骤报错
                     pass
             try:
-                raw = _dispatch(task.kind, args, month)
+                if wizard:
+                    task.result = _dispatch_wizard(task)
+                else:
+                    month = _resolve_month(task.opts, args)
+                    task.result = _capture_result(_dispatch(task.kind, args, month))
             except Exception as exc:  # noqa: BLE001
                 task.error = f"{type(exc).__name__}: {exc}"
                 logger.exception("任务执行异常")
                 task.status = "error"
+                task.finished_at = time.time()
                 return
-            task.result = _capture_result(raw)
         finally:
             logger.removeHandler(handler)
             handler.close()

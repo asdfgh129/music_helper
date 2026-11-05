@@ -257,12 +257,21 @@ def download_cover(url):
 # ---------------- 服务主体 ----------------
 
 class Tagger:
-    """标签更新服务"""
+    """标签更新服务
 
-    def __init__(self, threshold=None, dry_run=False, with_fingerprint=True):
+    Args:
+        with_fingerprint: 是否用声纹（MusicBrainz）匹配，关掉只走在线平台
+        write_cover / write_lyrics: 允许单独关闭封面 / 歌词写入。Web 向导的
+            「标签补全」页把它们做成勾选项，关掉时只补文本标签。
+    """
+
+    def __init__(self, threshold=None, dry_run=False, with_fingerprint=True,
+                 write_cover=True, write_lyrics=True):
         self.threshold = config.FINGERPRINT_THRESHOLD if threshold is None else threshold
         self.dry_run = dry_run
         self.with_fingerprint = with_fingerprint
+        self.write_cover = write_cover
+        self.write_lyrics = write_lyrics
         self._fingerprint = None
         self._fingerprint_ready = False
         self._qq = None
@@ -372,7 +381,7 @@ class Tagger:
         has_cover_now = (track.has_cover
                          if track.has_cover is not None
                          else core_tags.has_cover(track.path))
-        if cover_url and not has_cover_now:
+        if cover_url and not has_cover_now and self.write_cover:
             data = download_cover(cover_url)
             if data and not self.dry_run:
                 result.cover = core_tags.write_cover(track.path, data)
@@ -383,7 +392,7 @@ class Tagger:
 
         # 歌词
         lyrics_text = extra.get('lyrics')
-        if lyrics_text and lyrics_text.strip() and not track.has_lrc:
+        if lyrics_text and lyrics_text.strip() and not track.has_lrc and self.write_lyrics:
             result.lyric = True
             if not self.dry_run:
                 try:

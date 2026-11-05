@@ -156,7 +156,6 @@ class TestNormalizeYear(unittest.TestCase):
     def test_read_meta_normalizes_year(self):
         """read_meta 读出的 year 也应当是四位年，而非完整日期串"""
         import shutil
-        import tempfile
         path = _copy_fixture()
         try:
             tags.write_tags(path, {'title': 'T', 'artist': 'A', 'album': 'X',

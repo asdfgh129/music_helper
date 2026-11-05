@@ -52,6 +52,34 @@ class TestScan(unittest.TestCase):
         wrong = '190001' if actual != '190001' else '190002'
         self.assertEqual(scanner.scan([self.root], month=wrong, with_tags=False), [])
 
+    def test_month_range_includes_both_ends(self):
+        """区间是闭区间：向导里「从 1 月到 3 月」要能选到 1 月和 3 月的文件"""
+        path = self._touch('a.flac')
+        actual = scanner.month_of(path)
+        self.assertEqual(
+            len(scanner.scan([self.root], month_from=actual, month_to=actual,
+                             with_tags=False)), 1)
+        self.assertEqual(
+            len(scanner.scan([self.root], month_from='190001', month_to='299912',
+                             with_tags=False)), 1)
+
+    def test_month_range_excludes_outside(self):
+        path = self._touch('a.flac')
+        actual = scanner.month_of(path)
+        year, month = int(actual[:4]), int(actual[4:])
+        later = f'{year + 1:04d}{month:02d}'
+        found = scanner.scan([self.root], month_from=later, with_tags=False)
+        self.assertEqual(found, [])
+
+    def test_single_month_wins_over_range(self):
+        """`month` 优先级高于区间，避免两个条件互相矛盾时行为不确定"""
+        path = self._touch('a.flac')
+        actual = scanner.month_of(path)
+        wrong = '190001' if actual != '190001' else '190002'
+        found = scanner.scan([self.root], month=actual, month_from=wrong, month_to=wrong,
+                             with_tags=False)
+        self.assertEqual(len(found), 1)
+
     def test_custom_extensions(self):
         self._touch('song.ncm')
         self._touch('a.flac')

@@ -265,6 +265,22 @@ def report(debug=False, with_temp=True):
     return run(debug=debug, with_temp=with_temp, dry_run=True)
 
 
+def init_db(debug=False):
+    """建库 / 补库：只扫描写指纹，不移动任何文件
+
+    `run()` 带 `-move-interactive`（会问「保留哪个」），初始化用不着；`report()`
+    走的 `-dry-run` 又不写库。所以这里是第三条命令：只扫描 LIBRARY_DIR 建索引。
+    """
+    problem = exe_problem() or settings_problem()
+    if problem:
+        return ToolResult(False, None, problem)
+    cmd = build_command(with_temp=False, interactive=False, debug=debug, dry_run=False)
+    completed, error = _exec(cmd, cwd=_db_dir())
+    if error:
+        return ToolResult(False, None, error)
+    return ToolResult(completed.returncode == 0, completed.returncode, '')
+
+
 def check(main_dir=None):
     """检查 soundalike 数据库与目录文件的一致性"""
     problem = exe_problem()
