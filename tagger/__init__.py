@@ -263,15 +263,20 @@ class Tagger:
         with_fingerprint: 是否用声纹（MusicBrainz）匹配，关掉只走在线平台
         write_cover / write_lyrics: 允许单独关闭封面 / 歌词写入。Web 向导的
             「标签补全」页把它们做成勾选项，关掉时只补文本标签。
+        fields: 允许写入的标签键（title/artist/album/year/genre 的子集）。
+            None 表示全部；传入白名单时，白名单外的字段既不填也不写。
     """
 
     def __init__(self, threshold=None, dry_run=False, with_fingerprint=True,
-                 write_cover=True, write_lyrics=True):
+                 write_cover=True, write_lyrics=True, fields=None):
         self.threshold = config.FINGERPRINT_THRESHOLD if threshold is None else threshold
         self.dry_run = dry_run
         self.with_fingerprint = with_fingerprint
         self.write_cover = write_cover
         self.write_lyrics = write_lyrics
+        # 保持 TAG_KEYS 的顺序，避免前端拿到的字段顺序随请求变化
+        self.fields = tuple(key for key in TAG_KEYS
+                            if fields is None or key in set(fields)) or ()
         self._fingerprint = None
         self._fingerprint_ready = False
         self._qq = None
@@ -312,11 +317,10 @@ class Tagger:
 
     # ---------- 主流程 ----------
 
-    @staticmethod
-    def _merge(current, new):
-        """已有标签优先，只填补空缺"""
+    def _merge(self, current, new):
+        """已有标签优先，只填补空缺；只处理白名单内的字段"""
         merged = dict(current)
-        for key in TAG_KEYS:
+        for key in self.fields:
             if not merged.get(key) and new.get(key):
                 merged[key] = new[key]
         return merged
@@ -329,9 +333,12 @@ class Tagger:
         extra = {}
 
         # 已经齐活（核心标签 + 封面 + 歌词都在）：_merge 从不覆盖非空字段，
-        # 远程查询也不会写出任何东西，直接跳过以省去声纹/网络开销
-        if (track.title and track.artist and track.album and track.year
-                and track.tag('genre') and track.has_cover is True and track.has_lrc):
+        # 远程查询也不会写出任何东西，直接跳过以省去声纹/网络开销。
+        # 白名单关闭了某个字段时，该字段是否齐全不影响「可以跳过」的判断。
+        missing_wanted = any(not track.tag(key) for key in self.fields)
+        if (not missing_wanted and track.has_cover is True and track.has_lrc
+                and (not self.write_cover or track.has_cover is True)
+                and (not self.write_lyrics or track.has_lrc)):
             return result
 
         # 第一步：声纹
@@ -367,8 +374,8 @@ class Tagger:
                     extra = found
                     result.source = found.get('source', '')
 
-        # 写回标签
-        changed = {key: merged[key] for key in TAG_KEYS
+        # 写回标签（只写白名单内、且与当前值不同的字段）
+        changed = {key: merged[key] for key in self.fields
                    if merged.get(key) and merged[key] != current.get(key)}
         if changed:
             result.fields = sorted(changed)

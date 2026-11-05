@@ -55,11 +55,13 @@ _LABELS = {
     "dedupe": "声纹去重",
     "dedupe-report": "声纹候选清单",
     "manual-archive": "手动归档入库",
-    # 向导六步（第 2a/2b 步单独成任务，方便复用同一条进度通道）
+    # 向导八步（第 2a/2b 步单独成任务，方便复用同一条进度通道）
     "init": "初始化库目录",
     "copy": "拷贝下载文件到工作区",
     "decrypt-direct": "直接解密到工作区",
     "tags": "标签与歌词补全",
+    "dedupe-cross": "工作区查重（对照库目录）",
+    "selfcheck": "工作区自检",
     "archive": "按年份归档",
 }
 
@@ -72,6 +74,10 @@ _SUPPORTED = [
      "desc": "VIP 目录 → 工作区，不经过暂存区", "default_dry_run": False},
     {"kind": "tags", "label": "标签与歌词补全",
      "desc": "声纹/在线平台补标签、封面、歌词", "default_dry_run": False},
+    {"kind": "dedupe-cross", "label": "工作区查重",
+     "desc": "工作区 vs 库目录，库里已有的移入重复目录", "default_dry_run": False},
+    {"kind": "selfcheck", "label": "工作区自检",
+     "desc": "文件名/标签/一致性/歌词/重复，只出报告", "default_dry_run": False},
     {"kind": "archive", "label": "按年份归档",
      "desc": "工作区 → <年代>/<年份>/（可入库）", "default_dry_run": False},
     {"kind": "pipeline", "label": "工作区完整流水线",
@@ -89,7 +95,8 @@ _SUPPORTED = [
 ]
 
 # 走 services.steps 的向导任务（有逐条进度，结果直接是 JSON 字典）
-_WIZARD_KINDS = ("init", "copy", "decrypt-direct", "tags", "archive")
+_WIZARD_KINDS = ("init", "copy", "decrypt-direct", "tags", "dedupe-cross",
+                 "selfcheck", "archive")
 
 
 def supported_actions():
@@ -296,7 +303,15 @@ def _dispatch_wizard(task):
                                    with_fingerprint=bool(opts.get("with_fingerprint", True)),
                                    write_cover=bool(opts.get("write_cover", True)),
                                    write_lyrics=bool(opts.get("write_lyrics", True)),
+                                   fields=opts.get("fields"),
                                    progress=progress)
+    if kind == "dedupe-cross":
+        return steps.run_dedupe(paths=opts.get("paths") or None,
+                                action=opts.get("action") or "move",
+                                refresh=bool(opts.get("refresh", False)),
+                                progress=progress)
+    if kind == "selfcheck":
+        return steps.workspace_check()
     if kind == "archive":
         return steps.run_archive(into_library=bool(opts.get("into_library", True)),
                                  move_incomplete=bool(opts.get("move_incomplete", True)),

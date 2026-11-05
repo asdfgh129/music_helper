@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.check import _consistency_problem, _filename_from_tags, readiness_problems
+from core.check import _consistency_problem, _filename_from_tags, consistency_report, readiness_problems
 from core.model import Track
 
 
@@ -101,6 +101,59 @@ class TestFilenameFromTags(unittest.TestCase):
     def test_returns_none_when_name_already_matches(self):
         track = make_track('周杰伦 - 晴天.flac', title='晴天', artist='周杰伦')
         self.assertIsNone(_filename_from_tags(track))
+
+
+class TestConsistencyReport(unittest.TestCase):
+    """第 7 步自检展示用的结构化比对结果"""
+
+    def test_items_cover_artist_and_title(self):
+        report = consistency_report(make_track())
+        self.assertEqual([item['field'] for item in report['items']], ['artist', 'title'])
+        self.assertTrue(report['ok'])
+        self.assertIsNone(report['problem'])
+        self.assertEqual(report['file'], {'artist': 'Artist', 'title': 'Title'})
+        self.assertEqual(report['tag'], {'artist': 'Artist', 'title': 'Title'})
+
+    def test_problem_text_matches_legacy_helper(self):
+        """新接口与旧私有函数的结论必须逐字一致，否则报告和自检会互相打脸"""
+        cases = [
+            make_track('Artist - Title.flac'),
+            make_track('Artist - Other.flac'),
+            make_track('某人 - Title.flac'),
+            make_track('无结构.flac'),
+            make_track('Various - Title.flac', artist='Various Artists'),
+        ]
+        for track in cases:
+            self.assertEqual(consistency_report(track)['problem'],
+                             _consistency_problem(track), track.filename)
+
+    def test_mismatch_states(self):
+        report = consistency_report(make_track('Artist - Other.flac'))
+        states = {item['field']: item['state'] for item in report['items']}
+        self.assertEqual(states['artist'], 'ok')
+        self.assertEqual(states['title'], 'mismatch')
+        self.assertIn('歌名', report['problem'])
+
+    def test_skipped_when_filename_has_no_artist(self):
+        """文件名没有「歌手 - 歌名」结构时，歌手维度不可比，不是错误"""
+        report = consistency_report(make_track('晴天.flac', artist='周杰伦', title='晴天'))
+        artist_item = report['items'][0]
+        self.assertEqual(artist_item['state'], 'skipped')
+        self.assertIn('结构', artist_item['reason'])
+        self.assertTrue(report['ok'])
+
+    def test_skipped_when_tag_missing(self):
+        report = consistency_report(make_track('周杰伦 - 晴天.flac', artist='', title=''))
+        self.assertTrue(report['ok'])
+        self.assertEqual([item['state'] for item in report['items']],
+                         ['skipped', 'skipped'])
+
+    def test_placeholder_artist_is_not_a_conflict(self):
+        """合辑里文件写具体歌手、标签写 Various Artists，不算矛盾"""
+        report = consistency_report(
+            make_track('周杰伦 - 晴天.flac', artist='Various Artists', title='晴天'))
+        self.assertTrue(report['ok'])
+        self.assertEqual(report['items'][0]['state'], 'skipped')
 
 
 if __name__ == '__main__':

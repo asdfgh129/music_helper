@@ -30,7 +30,7 @@
 | [self-check.md](self-check.md) | 自检的完整流程、六维度的取舍、严重级别与处置、报告解读、性能特征、已知局限与误判风险 | 单条规则的比对公式、流水线其他步骤 |
 | [usage.md](usage.md) | CLI 全参数、流程入口、参数优先级、退出码、使用禁忌 | 规则为什么这样定 |
 | [configuration.md](configuration.md) | 配置来源与优先级、目录语义、外部程序、阈值、扩展名 | 规则怎么使用这些配置 |
-| [web-wizard.md](web-wizard.md) | Web 向导六步做了什么、初始化判定、跳过/回退语义、接口与文件清单、um 跨盘核实结论 | 单条判定规则、CLI 参数 |
+| [web-wizard.md](web-wizard.md) | Web 向导八步做了什么、初始化判定、查重与自检、跳过/回退语义、接口与文件清单、um 跨盘核实结论 | 单条判定规则、CLI 参数 |
 | [architecture.md](architecture.md) | 分层边界、模块职责、数据流、`Plan` 机制、扩展指南、设计决策 | 具体判定规则 |
 | [fingerprint.md](fingerprint.md) | 指纹原理、AcoustID/MusicBrainz、声纹查重（soundalike）的流程与算法、阈值、平台支持、同曲不同版本的碰撞策略与审核结论 | 本地查重流程 |
 | [troubleshooting.md](troubleshooting.md) | 症状 → 原因 → 处理、日志与 journal、数据恢复 | 正常流程说明 |

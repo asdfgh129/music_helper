@@ -11,6 +11,7 @@ from core.dedupe import (
     find_by_filename,
     find_by_tag,
     find_duplicates,
+    match_against,
     pick_keep,
     strip_suffix,
 )
@@ -167,6 +168,70 @@ class TestOrganize(unittest.TestCase):
         self.assertEqual([t.path for t in organized], ['g.flac'])
         self.assertEqual([t.path for t in unknown], ['b.flac'])
         self.assertEqual(len(plan), 2)                # 一个归档 + 一个 unknown
+
+
+class TestMatchAgainst(unittest.TestCase):
+    """工作区 vs 库目录的跨集合比对（第 6 步查重）
+
+    库那边的 Track 通常只有 size 与从文件名解析出的 artist/title，
+    duration 为 0——所以判定不能只依赖时长。
+    """
+
+    def _ws(self, name='a.flac', duration=200.0, size=5000, **tags):
+        return track('G:/ws/' + name, duration, size, **tags)
+
+    def _lib(self, name='a.flac', duration=0.0, size=5000, **tags):
+        return track('D:/lib/2020-2029/2020/' + name, duration, size, **tags)
+
+    def test_new_file_is_unique(self):
+        result = match_against([self._ws(title='新歌', artist='A')],
+                               [self._lib(title='老歌', artist='B')])
+        self.assertEqual(result[0].status, 'unique')
+        self.assertEqual(result[0].matched, [])
+
+    def test_same_tag_and_size_is_duplicate(self):
+        result = match_against([self._ws(title='晴天', artist='周杰伦')],
+                               [self._lib(title='晴天', artist='周杰伦')])
+        self.assertEqual(result[0].status, 'duplicate')
+        self.assertEqual(result[0].kind, '歌手+歌名')
+        self.assertEqual(len(result[0].matched), 1)
+
+    def test_same_tag_size_diff_without_duration_is_unknown(self):
+        """库里那份没读时长时，大小不同只能交给人工，不能自动搬走"""
+        result = match_against([self._ws(title='晴天', artist='周杰伦', size=5000)],
+                               [self._lib('a.mp3', title='晴天', artist='周杰伦', size=4000)])
+        self.assertEqual(result[0].status, 'unknown')
+
+    def test_same_tag_duration_close_is_duplicate(self):
+        """不同码率转码大小不同，但时长能对上，也应判重复"""
+        result = match_against([self._ws(title='晴天', artist='周杰伦', size=5000)],
+                               [self._lib('a.mp3', duration=201, size=4000,
+                                          title='晴天', artist='周杰伦')])
+        self.assertEqual(result[0].status, 'duplicate')
+
+    def test_filename_dimension_when_tags_are_empty(self):
+        result = match_against([self._ws('周杰伦 - 晴天.flac')],
+                               [self._lib('周杰伦 - 晴天.flac')])
+        self.assertEqual(result[0].status, 'duplicate')
+        self.assertEqual(result[0].kind, '文件名')
+
+    def test_plain_filename_is_not_matched_across_directories(self):
+        """`Intro.flac` 这类没有歌手结构的名字跨目录同名，多半是不同曲目"""
+        result = match_against([self._ws('Intro.flac')], [self._lib('Intro.flac')])
+        self.assertEqual(result[0].status, 'unique')
+
+    def test_live_version_is_not_duplicate(self):
+        result = match_against(
+            [self._ws('周杰伦 - 晴天 (Live).flac', title='晴天 (Live)', artist='周杰伦')],
+            [self._lib('周杰伦 - 晴天.flac', title='晴天', artist='周杰伦')])
+        self.assertEqual(result[0].status, 'unique')
+
+    def test_result_order_follows_targets(self):
+        targets = [self._ws('a.flac', title='A', artist='X'),
+                   self._ws('b.flac', title='B', artist='Y')]
+        result = match_against(targets, [])
+        self.assertEqual([item.track.path for item in result],
+                         [t.path for t in targets])
 
 
 if __name__ == '__main__':

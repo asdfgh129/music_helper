@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Web 向导六步的业务编排（CLI 与 Web 共用）
+"""Web 向导八步的业务编排（CLI 与 Web 共用）
 
 分工：
 - `core/` 提供判定（哪些文件算可就绪、怎么归档、怎么建 Plan）；
@@ -19,7 +19,11 @@ import core.library as library
 import core.ops as ops
 import core.organize as organizer
 import core.scan as scanner
+import core.tags as core_tags
 import utils
+from core import dedupe as dedupe_mod
+from core import naming
+from core.model import Track
 from services import decrypt as decrypt_service
 from services import settings_store, soundalike
 
@@ -77,6 +81,10 @@ def directories():
 def save_directories(values):
     """保存目录设置；返回 (problems, directories())"""
     problems, items = settings_store.save(values)
+    # 库目录可能被改到别处，丢弃查重用的库索引，避免下一次比对拿旧目录的文件
+    if items is not None:
+        _library_cache['dir'] = ''
+        _library_cache['tracks'] = None
     if problems:
         return problems, {'items': items, 'fields': settings_store.fields()}
     return [], directories()
@@ -363,9 +371,22 @@ def run_decrypt(months=None, paths=None, progress=None):
 # 第 5 步：标签与歌词补全                                                     #
 # --------------------------------------------------------------------------- #
 
+# 页面上可勾选写入的标签字段（顺序即展示顺序）
+WORKSPACE_TAG_FIELDS = ('title', 'artist', 'album', 'year', 'genre')
+
+
+def _workspace_tracks():
+    """工作区顶层曲目
+
+    第 5 步补全、第 6 步查重、第 7 步自检都用这一份扫描口径：
+    只扫顶层、只扫音频，避免「补全看到 10 个文件、自检看到 12 个」。
+    """
+    return scanner.scan([config.WORKSPACE_DIR], with_tags=True, recursive=False)
+
+
 def tag_candidates():
     """工作区顶层待补全的文件（与「待补全分流」用同一份就绪判定）"""
-    tracks = scanner.scan([config.WORKSPACE_DIR], with_tags=True, recursive=False)
+    tracks = _workspace_tracks()
     items = []
     for track in tracks:
         problems = checker.readiness_problems(track)
@@ -376,10 +397,14 @@ def tag_candidates():
             'title': track.title,
             'album': track.album,
             'year': track.year,
+            'genre': track.genre,
             'duration': round(track.duration, 1),
             'size': track.size,
+            'ext': track.ext,
             'has_cover': bool(track.has_cover),
             'has_lrc': track.has_lrc,
+            'canonical': naming.is_canonical(track.filename),
+            'consistency': checker.consistency_report(track),
             'problems': problems,
             'ready': not problems,
         })
@@ -392,15 +417,19 @@ def tag_candidates():
                             if any(problem.startswith('缺少') for problem in item['problems'])),
         'missing_lrc': sum(1 for item in items if not item['has_lrc']),
         'missing_cover': sum(1 for item in items if not item['has_cover']),
+        'mismatch': sum(1 for item in items if not item['consistency']['ok']),
     }
 
 
 def run_fill_tags(paths=None, with_fingerprint=True, write_cover=True,
-                  write_lyrics=True, progress=None):
+                  write_lyrics=True, fields=None, progress=None):
     """补全标签 / 封面 / 歌词（只填空缺，不覆盖已有值）
 
     判定「有没有必要处理」仍由 `tagger.Tagger.update` 内部决定，这里不预筛，
     免得两边规则不一致。
+
+    Args:
+        fields: 允许写入的标签键；None 表示全部。空列表表示只补封面/歌词。
     """
     import tagger as tagger_service
 
@@ -409,7 +438,8 @@ def run_fill_tags(paths=None, with_fingerprint=True, write_cover=True,
         paths = [item['path'] for item in tag_candidates()['items']]
     service = tagger_service.Tagger(with_fingerprint=with_fingerprint,
                                     write_cover=write_cover,
-                                    write_lyrics=write_lyrics)
+                                    write_lyrics=write_lyrics,
+                                    fields=fields)
     total = len(paths)
     items = []
     updated = failed = 0
@@ -448,8 +478,338 @@ def run_fill_tags(paths=None, with_fingerprint=True, write_cover=True,
             'items': items, 'preview': False}
 
 
+# ---------------- 单曲编辑（第 5 步的「编辑」抽屉） ----------------
+
+def _audio_in_workspace(path):
+    """校验路径是工作区内的音频文件
+
+    单曲读写接口都会调它，避免前端传个任意路径就能改到别处的文件。
+    """
+    target = os.path.abspath(str(path or ''))
+    if not target or not os.path.isfile(target):
+        raise ValueError(f'文件不存在: {path}')
+    if not _in_dir(target, config.WORKSPACE_DIR):
+        raise ValueError(f'只允许操作工作区内的文件: {config.WORKSPACE_DIR}')
+    if not naming.is_audio(target):
+        raise ValueError('不是受支持的音频文件')
+    return target
+
+
+def _read_lrc(path):
+    """读同名 .lrc 全文；没有或读不了返回空串"""
+    lrc_path = os.path.splitext(path)[0] + '.lrc'
+    if not os.path.exists(lrc_path):
+        return ''
+    try:
+        with open(lrc_path, 'r', encoding='utf-8', errors='replace') as handle:
+            return handle.read()
+    except OSError:
+        return ''
+
+
+def track_detail(path):
+    """单曲详情：标签、封面/歌词状态、文件名一致性、可入库判定"""
+    target = _audio_in_workspace(path)
+    track = scanner.build_track(target, with_tags=True)
+    return {
+        'path': track.path,
+        'name': track.filename,
+        'ext': track.ext,
+        'size': track.size,
+        'duration': round(track.duration, 1),
+        'tags': {key: track.tag(key) for key in WORKSPACE_TAG_FIELDS},
+        'has_cover': bool(track.has_cover),
+        'has_lrc': track.has_lrc,
+        'lyric': _read_lrc(track.path),
+        'canonical': naming.is_canonical(track.filename),
+        'consistency': checker.consistency_report(track),
+        'problems': checker.readiness_problems(track),
+    }
+
+
+def save_track(path, tags=None, lyric=None):
+    """手工保存单曲标签 / 歌词
+
+    只写传入的字段，**不改文件名**：改名牵动重复判定、归档路径与 journal，
+    属于归档环节的事；手工编辑只负责把标签改对。
+    空字符串不会被写入（`write_tags` 只写非空值），会原样保留旧值。
+    """
+    target = _audio_in_workspace(path)
+    track = scanner.build_track(target, with_tags=True)
+
+    changes, ignored = {}, []
+    for key in WORKSPACE_TAG_FIELDS:
+        if not tags or key not in tags:
+            continue
+        value = str(tags.get(key) or '').strip()
+        if value == track.tag(key):
+            continue
+        if not value:
+            ignored.append(key)
+            continue
+        changes[key] = value
+
+    written = []
+    if changes:
+        if not core_tags.write_tags(target, changes):
+            return {'ok': False, 'path': target, 'changed': [],
+                    'error': '写入标签失败（格式不支持或文件被占用）'}
+        written = sorted(changes)
+
+    lyric_saved = None
+    if lyric is not None:
+        lrc_path = os.path.splitext(target)[0] + '.lrc'
+        try:
+            with open(lrc_path, 'w', encoding='utf-8') as handle:
+                handle.write(str(lyric))
+            lyric_saved = True
+        except OSError as exc:
+            return {'ok': False, 'path': target, 'changed': written,
+                    'error': f'写歌词失败: {exc}'}
+
+    detail = track_detail(target)
+    detail.update({'ok': True, 'changed': written,
+                   'ignored': ignored, 'lyric_saved': lyric_saved})
+    return detail
+
+
+def fetch_track_online(path, fields=None):
+    """在线取标签（只填空缺、不写盘），把合并后的值返回给用户确认
+
+    与 `run_fill_tags` 的区别：这里 dry_run=True，不碰文件。用户看过之后再调
+    `save_track` 落盘，避免「点一下就把标签改了」。
+    """
+    import tagger as tagger_service
+
+    target = _audio_in_workspace(path)
+    track = scanner.build_track(target, with_tags=True)
+    service = tagger_service.Tagger(dry_run=True, write_cover=False,
+                                    write_lyrics=False, fields=fields)
+    result = service.update(track)
+    return {
+        'ok': not result.error,
+        'path': target,
+        'source': result.source,
+        'fields': list(result.fields),
+        'tags': {key: track.tag(key) for key in WORKSPACE_TAG_FIELDS},
+        'error': result.error,
+    }
+
+
 # --------------------------------------------------------------------------- #
-# 第 6 步：归档                                                               #
+# 第 6 步：查重（工作区 ↔ 库目录）                                            #
+# --------------------------------------------------------------------------- #
+
+DUPLICATE_STATUS_LABELS = {'unique': '库中不存在', 'duplicate': '库中已有',
+                           'unknown': '需人工确认'}
+
+# 库目录索引比较贵（上万次要 stat + 解析文件名），缓存到目录变化为止
+_library_cache = {'dir': '', 'tracks': None}
+
+
+def _library_tracks(refresh=False):
+    """库目录索引：只做 stat + 从文件名解析歌手/歌名，不读标签
+
+    库里的文件是归档流程按「歌手 - 歌名.ext」写进去的，文件名本身就是可信的
+    歌手/歌名来源。为 1 万多首逐个用 mutagen 打开要十几分钟，而查重只需要
+    「歌手 + 歌名 + 大小」三项，没有理由付那个代价。
+
+    Returns:
+        list[Track]，tags 只有 artist/title，duration 为 0（未读）
+    """
+    cached = _library_cache
+    if (not refresh and cached['tracks'] is not None
+            and cached['dir'] == config.LIBRARY_DIR):
+        return cached['tracks']
+    if not os.path.isdir(config.LIBRARY_DIR):
+        return []
+
+    tracks = []
+    for path in scanner.iter_files(config.LIBRARY_DIR, recursive=True):
+        if not naming.is_audio(path):
+            continue
+        try:
+            stat = os.stat(path)
+        except OSError:
+            continue
+        artist, title = naming.parse_filename(path)
+        track = Track(path=os.path.abspath(path), size=stat.st_size,
+                      mtime=stat.st_mtime)
+        track.tags = {'artist': artist, 'title': title}
+        tracks.append(track)
+
+    tracks.sort(key=lambda item: item.path)
+    _library_cache['dir'] = config.LIBRARY_DIR
+    _library_cache['tracks'] = tracks
+    return tracks
+
+
+def dedupe_preview(refresh=False):
+    """第 6 步：工作区文件与库目录比对，判断哪些库里已经有
+
+    入库前必须先确认不是重复：库中已有一份的文件再归档一次，年份目录里会出现
+    两条相同记录，声纹库也会重复。判定规则见 `core.dedupe.match_against`。
+    """
+    workspace = _workspace_tracks()
+    library_tracks = _library_tracks(refresh=refresh)
+    matches = dedupe_mod.match_against(workspace, library_tracks)
+
+    items = []
+    for match in matches:
+        track = match.track
+        problems = checker.readiness_problems(track)
+        matched = sorted(match.matched, key=lambda item: (item.size, item.path),
+                         reverse=True)
+        items.append({
+            'path': track.path,
+            'name': track.filename,
+            'artist': track.artist,
+            'title': track.title,
+            'album': track.album,
+            'year': track.year,
+            'duration': round(track.duration, 1),
+            'size': track.size,
+            'status': match.status,
+            'status_label': DUPLICATE_STATUS_LABELS.get(match.status, match.status),
+            'kind': match.kind,
+            'reason': match.reason,
+            'matched': [{'path': item.path, 'name': item.filename,
+                         'dir': item.dirpath, 'size': item.size,
+                         'duration': round(item.duration, 1)}
+                        for item in matched[:3]],
+            'problems': problems,
+            'ready': not problems,
+            'archive_ok': match.status == 'unique' and not problems,
+        })
+
+    return {
+        'workspace': config.WORKSPACE_DIR,
+        'library': config.LIBRARY_DIR,
+        'library_exists': os.path.isdir(config.LIBRARY_DIR),
+        'library_count': len(library_tracks),
+        'items': items,
+        'total': len(items),
+        'unique': sum(1 for item in items if item['status'] == 'unique'),
+        'duplicate': sum(1 for item in items if item['status'] == 'duplicate'),
+        'unknown': sum(1 for item in items if item['status'] == 'unknown'),
+        'ready_to_archive': sum(1 for item in items if item['archive_ok']),
+    }
+
+
+def run_dedupe(paths=None, action='move', refresh=False, progress=None):
+    """把「确认与库重复」的工作区文件移入重复目录 / 回收站
+
+    - 只处理 `duplicate`：`unknown`（时长读不出来）一律留给人工；
+    - 库目录里的那份永远不动，只动工作区；
+    - 移动/删除仍走 `core.ops.Plan`，删除只是进 `log/_trash`。
+    """
+    logger = _log()
+    preview = dedupe_preview(refresh=refresh)
+    wanted = {os.path.normcase(path) for path in paths} if paths else None
+    targets = [item for item in preview['items']
+               if item['status'] == 'duplicate'
+               and (wanted is None or os.path.normcase(item['path']) in wanted)]
+
+    if not targets:
+        return {'action': action, 'planned': 0, 'executed': 0, 'failed': 0,
+                'items': [], 'summary': '没有需要处理的重复文件'}
+
+    plan = ops.Plan('工作区查重', dry_run=False,
+                    journal_path=config.JOURNAL_PATH, trash_dir=config.TRASH_DIR)
+    for item in targets:
+        other = item['matched'][0]['name'] if item['matched'] else ''
+        reason = f'库中已有：{other}' if other else item['reason']
+        if action == 'trash':
+            plan.add_trash(item['path'], reason)
+        else:
+            plan.add_move(item['path'],
+                          os.path.join(config.DUPLICATE_DIR, item['name']), reason)
+
+    if logger:
+        logger.info(f'查重处理：{len(plan.operations)} 个文件，方式 {action}')
+    result = plan.execute()
+
+    items = []
+    for index, op in enumerate(plan.operations, 1):
+        status = 'ok'
+        if op in result.failed:
+            status = 'failed'
+        elif op in result.skipped:
+            status = 'skipped'
+        item = {'name': os.path.basename(op.src), 'source': op.src,
+                'target': op.dst, 'reason': op.reason, 'status': status}
+        items.append(item)
+        _emit(progress, index, len(plan.operations), item)
+
+    return {
+        'action': action,
+        'planned': len(plan.operations),
+        'executed': len(result.done),
+        'failed': len(result.failed),
+        'moved_to': config.TRASH_DIR if action == 'trash' else config.DUPLICATE_DIR,
+        'items': items,
+        'summary': result.summary(),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# 第 7 步：工作区自检                                                         #
+# --------------------------------------------------------------------------- #
+
+def workspace_check():
+    """工作区自检（只读，不动任何文件）
+
+    检查项与库自检完全一致（同一份 `core.check`），区别是范围限在工作区顶层，
+    并且把「文件名 ↔ 标签」的逐项比对结果一并返回，页面不用自己再算一遍。
+    查到的问题由第 5 步（改标签）或第 8 步（未达标进待确认目录）处理。
+    """
+    tracks = _workspace_tracks()
+    result = checker.check_library(tracks, directories=[config.WORKSPACE_DIR],
+                                   check_tags=True, check_lyrics=True,
+                                   check_duplicates=True)
+
+    items = []
+    for track in tracks:
+        problems = checker.readiness_problems(track)
+        items.append({
+            'path': track.path, 'name': track.filename,
+            'artist': track.artist, 'title': track.title,
+            'album': track.album, 'year': track.year, 'genre': track.genre,
+            'duration': round(track.duration, 1), 'size': track.size,
+            'has_cover': bool(track.has_cover), 'has_lrc': track.has_lrc,
+            'canonical': naming.is_canonical(track.filename),
+            'consistency': checker.consistency_report(track),
+            'problems': problems,
+            'ready': not problems,
+        })
+
+    findings = [{
+        'kind': finding.kind,
+        'path': finding.path,
+        'name': os.path.basename(finding.path),
+        'detail': finding.detail,
+        'fixable': finding.fixable,
+        'severe': finding.severe,
+    } for finding in result.findings]
+
+    counts = result.counts()
+    return {
+        'dir': config.WORKSPACE_DIR,
+        'items': items,
+        'findings': findings,
+        'counts': counts,
+        'total': len(items),
+        'ready': sum(1 for item in items if item['ready']),
+        'mismatch': sum(1 for item in items if not item['consistency']['ok']),
+        'not_canonical': sum(1 for item in items if not item['canonical']),
+        'dup_groups': len(result.groups),
+        'no_lrc': len(result.by_kind(checker.KIND_NO_LRC)),
+        'orphan_lrc': len(result.by_kind(checker.KIND_ORPHAN_LRC)),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# 第 8 步：归档                                                               #
 # --------------------------------------------------------------------------- #
 
 def archive_preview(into_library=True):

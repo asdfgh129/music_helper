@@ -154,11 +154,11 @@ MSVC 修饰导出名），实际解密固定走 `um` 离线；登录态无法程
 5. **`LIBRARY_DIR` 不要等于 `WORKSPACE_DIR` / `DUPLICATE_DIR`**：`soundalike` 会拒绝相同目录，且容易自我搬运。
 6. **`--month` 不筛选标签/检查**：它只按修改时间筛选解密与拷贝；后续步骤处理工作区全部文件。
 
-## 8. Web UI（六步向导）
+## 8. Web UI（八步向导）
 
-除 CLI 外，本项目提供一个 Vue 3 写的六步向导（FastAPI 后端）：目录设置 → 操作类型 →
-拷贝 → 解密 → 标签歌词 → 归档。每一步都能先看「将要发生什么」再执行，长任务有逐条进度与
-实时日志。**完整说明见 [web-wizard.md](web-wizard.md)**，本节只给启动方式与接口索引。
+除 CLI 外，本项目提供一个 Vue 3 写的八步向导（FastAPI 后端）：目录设置 → 操作类型 →
+拷贝 → 解密 → 标签歌词 → 查重 → 工作区自检 → 归档。每一步都能先看「将要发生什么」再执行，
+长任务有逐条进度与实时日志。**完整说明见 [web-wizard.md](web-wizard.md)**，本节只给启动方式与接口索引。
 
 ### 8.1 启动
 
@@ -166,7 +166,7 @@ MSVC 修饰导出名），实际解密固定走 `um` 离线；登录态无法程
 pip install -r requirements-dev.txt      # 仅需首次：安装 fastapi / uvicorn
 cd /path/to/music_helper
 python -m uvicorn web.api:app --host 127.0.0.1 --port 8000
-# 浏览器打开 http://127.0.0.1:8000/         六步向导
+# 浏览器打开 http://127.0.0.1:8000/         八步向导
 #            http://127.0.0.1:8000/legacy  旧版仪表盘（配置/报告/任务日志）
 ```
 
@@ -185,8 +185,11 @@ python -m uvicorn web.api:app --host 127.0.0.1 --port 8000
 | 2b 自检 | `POST /api/tasks`（`kind=check`） | 复用 `main.flow_check`，可选 `fix` |
 | 3 拷贝 | `GET /api/copy/preview`、`POST /api/copy/run` | 下载目录普通文件 → 工作区 |
 | 4 解密 | `GET /api/decrypt/preview`、`POST /api/decrypt/run` | VIP 目录**直解**到工作区 |
-| 5 标签 | `GET /api/tags/preview`、`POST /api/tags/run` | 标签/封面/歌词补全 |
-| 6 归档 | `GET /api/archive/preview`、`POST /api/archive/run` | 按 `<年代>/<年份>` 归档，可选入库 |
+| 5 标签 | `GET /api/tags/preview`、`POST /api/tags/run` | 标签/封面/歌词补全；`fields` 限定写入哪些字段 |
+| 5 单曲 | `GET /api/track`、`POST /api/track/save`、`POST /api/track/fetch` | 单曲详情 / 手工保存 / 在线取标签（只预览不写盘） |
+| 6 查重 | `GET /api/dedupe/preview`、`POST /api/dedupe/run` | 工作区 vs 库目录；库里已有的移入重复目录或回收站 |
+| 7 自检 | `GET /api/selfcheck/preview`、`POST /api/selfcheck/run` | 工作区只读自检，含文件名 ↔ 标签逐项比对 |
+| 8 归档 | `GET /api/archive/preview`、`POST /api/archive/run` | 按 `<年代>/<年份>` 归档，可选入库 |
 | 任务 | `GET /api/tasks`、`GET /api/tasks/{id}` | 状态 / 逐条进度 / 日志 / 结果 |
 
 ### 8.3 保留的旧接口

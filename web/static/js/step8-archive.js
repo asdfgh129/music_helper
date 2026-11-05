@@ -1,4 +1,4 @@
-/* 第 6 步：按年份归档 */
+/* 第 8 步：按年份归档 */
 (function (MH) {
   'use strict';
 
@@ -65,7 +65,7 @@
     template: `
       <div>
         <div class="title-row">
-          <h2>第 6 步 · 按年份归档</h2>
+          <h2>第 8 步 · 按年份归档</h2>
           <span class="sub">按 &lt;年代&gt;/&lt;年份&gt; 两级目录整理，例如 1980-1989/1985/</span>
           <span class="spacer"></span>
           <button class="btn sm" @click="load" :disabled="loading || taskRunning">刷新</button>
@@ -73,6 +73,10 @@
 
         <div class="card" style="margin-top:14px">
           <h3>归档到哪里</h3>
+          <div class="note" v-if="intoLibrary" style="margin-bottom:10px">
+            入库前应已完成第 6 步查重与第 7 步自检；这里只负责按年份落位，
+            未达入库标准的文件会移入待确认目录。
+          </div>
           <div class="option" :class="{ active: intoLibrary }" @click="intoLibrary = true">
             <div class="mark">{{ intoLibrary ? '✓' : '' }}</div>
             <div class="body">

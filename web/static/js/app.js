@@ -8,7 +8,9 @@
     { key: 'copy', num: 3, label: '拷贝', view: 'copy' },
     { key: 'decrypt', num: 4, label: '解密', view: 'decrypt' },
     { key: 'tags', num: 5, label: '标签歌词', view: 'tags' },
-    { key: 'archive', num: 6, label: '归档', view: 'archive' },
+    { key: 'dedupe', num: 6, label: '查重', view: 'dedupe' },
+    { key: 'selfcheck', num: 7, label: '工作区自检', view: 'selfcheck' },
+    { key: 'archive', num: 8, label: '归档', view: 'archive' },
   ];
 
   const VIEW_COMPONENT = {
@@ -19,6 +21,8 @@
     copy: 'step-copy',
     decrypt: 'step-decrypt',
     tags: 'step-tags',
+    dedupe: 'step-dedupe',
+    selfcheck: 'step-selfcheck',
     archive: 'step-archive',
   };
 
@@ -117,7 +121,9 @@
           dirs: { view: 'actions', step: 2 },
           copy: { view: 'decrypt', step: 4 },
           decrypt: { view: 'tags', step: 5 },
-          tags: { view: 'archive', step: 6 },
+          tags: { view: 'dedupe', step: 6 },
+          dedupe: { view: 'selfcheck', step: 7 },
+          selfcheck: { view: 'archive', step: 8 },
         };
         const target = forward[this.view];
         if (!target) return;
@@ -125,7 +131,8 @@
         this.view = target.view;
       },
       onPrev: function () {
-        const order = ['dirs', 'actions', 'copy', 'decrypt', 'tags', 'archive'];
+        const order = ['dirs', 'actions', 'copy', 'decrypt', 'tags',
+                       'dedupe', 'selfcheck', 'archive'];
         const index = order.indexOf(this.view);
         this.view = index > 0 ? order[index - 1] : 'dirs';
       },
@@ -236,6 +243,8 @@
   app.component('step-copy', MH.StepCopy);
   app.component('step-decrypt', MH.StepDecrypt);
   app.component('step-tags', MH.StepTags);
+  app.component('step-dedupe', MH.StepDedupe);
+  app.component('step-selfcheck', MH.StepSelfCheck);
   app.component('step-archive', MH.StepArchive);
 
   app.config.globalProperties.$fmt = MH.fmt;

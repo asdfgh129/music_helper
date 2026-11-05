@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""services.steps 的单元测试：六步向导的预览数据（不碰真实音乐库）
+"""services.steps 的单元测试：八步向导的预览数据（不碰真实音乐库）
 
 这些用例只覆盖「把哪些文件算进来、分到哪一组」，真实拷贝/解密/归档的副作用
 由 test_ops / test_decrypt 覆盖，这里一律用 tempfile 造目录。
@@ -204,6 +204,109 @@ class TestDirectories(StepsTestCase):
         for item in data['items']:
             self.assertIn('exists', item)
             self.assertIn('source', item)
+
+
+class TestDedupePreview(StepsTestCase):
+    """第 6 步：工作区 vs 库目录
+
+    库索引只 stat + 解析文件名，不读标签，所以这些用例用假音频（文本文件）
+    也能覆盖判定链路。
+    """
+
+    def test_duplicate_by_filename_and_size(self):
+        self._touch('workspace', '周杰伦 - 晴天.flac', content='abcd')
+        self._touch('library', '2020-2029', '2020', '周杰伦 - 晴天.flac', content='abcd')
+        data = steps.dedupe_preview(refresh=True)
+        self.assertEqual(data['total'], 1)
+        self.assertEqual(data['duplicate'], 1)
+        self.assertEqual(data['items'][0]['status'], 'duplicate')
+        self.assertEqual(data['items'][0]['matched'][0]['name'], '周杰伦 - 晴天.flac')
+
+    def test_size_differs_without_duration_is_unknown(self):
+        self._touch('workspace', '周杰伦 - 晴天.flac', content='abcd')
+        self._touch('library', '2020-2029', '2020', '周杰伦 - 晴天.flac', content='abcdefgh')
+        data = steps.dedupe_preview(refresh=True)
+        self.assertEqual(data['unknown'], 1)
+        self.assertEqual(data['duplicate'], 0)
+
+    def test_new_file_is_unique(self):
+        self._touch('workspace', '新歌 - 某某.flac', content='abcd')
+        self._touch('library', '2020-2029', '2020', '老歌 - 别人.flac', content='abcd')
+        data = steps.dedupe_preview(refresh=True)
+        self.assertEqual(data['unique'], 1)
+        self.assertEqual(data['duplicate'], 0)
+
+    def test_empty_library_makes_everything_unique(self):
+        self._touch('workspace', 'a.flac', content='x')
+        data = steps.dedupe_preview(refresh=True)
+        self.assertEqual(data['library_count'], 0)
+        self.assertEqual(data['unique'], 1)
+
+    def test_unready_file_is_not_ready_to_archive(self):
+        """查重通过不等于可入库：文本文件读不出标签，仍不算 archive_ok"""
+        self._touch('workspace', '周杰伦 - 晴天.flac', content='abcd')
+        data = steps.dedupe_preview(refresh=True)
+        self.assertEqual(data['items'][0]['status'], 'unique')
+        self.assertFalse(data['items'][0]['ready'])
+        self.assertEqual(data['ready_to_archive'], 0)
+
+
+class TestWorkspaceCheck(StepsTestCase):
+    """第 7 步：工作区自检（只读）"""
+
+    def test_reports_consistency_details(self):
+        self._touch('workspace', '周杰伦 - 晴天.flac')
+        data = steps.workspace_check()
+        self.assertEqual(data['total'], 1)
+        item = data['items'][0]
+        self.assertEqual(item['consistency']['file']['artist'], '周杰伦')
+        self.assertEqual(item['consistency']['file']['title'], '晴天')
+        # 文本文件读不出标签 -> 不可入库，但歌手维度是 skipped 而不是矛盾
+        self.assertFalse(item['ready'])
+        self.assertEqual(data['mismatch'], 0)
+        self.assertEqual(item['consistency']['items'][0]['state'], 'skipped')
+
+    def test_empty_workspace(self):
+        data = steps.workspace_check()
+        self.assertEqual(data['total'], 0)
+        self.assertEqual(data['findings'], [])
+        self.assertEqual(data['ready'], 0)
+        self.assertEqual(data['counts'], {})
+
+    def test_findings_are_serialized(self):
+        self._touch('workspace', '晴天.flac')
+        data = steps.workspace_check()
+        kinds = {item['kind'] for item in data['findings']}
+        self.assertIn('标签不完整', kinds)
+        self.assertIn('文件名格式', kinds)
+        for finding in data['findings']:
+            self.assertEqual(finding['name'], os.path.basename(finding['path']))
+
+
+class TestTrackAccess(StepsTestCase):
+    """单曲编辑接口的越权防护"""
+
+    def test_rejects_path_outside_workspace(self):
+        outside = self._touch('library', 'a.flac')
+        with self.assertRaises(ValueError):
+            steps.track_detail(outside)
+
+    def test_rejects_missing_file(self):
+        with self.assertRaises(ValueError):
+            steps.track_detail(os.path.join(self.workspace, 'nope.flac'))
+
+    def test_rejects_non_audio(self):
+        path = self._touch('workspace', 'note.txt')
+        with self.assertRaises(ValueError):
+            steps.track_detail(path)
+
+    def test_detail_includes_lyric_and_consistency(self):
+        self._touch('workspace', '周杰伦 - 晴天.flac')
+        self._touch('workspace', '周杰伦 - 晴天.lrc', content='[00:01]晴天')
+        data = steps.track_detail(os.path.join(self.workspace, '周杰伦 - 晴天.flac'))
+        self.assertTrue(data['has_lrc'])
+        self.assertIn('晴天', data['lyric'])
+        self.assertEqual(data['consistency']['file']['artist'], '周杰伦')
 
 
 if __name__ == '__main__':

@@ -89,19 +89,78 @@ def _artist_conflict(file_artist, tag_artist):
     return True
 
 
-def _consistency_problem(track):
-    """文件名与标签是否矛盾，返回问题描述或 None"""
-    file_artist, file_title = parse_filename(track.filename)
-    tag_artist, tag_title = track.artist, track.title
+CONSISTENCY_LABELS = (('artist', '歌手'), ('title', '歌名'))
 
-    if file_artist and tag_artist and _artist_conflict(file_artist, tag_artist):
-        return f'歌手: 文件名「{file_artist}」≠ 标签「{tag_artist}」'
 
+def _artist_state(file_artist, tag_artist):
+    """文件名歌手 vs 标签歌手：返回 (state, reason)
+
+    state: ok / mismatch / skipped。skipped 表示这一维不可比（不是错误）。
+    """
+    if not file_artist:
+        return 'skipped', '文件名没有「歌手 - 歌名」结构'
+    if not tag_artist:
+        return 'skipped', '标签没有歌手'
+    if is_placeholder_artist(file_artist) or is_placeholder_artist(tag_artist):
+        return 'skipped', '群星/未知歌手，不参与比对'
+    if _artist_conflict(file_artist, tag_artist):
+        return 'mismatch', ''
+    return 'ok', ''
+
+
+def _title_state(file_title, tag_title):
+    """文件名歌名 vs 标签歌名：返回 (state, reason)"""
+    if not file_title:
+        return 'skipped', '文件名为空'
+    if not tag_title:
+        return 'skipped', '标签没有歌名'
     file_norm, tag_norm = normalize_text(file_title), normalize_text(tag_title)
-    if file_norm and tag_norm and file_norm != tag_norm:
-        if file_norm not in tag_norm and tag_norm not in file_norm:
-            return f'歌名: 文件名「{file_title}」≠ 标签「{tag_title}」'
-    return None
+    if not file_norm or not tag_norm:
+        return 'skipped', '归一化后为空'
+    if file_norm == tag_norm:
+        return 'ok', ''
+    if file_norm in tag_norm or tag_norm in file_norm:
+        return 'ok', '一方包含另一方'
+    return 'mismatch', ''
+
+
+def consistency_report(track):
+    """文件名 ↔ 标签的逐项比对结果（结构化）
+
+    `readiness_problems()` 与自检页面共用这一份判定：只有 mismatch 算问题，
+    skipped 表示该维度不可比（文件名没有歌手结构、标签为空、群星合辑等）。
+
+    Returns:
+        dict: ok / problem / file / tag / items，items 每项含
+              field / label / file / tag / state / reason
+    """
+    file_artist, file_title = parse_filename(track.filename)
+    values = {'artist': (file_artist, track.artist),
+              'title': (file_title, track.title)}
+    items = []
+    problem = None
+    for key, label in CONSISTENCY_LABELS:
+        file_value, tag_value = values[key]
+        state, reason = (_artist_state(file_value, tag_value) if key == 'artist'
+                         else _title_state(file_value, tag_value))
+        items.append({'field': key, 'label': label,
+                      'file': file_value, 'tag': tag_value,
+                      'state': state, 'reason': reason})
+        if state == 'mismatch' and problem is None:
+            problem = f'{label}: 文件名「{file_value}」≠ 标签「{tag_value}」'
+
+    return {
+        'ok': problem is None,
+        'problem': problem,
+        'file': {'artist': file_artist, 'title': file_title},
+        'tag': {'artist': track.artist, 'title': track.title},
+        'items': items,
+    }
+
+
+def _consistency_problem(track):
+    """文件名与标签是否矛盾，返回问题描述或 None（保留私有名给旧调用与测试）"""
+    return consistency_report(track)['problem']
 
 
 def readiness_problems(track):

@@ -2,11 +2,11 @@
 """
 music_helper Web UI —— FastAPI 后端
 
-前端是 `web/static/` 下的 Vue 3 六步向导（无构建，Vue 运行时随仓库分发）。
+前端是 `web/static/` 下的 Vue 3 八步向导（无构建，Vue 运行时随仓库分发）。
 本模块只做三件事：读配置 / 给出每一步的预览 / 提交后台任务，业务逻辑全部在
 `services.steps`，判定规则全部在 `core/`，破坏性动作只走 `core.ops.Plan`。
 
-向导接口（六步）：
+向导接口（八步）：
   GET  /api/wizard/state      向导初始状态：目录设置 + 库状态 + 平台能力 + 默认月份
   POST /api/wizard/dirs       保存目录设置（写入 config.ini 并热重载）
   GET  /api/fs/list           目录浏览（选目录弹窗）
@@ -18,9 +18,16 @@ music_helper Web UI —— FastAPI 后端
   GET  /api/decrypt/preview   第 4 步预览：待解密文件
   POST /api/decrypt/run       第 4 步执行（VIP 目录直解到工作区）→ 后台任务
   GET  /api/tags/preview      第 5 步预览：工作区文件与标签/歌词缺失情况
-  POST /api/tags/run          第 5 步执行 → 后台任务
-  GET  /api/archive/preview   第 6 步预览：按 <年代>/<年份> 分组
-  POST /api/archive/run       第 6 步执行 → 后台任务
+  POST /api/tags/run          第 5 步执行（可限定写入字段）→ 后台任务
+  GET  /api/track             第 5 步单曲详情
+  POST /api/track/save        第 5 步单曲保存（不改文件名）
+  POST /api/track/fetch       第 5 步在线取标签（只预览，不写盘）
+  GET  /api/dedupe/preview    第 6 步预览：工作区 vs 库目录
+  POST /api/dedupe/run        第 6 步执行（重复的移走/进回收站）→ 后台任务
+  GET  /api/selfcheck/preview 第 7 步：工作区自检（只读）
+  POST /api/selfcheck/run     第 7 步自检 → 后台任务（文件多时用）
+  GET  /api/archive/preview   第 8 步预览：按 <年代>/<年份> 分组
+  POST /api/archive/run       第 8 步执行 → 后台任务
   GET  /api/workspace/files   工作区文件列表（拷贝/解密页右栏）
 
 保留的旧接口（CLI 时代的仪表盘与脚本仍可用）：
@@ -65,7 +72,7 @@ WEB_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(WEB_DIR, "static")
 LEGACY_INDEX = os.path.join(WEB_DIR, "index.html")
 
-app = FastAPI(title="music_helper Web UI", version="0.3")
+app = FastAPI(title="music_helper Web UI", version="0.4")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # 单进程内缓存最近一次检查结果：target -> CheckResult（供预览/执行复用，避免重复扫描大库）
@@ -127,6 +134,24 @@ class TagsRunReq(BaseModel):
     with_fingerprint: bool = True
     write_cover: bool = True
     write_lyrics: bool = True
+    fields: Optional[list] = None       # 允许写入的标签键；None = 全部
+
+
+class TrackFetchReq(BaseModel):
+    path: str = ""
+    fields: Optional[list] = None
+
+
+class TrackSaveReq(BaseModel):
+    path: str = ""
+    tags: dict = {}                     # 只写传入的键；空字符串表示不改
+    lyric: Optional[str] = None         # None = 不动歌词；字符串 = 覆盖写入
+
+
+class DedupeRunReq(BaseModel):
+    paths: list = []                    # 空 = 全部判定为重复的
+    action: str = "move"                # move（移入重复目录）| trash（进回收站）
+    refresh: bool = False               # 重新扫描库目录
 
 
 class ArchiveRunReq(BaseModel):
@@ -284,7 +309,7 @@ def _submit(kind, opts):
 
 @app.get("/api/wizard/state")
 def api_wizard_state():
-    """向导初始状态：一次请求拿到六步需要的静态信息"""
+    """向导初始状态：一次请求拿到八步需要的静态信息"""
     return {
         "ok": True,
         "version": config.__version__,
@@ -435,11 +460,76 @@ def api_tags_run(req: TagsRunReq):
     return _submit("tags", {"paths": req.paths,
                             "with_fingerprint": req.with_fingerprint,
                             "write_cover": req.write_cover,
-                            "write_lyrics": req.write_lyrics})
+                            "write_lyrics": req.write_lyrics,
+                            "fields": req.fields})
+
+
+# ---------------- 单曲编辑（第 5 步的「编辑」抽屉） ----------------
+
+@app.get("/api/track")
+def api_track(path: str = ""):
+    """单曲详情：标签、封面/歌词状态、文件名 ↔ 标签逐项比对"""
+    try:
+        return {"ok": True, **steps.track_detail(path)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/track/save")
+def api_track_save(req: TrackSaveReq):
+    """手工保存单曲标签 / 歌词（不改文件名）"""
+    try:
+        return steps.save_track(req.path, tags=req.tags, lyric=req.lyric)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/track/fetch")
+def api_track_fetch(req: TrackFetchReq):
+    """在线取标签（只填空缺、不写盘），返回结果供用户确认后再保存"""
+    try:
+        return steps.fetch_track_online(req.path, fields=req.fields)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 # --------------------------------------------------------------------------- #
-# 第 6 步：归档                                                               #
+# 第 6 步：查重（工作区 ↔ 库目录）                                            #
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/dedupe/preview")
+def api_dedupe_preview(refresh: bool = False):
+    return {"ok": True, **steps.dedupe_preview(refresh=refresh)}
+
+
+@app.post("/api/dedupe/run")
+def api_dedupe_run(req: DedupeRunReq):
+    if req.action not in ("move", "trash"):
+        raise HTTPException(status_code=400, detail="action 只能是 move 或 trash")
+    return _submit("dedupe-cross", {"paths": req.paths, "action": req.action,
+                                    "refresh": req.refresh})
+
+
+# --------------------------------------------------------------------------- #
+# 第 7 步：工作区自检                                                         #
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/selfcheck/preview")
+def api_selfcheck_preview():
+    """同步返回自检结果（工作区文件数通常不大；文件特别多时改走任务）"""
+    if not os.path.isdir(config.WORKSPACE_DIR):
+        raise HTTPException(status_code=400,
+                            detail=f"工作区目录不存在: {config.WORKSPACE_DIR}")
+    return {"ok": True, **steps.workspace_check()}
+
+
+@app.post("/api/selfcheck/run")
+def api_selfcheck_run():
+    return _submit("selfcheck", {})
+
+
+# --------------------------------------------------------------------------- #
+# 第 8 步：归档                                                               #
 # --------------------------------------------------------------------------- #
 
 @app.get("/api/archive/preview")

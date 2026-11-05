@@ -17,8 +17,26 @@
 
 ### 新增
 
-- **Web UI 改为 Vue 3 六步向导**（`web/static/`）：目录设置 → 操作类型 → 拷贝 → 解密 →
-  标签歌词 → 归档。每步都「先预览再执行」，长任务有逐条进度（`done/total` + 当前文件）与
+- **第 6 步查重（工作区 ↔ 库目录）**：`services.steps.dedupe_preview()` +
+  `core.dedupe.match_against()`。库里已经有一份的文件不再入库，否则年份目录与声纹库都会重复。
+  库索引只做 `os.walk` + `os.stat` + `parse_filename()`，不打开文件读标签——12433 首从
+  「十几分钟」降到约 8 秒；判定「同一文件」优先比字节数，字节数不同再比时长，两者都拿不到
+  标 `unknown` 交人工。只动工作区，库目录那份永远不动。
+- **第 7 步工作区自检**：`services.steps.workspace_check()` 只读扫描工作区顶层，检查文件名
+  格式、标签完整性、文件名与标签一致性、重复、歌词缺失/孤立；归档顺延为第 8 步。
+- **文件名 ↔ 标签比对结构化**：`core.check.consistency_report(track)` 把原来只返回
+  「矛盾/不矛盾」的私有函数拆成逐项结果（`ok` / `mismatch` / `skipped`），页面能直接显示
+  「歌手 ✓、歌名 ✗」与跳过原因（文件名没有歌手结构、标签为空、群星/未知歌手）。
+  `_consistency_problem()` 保留为薄包装，结论逐字一致（有回归用例）。
+- **标签补全可选字段**：`tagger.Tagger(fields=…)` 白名单 + 第 5 步的七个开关，可以只补
+  「专辑+年份」或「只补歌词」。勾选只表示允许写入，仍只填空缺、不覆盖已有值。
+- **单曲编辑**（第 5 步右侧抽屉）：`GET /api/track`、`POST /api/track/save`、
+  `POST /api/track/fetch`。可改五个文本字段、直接编辑 `.lrc`；「在线取标签」是 dry-run，
+  看过再存。**不改文件名**——改名牵动重复判定与归档路径，属于归档环节。
+- **表格排序**：第 5 步 7 列可排序，单击在升序/降序/取消之间循环，Shift+单击追加第二、第三键。
+- **新任务类型**：`dedupe-cross`（查重处理）与 `selfcheck`（自检），都走串行队列与逐条进度。
+- **Web UI 改为 Vue 3 八步向导**（`web/static/`）：目录设置 → 操作类型 → 拷贝 → 解密 →
+  标签歌词 → 查重 → 工作区自检 → 归档。每步都「先预览再执行」，长任务有逐条进度（`done/total` + 当前文件）与
   实时日志；第 2 步的初始化/自检是子页面，做完自动回第 2 步；3、4 步允许跳过但必须显式确认。
   前端不做构建：Vue 3.5.13 运行时随仓库放在 `web/static/vendor/`，离线可用；旧版单页仪表盘
   保留在 `/legacy`。详细设计见新增的 [docs/web-wizard.md](docs/web-wizard.md)。
@@ -240,9 +258,9 @@
 
 ### 文档
 
-- 新增 [docs/web-wizard.md](docs/web-wizard.md)：六步各自做什么、目录设置的持久化与校验规则、
+- 新增 [docs/web-wizard.md](docs/web-wizard.md)：八步各自做什么、目录设置的持久化与校验规则、
   初始化判据、跳过/回退语义、接口与文件清单，以及「um 能否跨盘解密」的源码核实结论。
-- 同步 [docs/usage.md](docs/usage.md#8-web-ui六步向导)、[docs/configuration.md](docs/configuration.md)、
+- 同步 [docs/usage.md](docs/usage.md#8-web-ui八步向导)、[docs/configuration.md](docs/configuration.md)、
   [docs/architecture.md](docs/architecture.md)、[docs/README.md](docs/README.md) 与 [README.md](README.md)。
 
 - 新增 [docs/self-check.md](docs/self-check.md)：完整记录音乐库自检的流程、六个维度各自看什么、
