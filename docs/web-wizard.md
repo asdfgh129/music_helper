@@ -31,7 +31,7 @@
 | 3 | 拷贝 | `steps.run_copy` → `core.ops.copy_items` | 工作区里的普通音频 |
 | 4 | 解密 | `steps.run_decrypt` → `services.decrypt.decrypt_direct` | 工作区里的明文音频 |
 | 5 | 标签歌词 | `steps.run_fill_tags` → `tagger.Tagger` | 标签 / 封面 / `.lrc` |
-| 6 | 查重 | `steps.dedupe_preview` → `core.dedupe` + `core.quality` | 重复的移走；库里音质更低的旧版本让位 |
+| 6 | 查重 | `steps.dedupe_preview` → `core.dedupe` + `core.quality` | 重复的移走；库里音质更低或更占地方的旧版本让位 |
 | 7 | 工作区自检 | `steps.workspace_check` → `core.check` | 只出报告，不动文件 |
 | 8 | 归档 | `steps.run_archive` → `core.organize` + `core.ops.Plan` | `<年代>/<年份>/` |
 
@@ -275,10 +275,15 @@
 | 无损 vs 有损 | 无损胜（`.flac` `.ape` `.wav` `.dsf` `.dff` `.aif` `.alac` 计为无损） |
 | 都无损 | 比「采样率 × 位深」 |
 | 都有损 | 比码率；容器不报码率时用 `大小 ÷ 时长` 估算，相差 10% 以内算同一水平 |
+| 同规格但容器不同 | 压缩无损（FLAC/APE/ALAC）胜未压缩（WAV/AIFF），这是**省磁盘**不是音质 |
 | 任一侧读不出规格 | `unknown` |
 
 > 不按大小比是刻意的：WAV 未压缩，体积一定比同源 FLAC 大，但两者音质完全等同；
 > 反过来 128k MP3 也可能比高压缩的 FLAC 大。按大小比会两头出错。
+
+最后一条单独由 `quality.storage_preference()` 判断，只在 `compare()` 已判 `same` 之后
+才调用：此时两者解码出来是同一串 PCM，唯一差别是容器。命中时结论仍是 `upgrade`，
+但带 `basis='format'`，页面上写「同音质更省磁盘」，不写「音质升级」。
 
 同一录音 + 音质比较，得到四种结论：
 
@@ -293,29 +298,29 @@
 升级依据，保守不动库）；格式不同又读不出规格，才算 `unknown`。这样「损坏文件」
 和「mutagen 不认的容器」不会被误判成升级。
 
-实测 36 个文件：`unique` 31、`duplicate` 4、`upgrade` 1、`unknown` 0。
-`duplicate` 里有 3 个是 FLAC 对库里的 WAV、规格完全相同（48kHz/24bit 或
-44.1kHz/16bit），判「音质相同」而不是「WAV 更好」；唯一一个 `upgrade` 是
-FLAC 48kHz/24bit 对库里 320kbps MP3。
+实测 36 个文件：`unique` 31、`duplicate` 1、`upgrade` 4、`unknown` 0。
+4 个 `upgrade` 里 3 个是 `basis='format'`（FLAC 对库里同规格的 WAV），
+1 个是 `basis='quality'`（FLAC 48kHz/24bit 对库里 320kbps MP3）。
 
 ### 6.4 页面与执行
 
-- 统计：工作区文件 / 库中不存在 / 库中已有 / 音质可升级 / 需人工确认 / 可入库。
-- 表格多一列「音质」，直接显示 `FLAC 无损 48kHz/24bit`、`MP3 有损 320kbps`
-  这类描述；「库中对应文件」一列并排给出库里那份的音质，`upgrade` 行带「库内替换」标记。
-- 可勾选的是 `duplicate` 与 `upgrade`（默认全选）；`unique` 与 `unknown` 的勾选框禁用。
-  快捷按钮：选中可处理 / 仅库中已有 / 仅音质升级 / 全不选。
-- 选中项里有 `upgrade` 时，工具栏下方会出现提示条，写明「会移走库目录里
-  N 个旧版本」，并说明它们进重复目录、不直接删除。
-- 点执行先弹**「会移动库目录里的文件」**确认框，列出受影响的工作区文件，
-  确认后才提交。
-- `upgrade` 无论「处理方式」选什么，都移入 `DUPLICATE_DIR` 而不是回收站——
+页面是**两栏比对**，左栏工作区、右栏库内，右栏是 1:N：
+
+- 左栏点一行，右栏列出库里与它对应的**全部**副本（`MATCHED_LIMIT` = 50，超出在
+  `matched_total` 里计数）；行上有状态与音质描述。
+- 右栏每行一个复选框：只有 `relation='better'` 的（即库里这份更差）才能勾选，
+  其余标「保留」。勾选结果通过 `replaces` 提交。
+- 默认勾选规则：`duplicate` 默认勾（只动工作区），`upgrade` 默认**不勾**（动库，需逐项确认）。
+- 两个执行按钮，落点不同：
+  - 「移入重复目录」→ `action='move'`，工作区那份进 `DUPLICATE_DIR`；
+  - 「删除所选」→ `action='trash'`，工作区那份进 `log/_trash`，**不进重复目录**。
+  两者都会先弹**两栏摘要确认框**（工作区将删除 / 移走几个，库内将移出几个）。
+- `upgrade` 无论 `action` 选什么，库内那份都移入 `DUPLICATE_DIR` 而不是回收站——
   动的是库里的存量文件，留一份可对照的副本比进回收站稳妥。
-- **不接受全量替换**：`statuses` 含 `upgrade` 而 `paths` 为空时直接 400。
-  逐条指定才动库，避免一次误触把整个库的旧版本搬走。
-- `duplicate` 的「移入重复目录 / 放进回收站」由页面选择；删除一律只是移到
-  `log/_trash`，`core.ops.Plan` 记录到 `log/journal.jsonl`。
-- 还有未处理项时点「下一步」→ 二次确认（列出「N 个库中已有、M 个音质可升级、
+- **不接受全量替换**：`statuses` 含 `upgrade` 而 `paths` 为空时直接 400；
+  `replaces` 的 key 必须在 `paths` 里、值必须落在预览列出的可替换清单内，否则 400。
+- 库内文件全被取消勾选的 `upgrade` 项整项不做处理，结果里计入 `skipped`。
+- 还有未处理项时点「下一步」→ 二次确认（列出「N 个库中已有、M 个可替换库内、
   K 个需人工确认」），确认后照常前进，但会提示「归档时这些文件会一起入库」。
 
 ## 7. 工作区自检
@@ -433,4 +438,5 @@ FLAC 48kHz/24bit 对库里 320kbps MP3。
 - 不做「批量跳过失败再重试」：失败就留在原处，下一轮预览会重新列出来。
 - 单曲编辑不改文件名：只写标签与 `.lrc`。
 - 查重不自动处理 `unknown`：大小与时长的证据不足时交给人。
-- 查重不跨格式替换：库里是 mp3、工作区是 flac，只会标 `unknown`，不会自动换掉库里的那份。
+- 查重不跨格式**猜**音质：跨格式但规格读不出来（如 `.dff`）仍然是 `unknown`，
+  只有无损/有损、采样率、位深、码率这些可比证据齐全时才给结论。

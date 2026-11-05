@@ -107,6 +107,7 @@ music_helper/
 | 文档 | 内容 |
 |---|---|
 | [docs/README.md](docs/README.md) | 文档索引与每篇文档的边界 |
+| [docs/web-guide.md](docs/web-guide.md) | 八步向导的操作说明（配图） |
 | [docs/workflow.md](docs/workflow.md) | 端到端流程、状态迁移、失败处理 |
 | [docs/rules.md](docs/rules.md) | 全部判定规则 |
 | [docs/usage.md](docs/usage.md) | 命令行手册 |

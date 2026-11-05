@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" viewBox="0 0 960 520" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif">
+<rect x="0" y="0" width="960" height="520" rx="12" fill="#16171b" stroke="#2a2b32" />
+<line x1="0" y1="52" x2="960" y2="52" stroke="#34353d"/>
+<circle cx="30" cy="26" r="5" fill="#4f9cf9"/>
+<text x="44" y="31" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="13" fill="#9a9ca8" font-weight="600">music_helper · 音乐整理向导</text>
+<circle cx="710" cy="26" r="11" fill="#2c2d34" stroke="#34353d"/>
+<text x="710" y="30" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#767884" font-weight="normal" text-anchor="middle">1</text>
+<circle cx="737" cy="26" r="11" fill="#2c2d34" stroke="#34353d"/>
+<text x="737" y="30" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#767884" font-weight="normal" text-anchor="middle">2</text>
+<circle cx="764" cy="26" r="11" fill="#2c2d34" stroke="#34353d"/>
+<text x="764" y="30" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#767884" font-weight="normal" text-anchor="middle">3</text>
+<circle cx="791" cy="26" r="11" fill="#2c2d34" stroke="#34353d"/>
+<text x="791" y="30" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#767884" font-weight="normal" text-anchor="middle">4</text>
+<circle cx="818" cy="26" r="11" fill="#4f9cf9" stroke="#4f9cf9"/>
+<text x="818" y="30" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#06111f" font-weight="600" text-anchor="middle">5</text>
+<circle cx="845" cy="26" r="11" fill="#2c2d34" stroke="#34353d"/>
+<text x="845" y="30" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#767884" font-weight="normal" text-anchor="middle">6</text>
+<circle cx="872" cy="26" r="11" fill="#2c2d34" stroke="#34353d"/>
+<text x="872" y="30" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#767884" font-weight="normal" text-anchor="middle">7</text>
+<circle cx="899" cy="26" r="11" fill="#2c2d34" stroke="#34353d"/>
+<text x="899" y="30" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#767884" font-weight="normal" text-anchor="middle">8</text>
+<text x="32" y="90" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="19" fill="#e4e5ea" font-weight="600">第 5 步 · 标签与歌词补全</text>
+<text x="32" y="114" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="12.5" fill="#767884" font-weight="normal">只填空缺、不覆盖已有值、不改文件名；可排序、可单曲编辑</text>
+<rect x="24.0" y="132" width="220.5" height="54" rx="8" fill="#25262c" stroke="#34353d" />
+<text x="38.0" y="158" font-family="&quot;Consolas&quot;, &quot;Cascadia Mono&quot;, monospace" font-size="18" fill="#37c2a8" font-weight="600">36</text>
+<text x="38.0" y="177" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#767884" font-weight="normal">工作区文件</text>
+<rect x="254.5" y="132" width="220.5" height="54" rx="8" fill="#25262c" stroke="#34353d" />
+<text x="268.5" y="158" font-family="&quot;Consolas&quot;, &quot;Cascadia Mono&quot;, monospace" font-size="18" fill="#5fb865" font-weight="600">31</text>
+<text x="268.5" y="177" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#767884" font-weight="normal">已可入库</text>
+<rect x="485.0" y="132" width="220.5" height="54" rx="8" fill="#25262c" stroke="#34353d" />
+<text x="499.0" y="158" font-family="&quot;Consolas&quot;, &quot;Cascadia Mono&quot;, monospace" font-size="18" fill="#d9a43b" font-weight="600">5</text>
+<text x="499.0" y="177" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#767884" font-weight="normal">缺核心标签</text>
+<rect x="715.5" y="132" width="220.5" height="54" rx="8" fill="#25262c" stroke="#34353d" />
+<text x="729.5" y="158" font-family="&quot;Consolas&quot;, &quot;Cascadia Mono&quot;, monospace" font-size="18" fill="#e8645c" font-weight="600">1</text>
+<text x="729.5" y="177" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#767884" font-weight="normal">文件名矛盾</text>
+<rect x="24" y="198" width="912" height="62" rx="10" fill="#1e1f24" stroke="#34353d" />
+<text x="40" y="220" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#767884" font-weight="normal">要补的字段</text>
+<rect x="118" y="210" width="12" height="12" rx="3" fill="#4f9cf9"/><path d="M121 216 l2 2.4 l4.6 -4.8" stroke="#06111f" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+<text x="136" y="220" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#9a9ca8" font-weight="normal">歌曲名</text>
+<rect x="180" y="210" width="12" height="12" rx="3" fill="#4f9cf9"/><path d="M183 216 l2 2.4 l4.6 -4.8" stroke="#06111f" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+<text x="198" y="220" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#9a9ca8" font-weight="normal">歌手</text>
+<rect x="242" y="210" width="12" height="12" rx="3" fill="#4f9cf9"/><path d="M245 216 l2 2.4 l4.6 -4.8" stroke="#06111f" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+<text x="260" y="220" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#9a9ca8" font-weight="normal">专辑</text>
+<rect x="304" y="210" width="12" height="12" rx="3" fill="#4f9cf9"/><path d="M307 216 l2 2.4 l4.6 -4.8" stroke="#06111f" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+<text x="322" y="220" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#9a9ca8" font-weight="normal">年份</text>
+<rect x="366" y="210" width="12" height="12" rx="3" fill="none" stroke="#767884"/>
+<text x="384" y="220" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#9a9ca8" font-weight="normal">流派</text>
+<rect x="428" y="210" width="12" height="12" rx="3" fill="#4f9cf9"/><path d="M431 216 l2 2.4 l4.6 -4.8" stroke="#06111f" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+<text x="446" y="220" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#9a9ca8" font-weight="normal">封面</text>
+<rect x="490" y="210" width="12" height="12" rx="3" fill="none" stroke="#767884"/>
+<text x="508" y="220" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#9a9ca8" font-weight="normal">歌词</text>
+<text x="40" y="245" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#767884" font-weight="normal">勾选只表示「允许写入」：字段为空才填，已有值不会被覆盖</text>
+<rect x="24" y="272" width="912" height="176" rx="10" fill="#1e1f24" stroke="#34353d" />
+<text x="50" y="296" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#767884" font-weight="normal">文件名</text>
+<text x="380" y="296" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#767884" font-weight="normal">艺术家</text>
+<text x="470" y="296" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#767884" font-weight="normal">歌名</text>
+<text x="590" y="296" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#767884" font-weight="normal">年份</text>
+<text x="660" y="296" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#767884" font-weight="normal">封面</text>
+<text x="716" y="296" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#767884" font-weight="normal">歌词</text>
+<text x="780" y="296" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#767884" font-weight="normal">状态</text>
+<line x1="24" y1="306" x2="936" y2="306" stroke="#34353d"/>
+<rect x="34" y="321" width="12" height="12" rx="3" fill="#4f9cf9"/><path d="M37 327 l2 2.4 l4.6 -4.8" stroke="#06111f" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+<text x="58" y="331" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#e4e5ea" font-weight="normal">周杰伦 - 晴天.flac</text>
+<text x="380" y="331" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#9a9ca8" font-weight="normal">周杰伦</text>
+<text x="470" y="331" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#9a9ca8" font-weight="normal">晴天</text>
+<text x="590" y="331" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#9a9ca8" font-weight="normal">2003</text>
+<text x="664" y="331" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#5fb865" font-weight="normal">有</text>
+<text x="720" y="331" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#767884" font-weight="normal">无</text>
+<text x="780" y="331" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#d9a43b" font-weight="normal">缺歌词</text>
+<text x="884" y="331" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#4f9cf9" font-weight="normal">编辑</text>
+<line x1="24" y1="342" x2="936" y2="342" stroke="#2a2b32"/>
+<rect x="34" y="353" width="12" height="12" rx="3" fill="#4f9cf9"/><path d="M37 359 l2 2.4 l4.6 -4.8" stroke="#06111f" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+<text x="58" y="363" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#e4e5ea" font-weight="normal">林俊杰 - 江南.flac</text>
+<text x="380" y="363" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#9a9ca8" font-weight="normal">林俊杰</text>
+<text x="470" y="363" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#9a9ca8" font-weight="normal">江南</text>
+<text x="590" y="363" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#9a9ca8" font-weight="normal">2004</text>
+<text x="664" y="363" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#5fb865" font-weight="normal">有</text>
+<text x="720" y="363" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#5fb865" font-weight="normal">有</text>
+<text x="780" y="363" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#5fb865" font-weight="normal">可入库</text>
+<text x="884" y="363" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#4f9cf9" font-weight="normal">编辑</text>
+<line x1="24" y1="374" x2="936" y2="374" stroke="#2a2b32"/>
+<rect x="34" y="385" width="12" height="12" rx="3" fill="none" stroke="#767884"/>
+<text x="58" y="395" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#e4e5ea" font-weight="normal">陈奕迅 - 十年.mp3</text>
+<text x="380" y="395" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#9a9ca8" font-weight="normal">陈奕迅</text>
+<text x="470" y="395" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#9a9ca8" font-weight="normal">十年</text>
+<text x="590" y="395" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#9a9ca8" font-weight="normal">2003</text>
+<text x="664" y="395" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#767884" font-weight="normal">无</text>
+<text x="720" y="395" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#5fb865" font-weight="normal">有</text>
+<text x="780" y="395" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#d9a43b" font-weight="normal">缺封面</text>
+<text x="884" y="395" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#4f9cf9" font-weight="normal">编辑</text>
+<line x1="24" y1="406" x2="936" y2="406" stroke="#2a2b32"/>
+<rect x="34" y="417" width="12" height="12" rx="3" fill="none" stroke="#767884"/>
+<text x="58" y="427" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#e4e5ea" font-weight="normal">徐良 - 坏女孩.flac</text>
+<text x="380" y="427" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#9a9ca8" font-weight="normal">徐良</text>
+<text x="470" y="427" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#9a9ca8" font-weight="normal">—</text>
+<text x="590" y="427" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#9a9ca8" font-weight="normal">—</text>
+<text x="664" y="427" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#767884" font-weight="normal">无</text>
+<text x="720" y="427" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#767884" font-weight="normal">无</text>
+<text x="780" y="427" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#e8645c" font-weight="normal">文件名矛盾</text>
+<text x="884" y="427" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11" fill="#4f9cf9" font-weight="normal">编辑</text>
+<line x1="24" y1="438" x2="936" y2="438" stroke="#2a2b32"/>
+<rect x="770" y="468" width="120" height="30" rx="7" fill="#4f9cf9" stroke="#4f9cf9" /><text x="830.0" y="487.5" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="12" fill="#06111f" font-weight="600" text-anchor="middle">开始补全</text>
+<text x="32" y="488" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, sans-serif" font-size="11.5" fill="#767884" font-weight="normal">点「编辑」可单曲手工改标签与歌词，可先「在线取标签」预览再保存</text>
+</svg>
