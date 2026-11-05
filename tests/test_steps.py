@@ -251,6 +251,93 @@ class TestDedupePreview(StepsTestCase):
         self.assertEqual(data['ready_to_archive'], 0)
 
 
+class TestDedupeUpgrade(StepsTestCase):
+    """库里音质更低时：移走的是库里那份，工作区这份留给归档
+
+    `read_quality` 用 mock 提供规格，因为用例里的「音频」是文本文件，
+    mutagen 读不出采样率/码率。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.duplicate_dir = self._mkdir('duplicates')
+        self.trash_dir = self._mkdir('trash')
+        self._patch('DUPLICATE_DIR', self.duplicate_dir)
+        self._patch('TRASH_DIR', self.trash_dir)
+        self._patch('JOURNAL_PATH', os.path.join(self.root, 'journal.jsonl'))
+        steps.invalidate_library_cache()
+        self.addCleanup(steps.invalidate_library_cache)
+
+        patcher = mock.patch.object(steps.core_tags, 'read_quality',
+                                    side_effect=self._quality)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def _quality(path):
+        size = os.path.getsize(path)
+        if path.lower().endswith('.mp3'):
+            return {'ext': '.mp3', 'size': size, 'duration': 200.5,
+                    'bitrate': 128000, 'sample_rate': 44100, 'bit_depth': 0}
+        return {'ext': '.flac', 'size': size, 'duration': 200.0,
+                'bitrate': 0, 'sample_rate': 44100, 'bit_depth': 16}
+
+    def _prepare(self):
+        self._touch('workspace', '周杰伦 - 晴天.flac', content='a' * 40)
+        return self._touch('library', '2020-2029', '2020',
+                           '周杰伦 - 晴天.mp3', content='b' * 10)
+
+    def test_preview_marks_upgrade_and_lists_replacement(self):
+        self._prepare()
+        data = steps.dedupe_preview(refresh=True)
+        self.assertEqual(data['upgrade'], 1)
+        self.assertEqual(data['duplicate'], 0)
+        self.assertEqual(data['replace_count'], 1)
+        item = data['items'][0]
+        self.assertEqual(item['status_label'], '库中音质更低')
+        self.assertEqual([entry['name'] for entry in item['replace']],
+                         ['周杰伦 - 晴天.mp3'])
+        self.assertIn('无损', item['quality'])
+        self.assertIn('有损', item['replace'][0]['quality'])
+
+    def test_run_moves_library_copy_away(self):
+        library_file = self._prepare()
+        result = steps.run_dedupe(paths=[os.path.join(self.workspace, '周杰伦 - 晴天.flac')],
+                                  action='move', refresh=True, statuses=['upgrade'])
+        self.assertEqual(result['executed'], 1)
+        self.assertEqual(result['library_replaced'], 1)
+        self.assertFalse(os.path.exists(library_file), '库里旧版本应已移走')
+        self.assertTrue(os.path.exists(
+            os.path.join(self.workspace, '周杰伦 - 晴天.flac')), '工作区这份要留给归档')
+        self.assertTrue(os.path.exists(
+            os.path.join(self.duplicate_dir, '周杰伦 - 晴天.mp3')))
+
+    def test_upgrade_ignores_trash_action(self):
+        """动的是库里存量文件，即使选了回收站也只进重复目录"""
+        library_file = self._prepare()
+        result = steps.run_dedupe(paths=[os.path.join(self.workspace, '周杰伦 - 晴天.flac')],
+                                  action='trash', refresh=True, statuses=['upgrade'])
+        self.assertEqual(result['library_replaced'], 1)
+        self.assertFalse(os.path.exists(library_file))
+        self.assertTrue(os.path.exists(
+            os.path.join(self.duplicate_dir, '周杰伦 - 晴天.mp3')))
+        self.assertEqual(os.listdir(self.trash_dir), [])
+
+    def test_default_status_leaves_library_alone(self):
+        """默认只处理 duplicate：不显式要求时绝不动库里的文件"""
+        library_file = self._prepare()
+        result = steps.run_dedupe(action='move', refresh=True)
+        self.assertEqual(result['planned'], 0)
+        self.assertTrue(os.path.exists(library_file))
+
+    def test_upgrade_without_paths_is_refused(self):
+        """动库的操作不接受全量：必须逐条指定要替换哪些文件"""
+        library_file = self._prepare()
+        with self.assertRaises(ValueError):
+            steps.run_dedupe(action='move', refresh=True, statuses=['upgrade'])
+        self.assertTrue(os.path.exists(library_file))
+
+
 class TestWorkspaceCheck(StepsTestCase):
     """第 7 步：工作区自检（只读）"""
 

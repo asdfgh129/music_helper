@@ -23,7 +23,7 @@ music_helper Web UI —— FastAPI 后端
   POST /api/track/save        第 5 步单曲保存（不改文件名）
   POST /api/track/fetch       第 5 步在线取标签（只预览，不写盘）
   GET  /api/dedupe/preview    第 6 步预览：工作区 vs 库目录
-  POST /api/dedupe/run        第 6 步执行（重复的移走/进回收站）→ 后台任务
+  POST /api/dedupe/run        第 6 步执行（重复的移走；库里音质更低的旧版本让位）→ 后台任务
   GET  /api/selfcheck/preview 第 7 步：工作区自检（只读）
   POST /api/selfcheck/run     第 7 步自检 → 后台任务（文件多时用）
   GET  /api/archive/preview   第 8 步预览：按 <年代>/<年份> 分组
@@ -149,9 +149,10 @@ class TrackSaveReq(BaseModel):
 
 
 class DedupeRunReq(BaseModel):
-    paths: list = []                    # 空 = 全部判定为重复的
+    paths: list = []                    # 空 = 全部可处理的
     action: str = "move"                # move（移入重复目录）| trash（进回收站）
     refresh: bool = False               # 重新扫描库目录
+    statuses: list = ["duplicate"]      # duplicate（移工作区）/ upgrade（移库里旧版本）
 
 
 class ArchiveRunReq(BaseModel):
@@ -506,8 +507,18 @@ def api_dedupe_preview(refresh: bool = False):
 def api_dedupe_run(req: DedupeRunReq):
     if req.action not in ("move", "trash"):
         raise HTTPException(status_code=400, detail="action 只能是 move 或 trash")
+    unknown = [item for item in req.statuses if item not in ("duplicate", "upgrade")]
+    if unknown:
+        raise HTTPException(status_code=400,
+                            detail=f"statuses 只接受 duplicate / upgrade，收到 {unknown}")
+    if not req.statuses:
+        raise HTTPException(status_code=400, detail="至少要选一类要处理的情况")
+    if "upgrade" in req.statuses and not req.paths:
+        raise HTTPException(status_code=400,
+                            detail="替换库内旧版本必须逐条指定 paths，不支持全量处理")
     return _submit("dedupe-cross", {"paths": req.paths, "action": req.action,
-                                    "refresh": req.refresh})
+                                    "refresh": req.refresh,
+                                    "statuses": req.statuses})
 
 
 # --------------------------------------------------------------------------- #

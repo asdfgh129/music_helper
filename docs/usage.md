@@ -187,7 +187,7 @@ python -m uvicorn web.api:app --host 127.0.0.1 --port 8000
 | 4 解密 | `GET /api/decrypt/preview`、`POST /api/decrypt/run` | VIP 目录**直解**到工作区 |
 | 5 标签 | `GET /api/tags/preview`、`POST /api/tags/run` | 标签/封面/歌词补全；`fields` 限定写入哪些字段 |
 | 5 单曲 | `GET /api/track`、`POST /api/track/save`、`POST /api/track/fetch` | 单曲详情 / 手工保存 / 在线取标签（只预览不写盘） |
-| 6 查重 | `GET /api/dedupe/preview`、`POST /api/dedupe/run` | 工作区 vs 库目录；库里已有的移入重复目录或回收站 |
+| 6 查重 | `GET /api/dedupe/preview`、`POST /api/dedupe/run` | 工作区 vs 库目录；重复的移走，库里音质更低的旧版本让位（`statuses` 选处理哪类） |
 | 7 自检 | `GET /api/selfcheck/preview`、`POST /api/selfcheck/run` | 工作区只读自检，含文件名 ↔ 标签逐项比对 |
 | 8 归档 | `GET /api/archive/preview`、`POST /api/archive/run` | 按 `<年代>/<年份>` 归档，可选入库 |
 | 任务 | `GET /api/tasks`、`GET /api/tasks/{id}` | 状态 / 逐条进度 / 日志 / 结果 |

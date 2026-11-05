@@ -22,7 +22,7 @@ import core.scan as scanner
 import core.tags as core_tags
 import utils
 from core import dedupe as dedupe_mod
-from core import naming
+from core import naming, quality
 from core.model import Track
 from services import decrypt as decrypt_service
 from services import settings_store, soundalike
@@ -83,8 +83,7 @@ def save_directories(values):
     problems, items = settings_store.save(values)
     # 库目录可能被改到别处，丢弃查重用的库索引，避免下一次比对拿旧目录的文件
     if items is not None:
-        _library_cache['dir'] = ''
-        _library_cache['tracks'] = None
+        invalidate_library_cache()
     if problems:
         return problems, {'items': items, 'fields': settings_store.fields()}
     return [], directories()
@@ -601,10 +600,37 @@ def fetch_track_online(path, fields=None):
 # --------------------------------------------------------------------------- #
 
 DUPLICATE_STATUS_LABELS = {'unique': '库中不存在', 'duplicate': '库中已有',
-                           'unknown': '需人工确认'}
+                           'upgrade': '库中音质更低', 'unknown': '需人工确认'}
 
 # 库目录索引比较贵（上万次要 stat + 解析文件名），缓存到目录变化为止
 _library_cache = {'dir': '', 'tracks': None}
+
+# 音频规格只在命中候选后按需读取，单独缓存：重建库索引不必连带丢掉
+_quality_cache = {}
+
+
+def _quality_probe(track):
+    """按需读取音频规格（采样率 / 位深 / 码率）
+
+    只在「已确认是同一录音、要决定保留哪一份」时调用，通常个位数文件。
+    读不出来返回空字典，上层音质比较会落到 unknown 转人工。
+    """
+    cached = _quality_cache.get(track.path)
+    if cached is not None:
+        return cached
+    try:
+        info = core_tags.read_quality(track.path)
+    except Exception:  # noqa: BLE001 - 读不出来就降级成 unknown
+        info = {}
+    _quality_cache[track.path] = info
+    return info
+
+
+def invalidate_library_cache():
+    """库目录或配置变了，丢弃查重用的两份缓存"""
+    _library_cache['dir'] = ''
+    _library_cache['tracks'] = None
+    _quality_cache.clear()
 
 
 def _library_tracks(refresh=False):
@@ -652,14 +678,32 @@ def dedupe_preview(refresh=False):
     """
     workspace = _workspace_tracks()
     library_tracks = _library_tracks(refresh=refresh)
-    matches = dedupe_mod.match_against(workspace, library_tracks)
+    if refresh:
+        # 文件可能刚被替换/移走，规格缓存跟着作废
+        _quality_cache.clear()
+    matches = dedupe_mod.match_against(workspace, library_tracks,
+                                       probe=_quality_probe)
 
     items = []
     for match in matches:
         track = match.track
         problems = checker.readiness_problems(track)
+        by_path = {cmp['track'].path: cmp for cmp in match.comparisons}
         matched = sorted(match.matched, key=lambda item: (item.size, item.path),
                          reverse=True)
+        matched_items = []
+        for other in matched[:10]:
+            cmp = by_path.get(other.path) or {}
+            info = cmp.get('info') or {}
+            matched_items.append({
+                'path': other.path, 'name': other.filename, 'dir': other.dirpath,
+                'size': other.size,
+                'duration': round(info.get('duration') or other.duration, 1),
+                'quality': quality.describe(info),
+                'relation': cmp.get('relation', ''),
+            })
+        # upgrade 时真正要被移走的是库里那批音质更低的文件
+        replace = [entry for entry in matched_items if entry['relation'] == 'better']
         items.append({
             'path': track.path,
             'name': track.filename,
@@ -669,17 +713,19 @@ def dedupe_preview(refresh=False):
             'year': track.year,
             'duration': round(track.duration, 1),
             'size': track.size,
+            'ext': track.ext,
             'status': match.status,
             'status_label': DUPLICATE_STATUS_LABELS.get(match.status, match.status),
             'kind': match.kind,
             'reason': match.reason,
-            'matched': [{'path': item.path, 'name': item.filename,
-                         'dir': item.dirpath, 'size': item.size,
-                         'duration': round(item.duration, 1)}
-                        for item in matched[:3]],
+            'quality': quality.describe(match.target_info),
+            'matched': matched_items,
+            'matched_total': len(matched),
+            'replace': replace if match.status == 'upgrade' else [],
             'problems': problems,
             'ready': not problems,
-            'archive_ok': match.status == 'unique' and not problems,
+            # unique 照常入库；upgrade 的工作区文件同样要入库，只是库里旧版本先让位
+            'archive_ok': match.status in ('unique', 'upgrade') and not problems,
         })
 
     return {
@@ -691,32 +737,56 @@ def dedupe_preview(refresh=False):
         'total': len(items),
         'unique': sum(1 for item in items if item['status'] == 'unique'),
         'duplicate': sum(1 for item in items if item['status'] == 'duplicate'),
+        'upgrade': sum(1 for item in items if item['status'] == 'upgrade'),
         'unknown': sum(1 for item in items if item['status'] == 'unknown'),
+        'replace_count': sum(len(item['replace']) for item in items),
         'ready_to_archive': sum(1 for item in items if item['archive_ok']),
     }
 
 
-def run_dedupe(paths=None, action='move', refresh=False, progress=None):
-    """把「确认与库重复」的工作区文件移入重复目录 / 回收站
+def run_dedupe(paths=None, action='move', refresh=False, statuses=None,
+               progress=None):
+    """处理确认过的重复文件
 
-    - 只处理 `duplicate`：`unknown`（时长读不出来）一律留给人工；
-    - 库目录里的那份永远不动，只动工作区；
-    - 移动/删除仍走 `core.ops.Plan`，删除只是进 `log/_trash`。
+    - `duplicate`：移走**工作区**那份（库里已有同等或更好音质）
+    - `upgrade`：移走**库里**那份（音质更低），工作区这份留给第 8 步归档
+    - `unknown`：一律不处理，留给人工
+
+    `upgrade` 无论 `action` 选什么，都移入 `DUPLICATE_DIR` 而不是回收站——
+    动的是库里的存量文件，留一份可对照的副本比进回收站更稳妥。
+
+    移动/删除仍走 `core.ops.Plan`，删除只是进 `log/_trash`。
     """
     logger = _log()
+    wanted_statuses = set(statuses or ['duplicate'])
+    # 动库目录是这条流程里风险最高的动作，不接受「不指定就全做」：
+    # 必须由调用方逐条列出要替换哪些文件，避免一次误触把整个库的旧版本搬走。
+    if 'upgrade' in wanted_statuses and not paths:
+        raise ValueError('替换库内旧版本时必须明确指定 paths，不允许全量处理')
+
     preview = dedupe_preview(refresh=refresh)
     wanted = {os.path.normcase(path) for path in paths} if paths else None
     targets = [item for item in preview['items']
-               if item['status'] == 'duplicate'
+               if item['status'] in wanted_statuses
+               and item['status'] != 'unknown'
                and (wanted is None or os.path.normcase(item['path']) in wanted)]
 
     if not targets:
         return {'action': action, 'planned': 0, 'executed': 0, 'failed': 0,
-                'items': [], 'summary': '没有需要处理的重复文件'}
+                'library_replaced': 0, 'items': [],
+                'summary': '没有需要处理的文件'}
 
     plan = ops.Plan('工作区查重', dry_run=False,
                     journal_path=config.JOURNAL_PATH, trash_dir=config.TRASH_DIR)
+    sides = {}
     for item in targets:
+        if item['status'] == 'upgrade':
+            for old in item['replace']:
+                plan.add_move(old['path'],
+                              os.path.join(config.DUPLICATE_DIR, old['name']),
+                              f'音质更低，由工作区「{item["name"]}」替换')
+                sides[os.path.normcase(old['path'])] = 'library'
+            continue
         other = item['matched'][0]['name'] if item['matched'] else ''
         reason = f'库中已有：{other}' if other else item['reason']
         if action == 'trash':
@@ -724,9 +794,11 @@ def run_dedupe(paths=None, action='move', refresh=False, progress=None):
         else:
             plan.add_move(item['path'],
                           os.path.join(config.DUPLICATE_DIR, item['name']), reason)
+        sides[os.path.normcase(item['path'])] = 'workspace'
 
     if logger:
-        logger.info(f'查重处理：{len(plan.operations)} 个文件，方式 {action}')
+        logger.info(f'查重处理：{len(plan.operations)} 个文件，方式 {action}，'
+                    f'其中库内替换 {sum(1 for side in sides.values() if side == "library")} 个')
     result = plan.execute()
 
     items = []
@@ -736,17 +808,29 @@ def run_dedupe(paths=None, action='move', refresh=False, progress=None):
             status = 'failed'
         elif op in result.skipped:
             status = 'skipped'
+        side = sides.get(os.path.normcase(op.src), 'workspace')
         item = {'name': os.path.basename(op.src), 'source': op.src,
-                'target': op.dst, 'reason': op.reason, 'status': status}
+                'target': op.dst, 'reason': op.reason, 'status': status,
+                'side': side}
         items.append(item)
         _emit(progress, index, len(plan.operations), item)
+
+    # upgrade 永远进重复目录，进回收站的只可能是工作区那份，所以要分开报
+    destinations = []
+    if any(side == 'workspace' for side in sides.values()):
+        destinations.append(config.TRASH_DIR if action == 'trash'
+                            else config.DUPLICATE_DIR)
+    if any(side == 'library' for side in sides.values()):
+        destinations.append(config.DUPLICATE_DIR)
 
     return {
         'action': action,
         'planned': len(plan.operations),
         'executed': len(result.done),
         'failed': len(result.failed),
-        'moved_to': config.TRASH_DIR if action == 'trash' else config.DUPLICATE_DIR,
+        'library_replaced': sum(1 for item in items
+                                if item['side'] == 'library' and item['status'] == 'ok'),
+        'moved_to': '、'.join(dict.fromkeys(destinations)),
         'items': items,
         'summary': result.summary(),
     }

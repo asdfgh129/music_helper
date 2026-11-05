@@ -75,7 +75,7 @@ _SUPPORTED = [
     {"kind": "tags", "label": "标签与歌词补全",
      "desc": "声纹/在线平台补标签、封面、歌词", "default_dry_run": False},
     {"kind": "dedupe-cross", "label": "工作区查重",
-     "desc": "工作区 vs 库目录，库里已有的移入重复目录", "default_dry_run": False},
+     "desc": "工作区 vs 库目录，重复的移走，库里音质更低的旧版本让位", "default_dry_run": False},
     {"kind": "selfcheck", "label": "工作区自检",
      "desc": "文件名/标签/一致性/歌词/重复，只出报告", "default_dry_run": False},
     {"kind": "archive", "label": "按年份归档",
@@ -309,6 +309,7 @@ def _dispatch_wizard(task):
         return steps.run_dedupe(paths=opts.get("paths") or None,
                                 action=opts.get("action") or "move",
                                 refresh=bool(opts.get("refresh", False)),
+                                statuses=opts.get("statuses") or None,
                                 progress=progress)
     if kind == "selfcheck":
         return steps.workspace_check()

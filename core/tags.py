@@ -4,6 +4,7 @@
 
 对外主要接口：
     read_meta(path)          -> (tags, duration, has_cover)  一次打开，扫描阶段用
+    read_quality(path)       -> dict  音频规格（采样率/位深/码率），音质比较用
     read_tags(path)          -> dict
     write_tags(path, t)      -> bool
     has_cover(path)          -> bool
@@ -178,6 +179,47 @@ def read_meta(path):
         cover = False
 
     return tags, duration, cover
+
+
+def read_quality(path):
+    """读取音频规格（音质比较用）
+
+    只给「确认是同一录音、要决定保留哪一份」的少量文件调用，不参与批量扫描。
+    跨集合查重时库索引刻意不读标签（1 万多首要十几分钟），只在命中候选之后
+    才回来补这一步，通常只有个位数文件。
+
+    Returns:
+        dict：ext / size / duration / bitrate / sample_rate / bit_depth
+        读不出来的项为 0，绝不抛异常。
+    """
+    info = {'ext': os.path.splitext(path)[1].lower(), 'size': 0,
+            'duration': 0.0, 'bitrate': 0, 'sample_rate': 0, 'bit_depth': 0}
+    try:
+        info['size'] = os.path.getsize(path)
+    except OSError:
+        pass
+    if not MUTAGEN_AVAILABLE:
+        return info
+
+    try:
+        audio = _mutagen_file(path)
+    except Exception:  # noqa: BLE001 - 损坏文件不应中断批处理
+        return info
+    if audio is None or audio.info is None:
+        return info
+
+    # 不同容器的 info 属性名不一样：FLAC 有 bits_per_sample，MP3 只有 bitrate，
+    # Ogg 两者都可能缺。逐项 getattr，缺哪项就留 0。
+    for key, attr, caster in (('duration', 'length', float),
+                              ('bitrate', 'bitrate', int),
+                              ('sample_rate', 'sample_rate', int),
+                              ('bit_depth', 'bits_per_sample', int)):
+        try:
+            value = getattr(audio.info, attr, 0) or 0
+            info[key] = caster(value)
+        except (TypeError, ValueError, AttributeError):
+            pass
+    return info
 
 
 # ---------------- 写入 ----------------

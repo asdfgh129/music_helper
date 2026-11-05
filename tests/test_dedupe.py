@@ -203,11 +203,56 @@ class TestMatchAgainst(unittest.TestCase):
         self.assertEqual(result[0].status, 'unknown')
 
     def test_same_tag_duration_close_is_duplicate(self):
-        """不同码率转码大小不同，但时长能对上，也应判重复"""
+        """同格式不同码率转码、大小不同，但时长能对上，也应判重复"""
         result = match_against([self._ws(title='晴天', artist='周杰伦', size=5000)],
-                               [self._lib('a.mp3', duration=201, size=4000,
+                               [self._lib('a.flac', duration=201, size=4000,
                                           title='晴天', artist='周杰伦')])
         self.assertEqual(result[0].status, 'duplicate')
+
+    def test_lossless_replaces_lossy_in_library(self):
+        """工作区无损、库里是有损：库里那份该让位，这份才是要入库的"""
+        result = match_against([self._ws(title='晴天', artist='周杰伦', size=30000)],
+                               [self._lib('a.mp3', duration=200, size=4000,
+                                          title='晴天', artist='周杰伦')])
+        self.assertEqual(result[0].status, 'upgrade')
+        self.assertEqual(result[0].comparisons[0]['relation'], 'better')
+
+    def test_lossy_does_not_replace_lossless(self):
+        """工作区是有损、库里是无损：新文件才是多余的，库不能动"""
+        result = match_against([self._ws('a.mp3', title='晴天', artist='周杰伦', size=4000)],
+                               [self._lib('a.flac', duration=200, size=30000,
+                                          title='晴天', artist='周杰伦')])
+        self.assertEqual(result[0].status, 'duplicate')
+        self.assertEqual(result[0].comparisons[0]['relation'], 'worse')
+
+    def test_upgrade_probe_reads_spec(self):
+        """同为无损时比采样率/位深：probe 补上规格才能判出谁更好"""
+        def probe(track_obj):
+            if track_obj.path.startswith('D:/lib'):
+                return {'duration': 200.0, 'sample_rate': 44100, 'bit_depth': 16}
+            return {'duration': 200.0, 'sample_rate': 96000, 'bit_depth': 24}
+
+        result = match_against([self._ws(title='晴天', artist='周杰伦', size=30000)],
+                               [self._lib('a.flac', title='晴天', artist='周杰伦', size=20000)],
+                               probe=probe)
+        self.assertEqual(result[0].status, 'upgrade')
+
+    def test_same_spec_is_duplicate_not_upgrade(self):
+        """同为 44.1kHz/16bit 的 FLAC，音质相同，没有替换理由"""
+        def probe(_track):
+            return {'duration': 200.0, 'sample_rate': 44100, 'bit_depth': 16}
+
+        result = match_against([self._ws(title='晴天', artist='周杰伦', size=30000)],
+                               [self._lib('a.flac', title='晴天', artist='周杰伦', size=25000)],
+                               probe=probe)
+        self.assertEqual(result[0].status, 'duplicate')
+
+    def test_unreadable_spec_of_other_format_is_unknown(self):
+        """格式不同又读不到规格（连无损/有损都判不了）时不能自动替换"""
+        result = match_against([self._ws(title='晴天', artist='周杰伦', size=30000)],
+                               [self._lib('a.dff', duration=200, size=4000,
+                                          title='晴天', artist='周杰伦')])
+        self.assertEqual(result[0].status, 'unknown')
 
     def test_filename_dimension_when_tags_are_empty(self):
         result = match_against([self._ws('周杰伦 - 晴天.flac')],

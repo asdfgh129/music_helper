@@ -45,9 +45,10 @@
 | `core/model.py` | 统一的 `Track` 抽象 | `Track(dirpath, ext, stem, key, year_int, has_lrc, tag())` |
 | `core/scan.py` | 一次遍历建索引 | `scan(paths, month, month_from, month_to, with_tags, recursive, extensions)` |
 | `core/naming.py` | 文件名规则（唯一实现） | `parse_filename`、`canonicalize`、`format_filename`、`version_key` |
-| `core/tags.py` | 标签读写 + 封面 + 时长（唯一实现） | `read_meta`、`read_tags`、`write_tags`、`write_cover`、`has_cover`、`duration` |
+| `core/tags.py` | 标签读写 + 封面 + 时长 + 音频规格（唯一实现） | `read_meta`、`read_tags`、`read_quality`、`write_tags`、`write_cover`、`has_cover`、`duration` |
 | `core/lyrics.py` | 歌词缺失 / 孤立 | `missing_lrc`、`orphan_lrc` |
 | `core/dedupe.py` | 本地重复判定 + 跨集合比对 | `find_by_tag`、`find_by_filename`、`find_duplicates`、`match_against` |
+| `core/quality.py` | 音质比较（同一录音该留哪一份） | `is_lossless`、`compare`、`describe` |
 | `core/organize.py` | 年代/年份归档 | `plan_organize(tracks, base_dir, plan)` |
 | `core/check.py` | 检查、修复计划、入库判定 | `check_library`、`plan_fixes`、`report_into`、`readiness_problems` |
 | `core/report.py` | 报告渲染 | `Report.add/add_summary/add_review/save` |

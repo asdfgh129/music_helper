@@ -15,6 +15,7 @@ import os
 import re
 from dataclasses import dataclass, field
 
+from core import quality
 from core.naming import normalize_text
 
 # 数值越大越优先保留
@@ -172,13 +173,22 @@ def all_drop(groups):
 
 @dataclass
 class CrossMatch:
-    """一个待入库文件与「已有库」的比对结论"""
+    """一个待入库文件与「已有库」的比对结论
+
+    status 的四种取值对应四种处理方式：
+      unique    库里没有 → 照常归档
+      duplicate 库里已有同等或更好音质 → 移走**工作区**这份
+      upgrade   库里已有但音质更低 → 移走**库里**那份，工作区这份归档
+      unknown   判不出来（时长/规格读不出来） → 交人工
+    """
 
     track: object
-    status: str = 'unique'      # unique | duplicate | unknown
+    status: str = 'unique'      # unique | duplicate | upgrade | unknown
     kind: str = ''              # 命中的维度：标签 / 文件名
     reason: str = ''
-    matched: list = field(default_factory=list)
+    matched: list = field(default_factory=list)      # 相关的库内文件（Track）
+    target_info: dict = field(default_factory=dict)  # 待入库文件的音频规格
+    comparisons: list = field(default_factory=list)  # [{'track','info','relation'}]
 
 
 def _build_index(tracks):
@@ -195,41 +205,77 @@ def _build_index(tracks):
     return by_tag, by_name
 
 
-def _same_recording(left, right, tolerance):
+def _same_recording(left, right, tolerance, info_of):
     """两份文件是否同一录音
 
     优先比文件大小：同一个文件的复制/移动，字节数一定相同，比读时长还可靠。
     大小不同时退回时长容差；两者都拿不到返回 None（交给人工）。
 
-    库里那份可能只有文件名索引、没有读时长，所以不能只靠 duration。
+    库里那份起初只有文件名索引、duration 为 0，所以这里通过 `info_of` 按需
+    触发一次规格读取——只在命中候选后发生，个数很少。
     """
     if left.size and right.size and left.size == right.size:
         return True
-    if left.duration > 0 and right.duration > 0:
-        return abs(left.duration - right.duration) <= tolerance
+    left_duration = info_of(left).get('duration') or 0
+    right_duration = info_of(right).get('duration') or 0
+    if left_duration > 0 and right_duration > 0:
+        return abs(left_duration - right_duration) <= tolerance
     return None
 
 
-def match_against(targets, pool, tolerance=None):
-    """把一批文件逐个与「已在库里的文件」比对，判断是新的还是重复的
+def _probe_info(track, probe, cache):
+    """取音质相关字段：Track 自带的先用，probe 只补缺的
+
+    probe 失败（文件损坏、mutagen 缺失、权限不足）时静默降级，让上层用现有
+    字段判；此时音质比较会得到 unknown，转人工而不是误判。
+    """
+    cached = cache.get(track.path)
+    if cached is not None:
+        return cached
+
+    info = {'ext': track.ext, 'size': track.size, 'duration': track.duration}
+    if probe is not None:
+        try:
+            extra = probe(track) or {}
+        except Exception:  # noqa: BLE001 - 读不出来就按已知字段判
+            extra = {}
+        for key in ('duration', 'bitrate', 'sample_rate', 'bit_depth'):
+            if extra.get(key):
+                info[key] = extra[key]
+    cache[track.path] = info
+    return info
+
+
+def match_against(targets, pool, tolerance=None, probe=None):
+    """把一批文件逐个与「已在库里的文件」比对，判断是新的、重复的还是要替换的
 
     与 `find_duplicates()` 的区别：
     - 这里是**两个集合之间**的比对，不是同一堆文件内部找重复；
-    - 不需要决定「保留哪个」——库里那份天然保留，只需回答「这份该不该入库」。
+    - 要回答的是「这份该不该入库」，以及「库里那份该不该让位」。
 
     判定沿用库内查重的两条规则，但更保守：
     - 大小与时长都拿不到时只标 `unknown`，不判重复（损坏文件不应被自动移走）；
     - 文件名维度要求有「歌手 - 歌名」结构，`Intro.flac` 这类不跨目录比对。
 
+    确认同一录音之后，再用 `core.quality` 比音质：
+    - 库里有同等或更好的 → `duplicate`（工作区这份是多余的）
+    - 库里全都是更差的   → `upgrade`（库里旧版本让位，这份才是要入库的）
+
     Args:
         targets: 待判定的文件（如工作区文件）
         pool: 已有文件（如库目录索引；可以只填 size 与文件名解析出的标签）
+        probe: 可选的 `callable(track) -> dict`，补读 duration / bitrate /
+            sample_rate / bit_depth。只在命中候选后调用。
 
     Returns:
         list[CrossMatch]，顺序与 targets 一致
     """
     tolerance = default_tolerance() if tolerance is None else tolerance
     by_tag, by_name = _build_index(pool)
+    cache = {}
+
+    def info_of(track):
+        return _probe_info(track, probe, cache)
 
     results = []
     for track in targets:
@@ -249,25 +295,63 @@ def match_against(targets, pool, tolerance=None):
                                       reason='库中没有同名或同歌手+歌名的曲目'))
             continue
 
-        confirmed, unknown = [], []
+        same_recordings, unresolved = [], []
         for other in candidates:
-            same = _same_recording(track, other, tolerance)
+            same = _same_recording(track, other, tolerance, info_of)
             if same is None:
-                unknown.append(other)
+                unresolved.append(other)
             elif same:
-                confirmed.append(other)
+                same_recordings.append(other)
 
-        if confirmed:
-            results.append(CrossMatch(track=track, status='duplicate', kind=kind,
-                                      matched=confirmed,
-                                      reason=f'{kind}相同，判定为同一文件'))
-        elif unknown:
-            results.append(CrossMatch(track=track, status='unknown', kind=kind,
-                                      matched=unknown,
-                                      reason=f'{kind}相同，但大小与时长都无法确认，需人工'))
+        if not same_recordings:
+            if unresolved:
+                results.append(CrossMatch(
+                    track=track, status='unknown', kind=kind, matched=unresolved,
+                    reason=f'{kind}相同，但大小与时长都无法确认，需人工'))
+            else:
+                results.append(CrossMatch(
+                    track=track, status='unique', kind=kind, matched=candidates,
+                    reason=f'{kind}相同但大小与时长都不一致，视为不同版本'))
+            continue
+
+        target_info = info_of(track)
+        better, keep_library, unclear, comparisons = [], [], [], []
+        for other in same_recordings:
+            other_info = info_of(other)
+            relation = quality.compare(target_info, other_info)
+            # 规格读不出来（损坏、dff 这类容器 mutagen 不支持）时，只有同格式才
+            # 降级成「音质相同」——同格式同录音没有可靠的升级依据，保守不动库。
+            # 格式不同却读不到规格，说明连无损/有损都判不了，留给人工。
+            if relation == 'unknown' and track.ext == other.ext:
+                relation = 'same'
+            comparisons.append({'track': other, 'info': other_info,
+                                'relation': relation})
+            if relation == 'better':
+                better.append(other)
+            elif relation in ('same', 'worse'):
+                keep_library.append(other)
+            else:
+                unclear.append(other)
+
+        if keep_library:
+            results.append(CrossMatch(
+                track=track, status='duplicate', kind=kind, matched=keep_library,
+                target_info=target_info, comparisons=comparisons,
+                reason=f'{kind}相同，库中已有同音质或更好的版本'))
+        elif better and not unclear:
+            results.append(CrossMatch(
+                track=track, status='upgrade', kind=kind, matched=better,
+                target_info=target_info, comparisons=comparisons,
+                reason=f'{kind}相同，库里版本音质更低，可被这份替换'))
+        elif unclear:
+            results.append(CrossMatch(
+                track=track, status='unknown', kind=kind, matched=unclear,
+                target_info=target_info, comparisons=comparisons,
+                reason=f'{kind}相同，但音质规格读不出来，需人工确认'))
         else:
             results.append(CrossMatch(
-                track=track, status='unique', kind=kind, matched=candidates,
-                reason=f'{kind}相同但大小与时长都不一致，视为不同版本'))
+                track=track, status='unique', kind=kind, matched=same_recordings,
+                target_info=target_info, comparisons=comparisons,
+                reason=f'{kind}相同但音质一致且无替换必要，视为不同版本'))
 
     return results
