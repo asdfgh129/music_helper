@@ -271,6 +271,51 @@ class TestMatchAgainst(unittest.TestCase):
             [self._lib('周杰伦 - 晴天.flac', title='晴天', artist='周杰伦')])
         self.assertEqual(result[0].status, 'unique')
 
+    def test_flac_replaces_wav_at_same_spec(self):
+        """同规格的 WAV 与 FLAC 音质一样，但 FLAC 更省磁盘，仍值得替换"""
+        def probe(_track):
+            return {'duration': 200.0, 'sample_rate': 44100, 'bit_depth': 16}
+
+        result = match_against([self._ws('a.flac', title='晴天', artist='周杰伦', size=20000)],
+                               [self._lib('a.wav', title='晴天', artist='周杰伦', size=40000)],
+                               probe=probe)
+        self.assertEqual(result[0].status, 'upgrade')
+        self.assertEqual(result[0].basis, 'format')
+        self.assertIn('更占地方', result[0].reason)
+
+    def test_wav_does_not_replace_flac_at_same_spec(self):
+        """反过来：库里已经是 FLAC，工作区的 WAV 才是更占地方的那份"""
+        def probe(_track):
+            return {'duration': 200.0, 'sample_rate': 44100, 'bit_depth': 16}
+
+        result = match_against([self._ws('a.wav', title='晴天', artist='周杰伦', size=40000)],
+                               [self._lib('a.flac', title='晴天', artist='周杰伦', size=20000)],
+                               probe=probe)
+        self.assertEqual(result[0].status, 'duplicate')
+        self.assertEqual(result[0].basis, '')
+
+    def test_quality_upgrade_keeps_quality_basis(self):
+        def probe(track_obj):
+            if track_obj.path.startswith('D:/lib'):
+                return {'duration': 200.0, 'sample_rate': 44100, 'bit_depth': 16}
+            return {'duration': 200.0, 'sample_rate': 96000, 'bit_depth': 24}
+
+        result = match_against([self._ws(title='晴天', artist='周杰伦', size=30000)],
+                               [self._lib('a.flac', title='晴天', artist='周杰伦', size=20000)],
+                               probe=probe)
+        self.assertEqual(result[0].status, 'upgrade')
+        self.assertEqual(result[0].basis, 'quality')
+
+    def test_one_target_matches_several_library_files(self):
+        """库里同一首有多份（不同目录 / 不同版本）时全部列出，供逐条确认"""
+        pool = [self._lib('a.flac', title='晴天', artist='周杰伦'),
+                track('D:/lib/1990-1999/1990/b.flac', 0.0, 5000,
+                      title='晴天', artist='周杰伦')]
+        result = match_against([self._ws(title='晴天', artist='周杰伦')], pool)
+        self.assertEqual(result[0].status, 'duplicate')
+        self.assertEqual(len(result[0].matched), 2)
+        self.assertEqual(len(result[0].comparisons), 2)
+
     def test_result_order_follows_targets(self):
         targets = [self._ws('a.flac', title='A', artist='X'),
                    self._ws('b.flac', title='B', artist='Y')]

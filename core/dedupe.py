@@ -180,15 +180,23 @@ class CrossMatch:
       duplicate 库里已有同等或更好音质 → 移走**工作区**这份
       upgrade   库里已有但音质更低 → 移走**库里**那份，工作区这份归档
       unknown   判不出来（时长/规格读不出来） → 交人工
+
+    `basis` 说明 upgrade 的依据，只在 upgrade 时有值：
+      quality   库里那份音质更低（无损/有损、采样率、位深或码率）
+      format    音质相同，但工作区这份是压缩无损（FLAC/APE），库里是 WAV
+
+    一个工作区文件可能同时对上库里**多个**文件（同一首的不同版本、不同目录的
+    副本），`matched` 与 `comparisons` 会全部列出，由页面逐条让用户确认。
     """
 
     track: object
     status: str = 'unique'      # unique | duplicate | upgrade | unknown
     kind: str = ''              # 命中的维度：标签 / 文件名
     reason: str = ''
+    basis: str = ''             # upgrade 的依据：quality | format
     matched: list = field(default_factory=list)      # 相关的库内文件（Track）
     target_info: dict = field(default_factory=dict)  # 待入库文件的音频规格
-    comparisons: list = field(default_factory=list)  # [{'track','info','relation'}]
+    comparisons: list = field(default_factory=list)  # [{'track','info','relation','basis'}]
 
 
 def _build_index(tracks):
@@ -261,6 +269,10 @@ def match_against(targets, pool, tolerance=None, probe=None):
     - 库里有同等或更好的 → `duplicate`（工作区这份是多余的）
     - 库里全都是更差的   → `upgrade`（库里旧版本让位，这份才是要入库的）
 
+    音质「相同」时还有一层格式偏好：同规格的 WAV 与 FLAC 解码结果完全一致，
+    留 FLAC 更省磁盘，此时同样判 `upgrade`，但 `basis` 标成 `format`，
+    与真正的音质升级（`basis='quality'`）区分开。
+
     Args:
         targets: 待判定的文件（如工作区文件）
         pool: 已有文件（如库目录索引；可以只填 size 与文件名解析出的标签）
@@ -319,13 +331,22 @@ def match_against(targets, pool, tolerance=None, probe=None):
         for other in same_recordings:
             other_info = info_of(other)
             relation = quality.compare(target_info, other_info)
+            basis = 'quality'
             # 规格读不出来（损坏、dff 这类容器 mutagen 不支持）时，只有同格式才
             # 降级成「音质相同」——同格式同录音没有可靠的升级依据，保守不动库。
             # 格式不同却读不到规格，说明连无损/有损都判不了，留给人工。
             if relation == 'unknown' and track.ext == other.ext:
                 relation = 'same'
+            # 音质打平时再看格式：同规格的 FLAC 与 WAV 解码结果一致，但 FLAC
+            # 体积只有一半，留 FLAC 更划算。这不是音质升级，basis 单独标记。
+            if relation == 'same':
+                preference = quality.storage_preference(target_info, other_info)
+                if preference == 'better':
+                    relation, basis = 'better', 'format'
+            if relation == 'unknown':
+                basis = ''
             comparisons.append({'track': other, 'info': other_info,
-                                'relation': relation})
+                                'relation': relation, 'basis': basis})
             if relation == 'better':
                 better.append(other)
             elif relation in ('same', 'worse'):
@@ -339,10 +360,18 @@ def match_against(targets, pool, tolerance=None, probe=None):
                 target_info=target_info, comparisons=comparisons,
                 reason=f'{kind}相同，库中已有同音质或更好的版本'))
         elif better and not unclear:
+            # 全部是「同音质、换更省磁盘的格式」才算 format；只要有一条是真
+            # 的音质提升，整体按音质升级表述（逐条依据仍在 comparisons 里）
+            bases = {cmp['basis'] for cmp in comparisons
+                     if cmp['relation'] == 'better'}
+            basis = 'format' if bases == {'format'} else 'quality'
+            reason = (f'{kind}相同，音质一致但库里那份更占地方，可用这份替换'
+                      if basis == 'format'
+                      else f'{kind}相同，库里版本音质更低，可被这份替换')
             results.append(CrossMatch(
-                track=track, status='upgrade', kind=kind, matched=better,
-                target_info=target_info, comparisons=comparisons,
-                reason=f'{kind}相同，库里版本音质更低，可被这份替换'))
+                track=track, status='upgrade', kind=kind, basis=basis,
+                matched=better, target_info=target_info,
+                comparisons=comparisons, reason=reason))
         elif unclear:
             results.append(CrossMatch(
                 track=track, status='unknown', kind=kind, matched=unclear,

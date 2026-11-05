@@ -338,6 +338,8 @@ button.btn.link:hover { text-decoration: underline; }
   border-bottom: 1px solid rgba(42, 43, 50, 0.55);
 }
 .row-item:hover { background: rgba(79, 156, 249, 0.06); }
+/* 第 6 步两栏比对：左栏当前查看的那一行 */
+.row-item.sel { background: rgba(79, 156, 249, 0.12); box-shadow: inset 2px 0 0 var(--accent); }
 .row-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-item .meta { color: var(--dim); font-size: 11.5px; font-family: var(--mono); white-space: nowrap; }
 .row-item .tag { font-size: 10.5px; padding: 0 6px; border-radius: 4px; background: var(--panel-3); color: var(--dim); }

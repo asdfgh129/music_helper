@@ -20,6 +20,12 @@ LOSSLESS_EXTS = frozenset({
     '.flac', '.ape', '.wav', '.dsf', '.dff', '.aif', '.aiff', '.alac',
 })
 
+# 压缩无损：解码后与 WAV 逐字节一致，但体积只有一半左右
+COMPRESSED_LOSSLESS_EXTS = frozenset({'.flac', '.ape', '.alac'})
+
+# 未压缩无损：PCM 直存，没有任何压缩
+UNCOMPRESSED_LOSSLESS_EXTS = frozenset({'.wav', '.aif', '.aiff'})
+
 # 有损码率相差在这个比例以内视为同一水平：同一次转码的不同产物不该互相替换
 BITRATE_TOLERANCE = 0.10
 
@@ -27,6 +33,11 @@ BITRATE_TOLERANCE = 0.10
 def is_lossless(ext):
     """扩展名是否为无损格式"""
     return (ext or '').lower() in LOSSLESS_EXTS
+
+
+def is_compressed_lossless(ext):
+    """扩展名是否为压缩无损格式（FLAC / APE / ALAC）"""
+    return (ext or '').lower() in COMPRESSED_LOSSLESS_EXTS
 
 
 def _bitrate(info):
@@ -90,6 +101,39 @@ def compare(left, right):
     if abs(left_rate - right_rate) <= max(left_rate, right_rate) * BITRATE_TOLERANCE:
         return 'same'
     return 'better' if left_rate > right_rate else 'worse'
+
+
+def storage_preference(left, right):
+    """音质相同的两份文件里，哪一份更值得留下（省磁盘）
+
+    只在 `compare()` 已经判 `same` 之后调用：此时两者的采样率与位深完全一致，
+    解码出来是同一串 PCM，唯一的差别是**装它的容器**。WAV 不做压缩，同规格下
+    体积约是 FLAC 的两倍，留 WAV 纯属占地方。
+
+    因此这条规则管的是「存储格式偏好」，不是音质——调用方必须用单独的
+    `basis='format'` 标记它，页面上也不能说成「音质升级」。
+
+    刻意保守的三点：
+    - 只比较「压缩无损 ↔ 未压缩无损」，两种都是压缩无损（FLAC vs APE）时判
+      `same`，因为体积差异小、互相转换没有收益；
+    - DSD（dsf / dff）不参与，DSD 转 PCM 本身就不是无损；
+    - 规格读不出来时返回 `unknown`，交给调用方处理。
+
+    Returns:
+        'better' / 'worse' / 'same' / 'unknown'
+    """
+    if not left or not right:
+        return 'unknown'
+    left_ext, right_ext = left.get('ext'), right.get('ext')
+    if not is_lossless(left_ext) or not is_lossless(right_ext):
+        return 'same'
+    if _spec(left) is None or _spec(right) is None:
+        return 'unknown'
+    left_packed = is_compressed_lossless(left_ext)
+    right_packed = is_compressed_lossless(right_ext)
+    if left_packed == right_packed:
+        return 'same'
+    return 'better' if left_packed else 'worse'
 
 
 def describe(info):

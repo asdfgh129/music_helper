@@ -251,11 +251,11 @@ class TestDedupePreview(StepsTestCase):
         self.assertEqual(data['ready_to_archive'], 0)
 
 
-class TestDedupeUpgrade(StepsTestCase):
-    """库里音质更低时：移走的是库里那份，工作区这份留给归档
+class _DedupeRunBase(StepsTestCase):
+    """查重执行类用例的公共准备：目录、日志、音频规格 mock
 
-    `read_quality` 用 mock 提供规格，因为用例里的「音频」是文本文件，
-    mutagen 读不出采样率/码率。
+    用例里的「音频」都是文本文件，mutagen 读不出规格，所以 `read_quality`
+    用 mock 顶替，按扩展名返回固定规格。
     """
 
     def setUp(self):
@@ -276,11 +276,19 @@ class TestDedupeUpgrade(StepsTestCase):
     @staticmethod
     def _quality(path):
         size = os.path.getsize(path)
-        if path.lower().endswith('.mp3'):
+        ext = os.path.splitext(path)[1].lower()
+        if ext == '.mp3':
             return {'ext': '.mp3', 'size': size, 'duration': 200.5,
                     'bitrate': 128000, 'sample_rate': 44100, 'bit_depth': 0}
-        return {'ext': '.flac', 'size': size, 'duration': 200.0,
+        if ext == '.wav':
+            return {'ext': '.wav', 'size': size, 'duration': 200.0,
+                    'bitrate': 0, 'sample_rate': 44100, 'bit_depth': 16}
+        return {'ext': ext, 'size': size, 'duration': 200.0,
                 'bitrate': 0, 'sample_rate': 44100, 'bit_depth': 16}
+
+
+class TestDedupeUpgrade(_DedupeRunBase):
+    """库里音质更低时：移走的是库里那份，工作区这份留给归档"""
 
     def _prepare(self):
         self._touch('workspace', '周杰伦 - 晴天.flac', content='a' * 40)
@@ -336,6 +344,116 @@ class TestDedupeUpgrade(StepsTestCase):
         with self.assertRaises(ValueError):
             steps.run_dedupe(action='move', refresh=True, statuses=['upgrade'])
         self.assertTrue(os.path.exists(library_file))
+
+
+class TestDedupeFormatAndSides(_DedupeRunBase):
+    """同音质换格式省磁盘 + 一个工作区文件对上库里多份"""
+
+    def test_wav_replaced_by_same_spec_flac(self):
+        """WAV 与 FLAC 同规格时音质一样，但 FLAC 只有一半体积，值得替换"""
+        self._touch('workspace', '周杰伦 - 晴天.flac', content='a' * 40)
+        library_file = self._touch('library', '2020-2029', '2020',
+                                  '周杰伦 - 晴天.wav', content='b' * 80)
+        data = steps.dedupe_preview(refresh=True)
+        self.assertEqual(data['upgrade'], 1)
+        self.assertEqual(data['upgrade_format'], 1)
+        self.assertEqual(data['upgrade_quality'], 0)
+        item = data['items'][0]
+        self.assertEqual(item['basis'], 'format')
+        self.assertEqual(item['basis_label'], '同音质更省磁盘')
+
+        result = steps.run_dedupe(paths=[os.path.join(self.workspace,
+                                                      '周杰伦 - 晴天.flac')],
+                                  action='trash', refresh=True, statuses=['upgrade'])
+        self.assertEqual(result['library_replaced'], 1)
+        self.assertFalse(os.path.exists(library_file))
+        # 动的是库里的文件，即使网页上选「删除」也只进重复目录
+        self.assertTrue(os.path.exists(
+            os.path.join(self.duplicate_dir, '周杰伦 - 晴天.wav')))
+        self.assertEqual(os.listdir(self.trash_dir), [])
+
+    def _two_library_copies(self):
+        self._touch('workspace', '周杰伦 - 晴天.flac', content='a' * 40)
+        first = self._touch('library', '2020-2029', '2020',
+                            '周杰伦 - 晴天.mp3', content='b' * 10)
+        second = self._touch('library', '1990-1999', '1999',
+                             '周杰伦 - 晴天.mp3', content='c' * 10)
+        return first, second
+
+    def test_preview_lists_every_library_copy(self):
+        """同一首在库里有两份，两栏比对时要全部列出来，不能只显示第一条"""
+        self._two_library_copies()
+        data = steps.dedupe_preview(refresh=True)
+        item = data['items'][0]
+        self.assertEqual(item['status'], 'upgrade')
+        self.assertEqual(len(item['matched']), 2)
+        self.assertEqual(len(item['replace']), 2)
+        self.assertEqual(item['matched_total'], 2)
+        self.assertFalse(item['matched_truncated'])
+        self.assertEqual(data['replace_count'], 2)
+
+    def test_replaces_moves_only_selected_copy(self):
+        """用户只勾了其中一份：另一份必须原样留在库里"""
+        first, second = self._two_library_copies()
+        workspace_file = os.path.join(self.workspace, '周杰伦 - 晴天.flac')
+        result = steps.run_dedupe(paths=[workspace_file], action='move',
+                                  refresh=True, statuses=['upgrade'],
+                                  replaces={workspace_file: [first]})
+        self.assertEqual(result['library_replaced'], 1)
+        self.assertFalse(os.path.exists(first))
+        self.assertTrue(os.path.exists(second))
+
+    def test_replaces_rejects_path_outside_preview(self):
+        """不在可替换清单里的路径必须拒绝，防止借接口删库里的任意文件"""
+        self._two_library_copies()
+        stray = self._touch('library', '2020-2029', '2020', '别的 - 歌.mp3',
+                            content='z')
+        workspace_file = os.path.join(self.workspace, '周杰伦 - 晴天.flac')
+        with self.assertRaises(ValueError):
+            steps.run_dedupe(paths=[workspace_file], action='move', refresh=True,
+                             statuses=['upgrade'],
+                             replaces={workspace_file: [stray]})
+        self.assertTrue(os.path.exists(stray))
+
+    def test_replaces_with_empty_selection_does_nothing(self):
+        """全部取消勾选等于不处理：库里和工作区都保持原样"""
+        first, second = self._two_library_copies()
+        workspace_file = os.path.join(self.workspace, '周杰伦 - 晴天.flac')
+        result = steps.run_dedupe(paths=[workspace_file], action='move',
+                                  refresh=True, statuses=['upgrade'],
+                                  replaces={workspace_file: []})
+        self.assertEqual(result['planned'], 0)
+        self.assertEqual(result['skipped'], 1)
+        self.assertTrue(os.path.exists(first))
+        self.assertTrue(os.path.exists(second))
+        self.assertTrue(os.path.exists(workspace_file))
+
+
+class TestDedupeActions(_DedupeRunBase):
+    """网页上的「删除」与命令行的「移入重复目录」"""
+
+    def _prepare_duplicate(self):
+        self._touch('workspace', '周杰伦 - 晴天.flac', content='abcd')
+        self._touch('library', '2020-2029', '2020', '周杰伦 - 晴天.flac',
+                    content='abcd')
+        return os.path.join(self.workspace, '周杰伦 - 晴天.flac')
+
+    def test_trash_action_goes_to_trash(self):
+        workspace_file = self._prepare_duplicate()
+        result = steps.run_dedupe(paths=[workspace_file], action='trash',
+                                  refresh=True, statuses=['duplicate'])
+        self.assertEqual(result['executed'], 1)
+        self.assertFalse(os.path.exists(workspace_file))
+        self.assertEqual(os.listdir(self.duplicate_dir), [])
+        self.assertEqual(os.listdir(self.trash_dir), ['周杰伦 - 晴天.flac'])
+
+    def test_move_action_goes_to_duplicate_dir(self):
+        workspace_file = self._prepare_duplicate()
+        steps.run_dedupe(paths=[workspace_file], action='move', refresh=True,
+                         statuses=['duplicate'])
+        self.assertFalse(os.path.exists(workspace_file))
+        self.assertEqual(os.listdir(self.duplicate_dir), ['周杰伦 - 晴天.flac'])
+        self.assertEqual(os.listdir(self.trash_dir), [])
 
 
 class TestWorkspaceCheck(StepsTestCase):

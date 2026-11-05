@@ -153,6 +153,9 @@ class DedupeRunReq(BaseModel):
     action: str = "move"                # move（移入重复目录）| trash（进回收站）
     refresh: bool = False               # 重新扫描库目录
     statuses: list = ["duplicate"]      # duplicate（移工作区）/ upgrade（移库里旧版本）
+    # {工作区路径: [库内路径, ...]}：一个工作区文件对上库里多份时，只动勾选的那几个。
+    # 不传表示该文件命中的库内旧版本全部替换。
+    replaces: dict = {}
 
 
 class ArchiveRunReq(BaseModel):
@@ -516,9 +519,19 @@ def api_dedupe_run(req: DedupeRunReq):
     if "upgrade" in req.statuses and not req.paths:
         raise HTTPException(status_code=400,
                             detail="替换库内旧版本必须逐条指定 paths，不支持全量处理")
+    # replaces 只能落在本次明确指定的 paths 上，避免绕过「逐条确认」这道闸门
+    stray = [key for key in req.replaces if key not in set(req.paths)]
+    if stray:
+        raise HTTPException(status_code=400,
+                            detail=f"replaces 里的文件必须同时在 paths 中：{stray}")
+    bad = [key for key, value in req.replaces.items() if not isinstance(value, list)]
+    if bad:
+        raise HTTPException(status_code=400,
+                            detail=f"replaces 的值必须是路径数组：{bad}")
     return _submit("dedupe-cross", {"paths": req.paths, "action": req.action,
                                     "refresh": req.refresh,
-                                    "statuses": req.statuses})
+                                    "statuses": req.statuses,
+                                    "replaces": req.replaces})
 
 
 # --------------------------------------------------------------------------- #

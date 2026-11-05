@@ -310,6 +310,7 @@ def _dispatch_wizard(task):
                                 action=opts.get("action") or "move",
                                 refresh=bool(opts.get("refresh", False)),
                                 statuses=opts.get("statuses") or None,
+                                replaces=opts.get("replaces") or None,
                                 progress=progress)
     if kind == "selfcheck":
         return steps.workspace_check()

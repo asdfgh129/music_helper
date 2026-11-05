@@ -602,6 +602,12 @@ def fetch_track_online(path, fields=None):
 DUPLICATE_STATUS_LABELS = {'unique': '库中不存在', 'duplicate': '库中已有',
                            'upgrade': '库中音质更低', 'unknown': '需人工确认'}
 
+# upgrade 的两种依据：音质更高，还是同音质但格式更省磁盘
+UPGRADE_BASIS_LABELS = {'quality': '音质更高', 'format': '同音质更省磁盘'}
+
+# 单个工作区文件最多列出多少个库内对应文件；超出的只在 matched_total 里计数
+MATCHED_LIMIT = 50
+
 # 库目录索引比较贵（上万次要 stat + 解析文件名），缓存到目录变化为止
 _library_cache = {'dir': '', 'tracks': None}
 
@@ -692,7 +698,9 @@ def dedupe_preview(refresh=False):
         matched = sorted(match.matched, key=lambda item: (item.size, item.path),
                          reverse=True)
         matched_items = []
-        for other in matched[:10]:
+        # 一个工作区文件可能对上库里多个文件，全部列出：页面是两栏比对，
+        # 右栏要能看到每一份，并逐条决定替换/保留。
+        for other in matched[:MATCHED_LIMIT]:
             cmp = by_path.get(other.path) or {}
             info = cmp.get('info') or {}
             matched_items.append({
@@ -701,8 +709,9 @@ def dedupe_preview(refresh=False):
                 'duration': round(info.get('duration') or other.duration, 1),
                 'quality': quality.describe(info),
                 'relation': cmp.get('relation', ''),
+                'basis': cmp.get('basis', ''),
             })
-        # upgrade 时真正要被移走的是库里那批音质更低的文件
+        # upgrade 时真正要被移走的是库里那批音质更低（或更占地方）的文件
         replace = [entry for entry in matched_items if entry['relation'] == 'better']
         items.append({
             'path': track.path,
@@ -716,11 +725,14 @@ def dedupe_preview(refresh=False):
             'ext': track.ext,
             'status': match.status,
             'status_label': DUPLICATE_STATUS_LABELS.get(match.status, match.status),
+            'basis': match.basis,
+            'basis_label': UPGRADE_BASIS_LABELS.get(match.basis, ''),
             'kind': match.kind,
             'reason': match.reason,
             'quality': quality.describe(match.target_info),
             'matched': matched_items,
             'matched_total': len(matched),
+            'matched_truncated': len(matched) > len(matched_items),
             'replace': replace if match.status == 'upgrade' else [],
             'problems': problems,
             'ready': not problems,
@@ -738,6 +750,8 @@ def dedupe_preview(refresh=False):
         'unique': sum(1 for item in items if item['status'] == 'unique'),
         'duplicate': sum(1 for item in items if item['status'] == 'duplicate'),
         'upgrade': sum(1 for item in items if item['status'] == 'upgrade'),
+        'upgrade_quality': sum(1 for item in items if item['basis'] == 'quality'),
+        'upgrade_format': sum(1 for item in items if item['basis'] == 'format'),
         'unknown': sum(1 for item in items if item['status'] == 'unknown'),
         'replace_count': sum(len(item['replace']) for item in items),
         'ready_to_archive': sum(1 for item in items if item['archive_ok']),
@@ -745,15 +759,25 @@ def dedupe_preview(refresh=False):
 
 
 def run_dedupe(paths=None, action='move', refresh=False, statuses=None,
-               progress=None):
+               replaces=None, progress=None):
     """处理确认过的重复文件
 
     - `duplicate`：移走**工作区**那份（库里已有同等或更好音质）
-    - `upgrade`：移走**库里**那份（音质更低），工作区这份留给第 8 步归档
+    - `upgrade`：移走**库里**那份（音质更低或格式更占地方），工作区这份留给第 8 步归档
     - `unknown`：一律不处理，留给人工
 
-    `upgrade` 无论 `action` 选什么，都移入 `DUPLICATE_DIR` 而不是回收站——
-    动的是库里的存量文件，留一份可对照的副本比进回收站更稳妥。
+    两种动作的落点不同，这是命令行与网页的唯一区别：
+    - `action='move'`：工作区那份移入 `DUPLICATE_DIR`（命令行默认，留一份可对照的副本）；
+    - `action='trash'`：工作区那份移入 `TRASH_DIR`（网页上用户逐条确认后选「删除」）。
+
+    `upgrade` 动的是库里的存量文件，无论 `action` 选什么，都移入
+    `DUPLICATE_DIR` 而不是回收站——库里的东西不能因为一次误触就没了。
+
+    Args:
+        paths: 要处理的工作区文件；None 表示「全部可处理的」
+        replaces: 可选 `{工作区路径: [库内路径, ...]}`。一个工作区文件可能对上
+            库里多个旧版本，用户可以在两栏列表里只勾其中几个；缺省表示全部。
+            只接受 `duplicate`/`upgrade` 结论里列出的库内文件，其余一律报错。
 
     移动/删除仍走 `core.ops.Plan`，删除只是进 `log/_trash`。
     """
@@ -765,6 +789,22 @@ def run_dedupe(paths=None, action='move', refresh=False, statuses=None,
         raise ValueError('替换库内旧版本时必须明确指定 paths，不允许全量处理')
 
     preview = dedupe_preview(refresh=refresh)
+    by_path = {os.path.normcase(item['path']): item for item in preview['items']}
+
+    # 逐项勾选的库内文件：必须是预览里真实列出过的，防止伪造路径去动库里
+    # 任意一个文件（这条校验比「相信前端」重要）。
+    chosen_replace = {}
+    for key, values in (replaces or {}).items():
+        item = by_path.get(os.path.normcase(key))
+        if not item or item['status'] != 'upgrade':
+            raise ValueError(f'只有「库中音质更低」的文件才能指定要替换哪些：{key}')
+        allowed = {os.path.normcase(entry['path']) for entry in item['replace']}
+        picked = {os.path.normcase(path) for path in (values or [])}
+        extra = picked - allowed
+        if extra:
+            raise ValueError(f'以下文件不在可替换范围内：{sorted(extra)}')
+        chosen_replace[os.path.normcase(key)] = picked
+
     wanted = {os.path.normcase(path) for path in paths} if paths else None
     targets = [item for item in preview['items']
                if item['status'] in wanted_statuses
@@ -779,12 +819,19 @@ def run_dedupe(paths=None, action='move', refresh=False, statuses=None,
     plan = ops.Plan('工作区查重', dry_run=False,
                     journal_path=config.JOURNAL_PATH, trash_dir=config.TRASH_DIR)
     sides = {}
+    used = set()
     for item in targets:
         if item['status'] == 'upgrade':
+            picked = chosen_replace.get(os.path.normcase(item['path']))
             for old in item['replace']:
+                if picked is not None and os.path.normcase(old['path']) not in picked:
+                    # 用户取消了这一条：库里保留，工作区这份也不入库（否则会重复）
+                    continue
+                used.add(os.path.normcase(item['path']))
                 plan.add_move(old['path'],
                               os.path.join(config.DUPLICATE_DIR, old['name']),
-                              f'音质更低，由工作区「{item["name"]}」替换')
+                              f'{"格式更占地方" if item["basis"] == "format" else "音质更低"}，'
+                              f'由工作区「{item["name"]}」替换')
                 sides[os.path.normcase(old['path'])] = 'library'
             continue
         other = item['matched'][0]['name'] if item['matched'] else ''
@@ -794,7 +841,14 @@ def run_dedupe(paths=None, action='move', refresh=False, statuses=None,
         else:
             plan.add_move(item['path'],
                           os.path.join(config.DUPLICATE_DIR, item['name']), reason)
+        used.add(os.path.normcase(item['path']))
         sides[os.path.normcase(item['path'])] = 'workspace'
+
+    if not plan.operations:
+        # 用户把每个「音质更低」项里的库内文件都取消了勾选：什么都不做才是对的
+        return {'action': action, 'planned': 0, 'executed': 0, 'failed': 0,
+                'library_replaced': 0, 'skipped': len(targets), 'items': [],
+                'summary': '勾选项里没有需要替换或删除的文件'}
 
     if logger:
         logger.info(f'查重处理：{len(plan.operations)} 个文件，方式 {action}，'
@@ -823,11 +877,17 @@ def run_dedupe(paths=None, action='move', refresh=False, statuses=None,
     if any(side == 'library' for side in sides.values()):
         destinations.append(config.DUPLICATE_DIR)
 
+    # 库内文件被全部取消勾选的 upgrade 项：这一项什么也没做，页面上要说清楚
+    skipped_items = [item for item in targets
+                     if item['status'] == 'upgrade'
+                     and os.path.normcase(item['path']) not in used]
+
     return {
         'action': action,
         'planned': len(plan.operations),
         'executed': len(result.done),
         'failed': len(result.failed),
+        'skipped': len(skipped_items),
         'library_replaced': sum(1 for item in items
                                 if item['side'] == 'library' and item['status'] == 'ok'),
         'moved_to': '、'.join(dict.fromkeys(destinations)),
