@@ -5,17 +5,17 @@ Python 音乐库流水线：**解密 → 去重 → 补标签 → 检查 → 分
 面向「下载目录只是中转、最终库才是长期资产」的使用方式：默认流水线只把文件整理到工作区，
 不会自动并入最终库；所有破坏性动作先出计划、写流水，删除一律进回收站。
 
-| 项目 | 说明 |
-|---|---|
-| 当前版本 | `0.7.0`（见 [CHANGELOG.md](CHANGELOG.md)） |
-| 运行环境 | Python 3.11+；Windows 为主要目标平台（QQ 解密仅 Windows） |
-| 入口 | `python main.py` |
-| 使用条款 | [LICENSE](LICENSE) |
+| 项目     | 说明                                                                                                                                                                   |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 当前版本 | `0.7.0`（见 [CHANGELOG.md](CHANGELOG.md)）                                                                                                                            |
+| 运行环境 | Python 3.11+；Windows 和 macOS 为主要目标平台（QQ 解密 在 Windows 上有两要途径，旧版 QQ （1951及以下版本）+ um，新版QQ + Frida；macOS 上是旧版 QQ （20230903）+ um） |
+| 入口     | `python main.py`                                                                                                                                                     |
+| 使用条款 | [LICENSE](LICENSE)                                                                                                                                                      |
 
 ## 能力
 
 - **声纹去重**：调用 `soundalike.exe`，固定声纹库路径，识别重复曲目并移入重复区。
-- **本地查重**：标签/文件名 + 时长双规则，保留无损格式与更大文件。
+- **本地查重**：标签/文件名 + 时长双规则，保留无损格式与同音质更小文件。
 - **文件名规范**：`歌手 - 歌名` 格式检查，单个 `-` 自动规范化，避免误伤 `AC-DC`。
 - **标签补全**：先按声纹查 MusicBrainz，再按文件名查 QQ 音乐 / 网易云，顺带封面与歌词。
 - **完整性检查**：标签缺失、文件名与标签矛盾、重复、缺歌词、孤立歌词。
@@ -104,36 +104,37 @@ music_helper/
 
 ## 文档
 
-| 文档 | 内容 |
-|---|---|
-| [docs/README.md](docs/README.md) | 文档索引与每篇文档的边界 |
-| [docs/web-guide.md](docs/web-guide.md) | 八步向导的操作说明（配图） |
-| [docs/workflow.md](docs/workflow.md) | 端到端流程、状态迁移、失败处理 |
-| [docs/rules.md](docs/rules.md) | 全部判定规则 |
-| [docs/usage.md](docs/usage.md) | 命令行手册 |
-| [docs/configuration.md](docs/configuration.md) | 配置、目录语义、外部工具、阈值 |
-| [docs/architecture.md](docs/architecture.md) | 分层、模块、`Plan`、扩展指南 |
-| [docs/fingerprint.md](docs/fingerprint.md) | AcoustID / MusicBrainz 与版本碰撞 |
-| [docs/troubleshooting.md](docs/troubleshooting.md) | 故障排查与恢复 |
-| [docs/git-proxy.md](docs/git-proxy.md) | 推不上 GitHub 时的本地代理 |
-| [tests/README.md](tests/README.md) | 测试运行与覆盖矩阵 |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | 开发、测试、提交规范 |
-| [CHANGELOG.md](CHANGELOG.md) | 变更记录 |
+| 文档                                              | 内容                              |
+| ------------------------------------------------- | --------------------------------- |
+| [docs/README.md](docs/README.md)                   | 文档索引与每篇文档的边界          |
+| [docs/web-guide.md](docs/web-guide.md)             | 八步向导的操作说明（配图）        |
+| [docs/workflow.md](docs/workflow.md)               | 端到端流程、状态迁移、失败处理    |
+| [docs/rules.md](docs/rules.md)                     | 全部判定规则                      |
+| [docs/usage.md](docs/usage.md)                     | 命令行手册                        |
+| [docs/configuration.md](docs/configuration.md)     | 配置、目录语义、外部工具、阈值    |
+| [docs/architecture.md](docs/architecture.md)       | 分层、模块、`Plan`、扩展指南    |
+| [docs/fingerprint.md](docs/fingerprint.md)         | AcoustID / MusicBrainz 与版本碰撞 |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | 故障排查与恢复                    |
+| [docs/git-proxy.md](docs/git-proxy.md)             | 推不上 GitHub 时的本地代理        |
+| [tests/README.md](tests/README.md)                 | 测试运行与覆盖矩阵                |
+| [CONTRIBUTING.md](CONTRIBUTING.md)                 | 开发、测试、提交规范              |
+| [CHANGELOG.md](CHANGELOG.md)                       | 变更记录                          |
 
 ## 安全底线
 
 1. **计划先行**：移动/改名先形成 `Plan`，`--dry-run` 可完整预览。
 2. **不真删文件**：唯一「删除」是移入 `log/_trash/`，`core/` 层没有 `os.remove`。
 3. **可追溯**：每个动作追加一条 JSON 到 `log/journal.jsonl`。
-4. **只动该动的**：缺封面/专辑/年份只报告；只有歌曲名/歌手缺失或文件名与标签矛盾才移入
+4. **只动该动的**：缺封面/专辑/年份/歌曲名/歌手缺失或文件名与标签矛盾移入
    `INCOMPLETE_DIR`。重复文件默认进 `DUPLICATE_DIR`，`--trash-dup` 才进回收站。
-5. **解密只碰自己搬过的文件**：加密原文件按 `ENCRYPTED_SOURCE_MODE` 处理，绝不遍历整个
+5. **解密只碰自己搬过或已选的文件**：加密原文件按 `ENCRYPTED_SOURCE_MODE` 处理，绝不遍历整个
    VIP 目录批量搬运。
 
 ## 已知限制
 
 - QQ 解密依赖 Frida 与正在运行的 QQMusic 客户端，**仅 Windows**。解密前会自动做三件事
   （见 `decrypto/qq_client.py`）：
+
   1. 检测客户端是否安装——Windows 读注册表 `Install` 值 + 常见路径；没装就装
      `tools/QQMusic_Setup_1951.exe`，再打 `tools/Q音屏蔽更新.zip` 补丁（客户端升级会让
      Frida 依赖的 MSVC 修饰导出名变化，脚本随即失效，所以补丁是解密能力的一部分）。
