@@ -33,8 +33,11 @@ Thumbs.db
 .sisyphus/
 .workbuddy/
 
-# ===== 第三方安装包（体积大且无法校验真伪，见 third_party/qqmusic/README.md）=====
-# 源码在 third_party/ 下照常入库；只有安装包这类大二进制排除在外。
-third_party/qqmusic/*.exe
-third_party/qqmusic/*.dmg
-third_party/qqmusic/*.zip
+# ===== third_party 目录约定 =====
+# third_party/ 只放第三方**源码**（换机器、上游下架时仍能重建 tools/ 里的产物）；
+# 编译产物、安装包、补丁包一律放 tools/，并且照常入库——它们是运行时依赖，
+# 官方 CDN 已经下架，仓库不带就没法复现（见 third_party/qqmusic/README.md）。
+# 下面三条是护栏，防止有人把二进制误放进 third_party/。
+third_party/**/*.exe
+third_party/**/*.dmg
+third_party/**/*.zip

@@ -276,6 +276,29 @@
 
 ### 变更
 
+- **`music_tagger/` 并入 `tagger/platforms/`**：这个 106 行的包只被 `tagger/__init__.py`
+  引用，名字却与 `tagger` 只差一个前缀，且它自己的 docstring 就写着「包名沿用上游项目名
+  （内容已不是打标签）」。合并后 `tagger/` 成为真正的包——`decrypto` 把 `um.py`、
+  `fingerprint` 把 `AcoustIDClient` 都放在自己包内，三个能力包至此结构对称。
+  `encrypt.py` 改名 `_netease_crypto.py`：它做的是网易云 API 请求签名，不是音频解密，
+  与 `decrypto/` 的概念冲突到此为止；同时删掉从未被调用的 `eEncrypt` / `MD5`。
+- **修掉一个能力降级缺陷**：原 `music_tagger/__init__.py` 做了顶层转导出，而 Python 导入
+  子模块会先执行父包，于是 `tagger._get_online()` 里那句延迟导入被绕过——缺 `pycryptodomex`
+  （只有网易云需要）时，QQ 音乐客户端也一起导入失败、一并降级。现在
+  `tagger/platforms/__init__.py` 用 PEP 562 的模块级 `__getattr__` 惰性取属性，
+  两个平台各自独立降级，已用「模拟缺 Cryptodome」的场景验证。
+- **`fingerprint/musicbrainz_matcher.py`（2053 行）按职责拆分**：`models`（数据结构）、
+  `textconv`（繁简转换）、`similarity`（Picard 打分，纯函数）、`http_client`、`fpcalc`、
+  `musicbrainz`（节点转换 / 候选聚合 / Release 加载）、`acoustid`（查询 + 权重选最佳）、
+  `formatting`（标签映射与人类可读输出）、`matcher`（门面）、`__main__`（`python -m fingerprint`）。
+  `fingerprint/__init__.py` 保持原有导出集合，外部零改动；`fingerprint` 同时从
+  `pyproject.toml` 的 ruff 排除列表里移除，此后新代码受 lint 约束。
+- **`third_party/` 只放源码，二进制一律归 `tools/`**：`.gitignore` 的第三方规则从
+  `third_party/qqmusic/*` 收紧为 `third_party/**/*.{exe,dmg,zip}`，作为「别把二进制放进
+  third_party」的护栏。旧版 QQ 音乐安装包（19.51 / 8.8.0，合计约 120 MB）**继续留在
+  `tools/` 并入库**——官方 CDN 已全部 404，仓库不带就再也拿不到可校验的副本。
+  `tools/` 的定位因此明确为「运行时第三方程序仓库」，`third_party/README.md` 与
+  `qqmusic/README.md` 里「安装包未入库」的过期描述同步修正。
 - **普通文件拷贝只有一处实现**：`main._copy_normal_files` 改为调用
   `services.steps.copy_pairs()`，与向导第 3 步共用「哪些算普通文件（排除 VIP 子目录）」这条规则。
 - **`web/api.py` 增加向导接口**，旧的只读/检查/计划/执行/解密接口全部保留；
@@ -292,8 +315,23 @@
 - **`rename` 与 `move` 的撞车策略分开**：`move` 仍按 `_1`、`_2` 递增（移动必须放下），
   `rename` 撞车一律失败（改名要求更正确，不能制造重复）。
 
+### 移除
+
+- **四个零引用依赖**：`PyExecJS`、`mako`、`Pillow`、`music-tag`。全仓复核（含 `importlib`
+  与 `__import__` 的动态导入）确认没有任何引用。特别记一笔：`tools/hook_qq_music.js`
+  由 **frida 自带的 JS 引擎**执行（`decrypto/qq.py` 的 `session.create_script`），
+  与 Python 的 execjs 无关；`requirements.txt` 里已把这条写成注释，避免以后因为
+  「仓库里有 .js 文件」再把它加回来。
+- **`third_party/qqmusic/QQMusic_Setup_1951.exe`**：0 字节的空壳（`gitignore` 早就排除了，
+  只是磁盘残留），删掉以免让人以为安装包在 third_party 里。
+- **`fingerprint/musicbrainz_matcher.py`**：内容已按职责拆到同包其他模块，见「变更」。
+
 ### 文档
 
+- `docs/architecture.md` 更新 `tagger/` 与 `tools/`、`third_party/`、`scripts/` 的职责边界，
+  新增 `fingerprint/` 子模块表与「为什么 `platforms/__init__.py` 不做转导出」的说明。
+- 新增 [scripts/README.md](scripts/README.md)：讲清 `check_docs.py`、`gen_web_guide_images.py`、
+  `git_uplink.py` 都不参与运行时，并写明 `git_uplink.py` 仅用于开发期与 GitHub 同步。
 - 新增 [docs/web-wizard.md](docs/web-wizard.md)：八步各自做什么、目录设置的持久化与校验规则、
   初始化判据、跳过/回退语义、接口与文件清单，以及「um 能否跨盘解密」的源码核实结论。
 - 同步 [docs/usage.md](docs/usage.md#8-web-ui八步向导)、[docs/configuration.md](docs/configuration.md)、

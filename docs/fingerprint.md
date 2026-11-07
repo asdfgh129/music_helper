@@ -8,6 +8,9 @@
 `fingerprint/` 回答一个问题：**这个音频文件在 MusicBrainz 里是哪一首？**
 答案用来补标签——不依赖文件名，也不依赖已有标签，所以对「文件名乱、标签空」的库最有效。
 
+> 包内按职责拆成 `matcher` / `acoustid` / `musicbrainz` / `similarity` / `fpcalc` 等模块，
+> 分工与依赖方向见 [architecture.md](architecture.md#fingerprint-的子模块)。
+
 「声纹」在本项目里是**两件事**，用同一个 `fpcalc` 指纹但目的不同：
 
 | 用途 | 模块 | 判据 | 结果 |

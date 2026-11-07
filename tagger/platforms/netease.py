@@ -7,7 +7,7 @@ from random import randint
 
 import requests
 
-from ..encrypt import linuxEncrypt, weEncrypt
+from ._netease_crypto import linuxEncrypt, weEncrypt
 
 
 def timestamp_to_dt(timestamp, format_type="%Y-%m-%d %H:%M:%S"):

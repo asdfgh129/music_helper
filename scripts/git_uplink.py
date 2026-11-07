@@ -1,6 +1,11 @@
 # -*- coding: utf-8 -*-
 """git_uplink.py - 用已采集的免费节点临时自建本地代理，给 git pull / push 出境用
 
+**仅用于开发期与 GitHub 同步，与音乐库主流程完全无关。** 这个脚本不被
+`main.py`、`services/`、`web/` 中任何代码导入，删掉它不影响程序运行，
+只是开发机上 push 会失败。之所以留在仓库里：换一台本机网络受限的机器时，
+仍然需要它才能把改动推上去。
+
 背景：本机存在「api.github.com 能通、github.com:443 被重置」的网络，
 典型表现是 git push 报 502 / connection reset。节点采集任务里已经有现成的
 节点池（clash 格式，mihomo 原生可读），这里把那条链路压成一个单文件工具：
@@ -9,6 +14,9 @@
 与 free-nodes 空间里 uplink.py 的差别：那边要支撑四内核 + URI 转换，依赖
 collect_nodes/test_nodes/layout/pool 四个模块（约 5000 行）；本文件只保留
 「clash 配置 → 起 mihomo → 探测 → 给 git 用」这段最短路径，零第三方依赖。
+
+例外用途：`third_party/qqmusic/README.md` 里用 `git_uplink.py run --` 走代理
+抓 archive.org 的旧版 QQ 音乐安装包。那是唯一与项目沾边的地方，属于一次性装机操作。
 
 用法：
     python scripts/git_uplink.py start                  # 起通道并常驻（打印代理地址）

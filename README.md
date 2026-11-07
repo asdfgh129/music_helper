@@ -91,10 +91,10 @@ music_helper/
 │   ├── decrypt.py          # 网易云 / QQ 音乐解密编排
 │   └── soundalike.py       # 声纹去重（外部 exe 包装）
 ├── tagger/                 # 标签、封面、歌词服务
+│   └── platforms/          # QQ 音乐 / 网易云客户端 + 网易云请求签名
 ├── decrypto/               # QQ 音乐 Frida 调用与来源检索
-├── fingerprint/            # AcoustID / MusicBrainz 指纹匹配
-├── music_tagger/           # 平台客户端（QQ 音乐、网易云）
-├── tools/                  # um.exe、soundalike.exe、fpcalc、Frida hook
+├── fingerprint/            # AcoustID / MusicBrainz 指纹匹配（按职责分模块）
+├── tools/                  # um.exe、soundalike.exe、fpcalc、hook 脚本、旧版客户端安装包
 ├── third_party/            # 上述外部程序的源码（um / soundalike / chromaprint）
 ├── tests/                  # 单元测试 + manual/ 手工脚本 + fixtures/ 样本
 ├── docs/                   # 用户与开发文档

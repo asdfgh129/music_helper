@@ -68,10 +68,20 @@
 
 | 模块 | 职责 | 依赖 |
 |---|---|---|
-| `tagger/__init__.py` | 声纹 + 在线标签、封面、歌词 | `fingerprint/`、`music_tagger/platforms/`、`requests` |
+| `tagger/__init__.py` | 声纹 + 在线标签、封面、歌词 | `fingerprint/`、`tagger/platforms/`、`requests` |
+| `tagger/platforms/qqmusic.py` | QQ 音乐搜索 / 歌词接口 | `requests` |
+| `tagger/platforms/netease.py` | 网易云搜索 / 歌词接口（weapi、linuxapi） | `requests`、`_netease_crypto` |
+| `tagger/platforms/_netease_crypto.py` | 网易云请求签名（AES + RSA） | `pycryptodomex` |
 
-`music_tagger/` 只保留 `platforms/{qqmusic,netease}.py` 两个客户端，不含标签匹配或写盘逻辑；
-匹配与择优的唯一实现是 `core/scoring.py` 与 `tagger/__init__.py`。
+`tagger/platforms/` 只有客户端，不含标签匹配或写盘逻辑；匹配与择优的唯一实现是
+`core/scoring.py` 与 `tagger/__init__.py`。
+
+**`tagger/platforms/__init__.py` 不做顶层转导出**，改用 PEP 562 的模块级 `__getattr__` 惰性取属性。
+因为 `netease.py` 依赖 `pycryptodomex` 而 `qqmusic.py` 不依赖，一旦在包初始化时就
+`from .netease import ...`，缺 `Cryptodome` 会把 QQ 音乐客户端一起带崩——两个平台同时降级。
+
+**`_netease_crypto.py` 不是音频解密**。项目里做音频解密的是 `decrypto/`（.ncm/.mflac/.mgg）；
+这个文件只给网易云的 HTTP 请求做参数签名，名字加下划线前缀表示它是 `platforms` 的私有实现。
 
 外部依赖一律**延迟导入 + 失败降级**：缺 `requests` 只是不下载封面，缺 `fpcalc` 只是跳过声纹，
 缺 `mutagen` 只是读不到标签——主程序永远能启动。
@@ -97,14 +107,31 @@
 | 目录 | 是什么 | 为什么不在 `core` / `services` |
 |---|---|---|
 | `decrypto/` | QQ 音乐解密的 Python 调用与来源检索；`qq_client.py` 负责客户端安装检测 / 启动 / 登录确认 | 半独立上游代码，自带 CLI；由 `services/decrypt.py` 调用 |
-| `fingerprint/` | AcoustID / MusicBrainz 指纹匹配 | 自带 HTTP 客户端与解析，被 `tagger/` 借用 |
-| `music_tagger/` | QQ 音乐 / 网易云平台客户端 | 上游项目名沿用；包内只剩客户端 |
-| `tools/` | `um`（三平台）、`soundalike`（三平台）、`fpcalc`、Frida hook | 外部二进制与脚本，不参与 Python 分层 |
-| `scripts/` | `check_docs.py`、`git_uplink.py` | 开发者工具，不参与运行时 |
+| `fingerprint/` | AcoustID / MusicBrainz 指纹匹配（子模块见下表） | 自带 HTTP 客户端与解析，被 `tagger/` 借用 |
+| `tools/` | 运行时第三方程序：`um`（三平台）、`soundalike`（三平台）、`fpcalc`、`hook_qq_music.js`、旧版 QQ 音乐安装包与屏蔽更新补丁 | 二进制与 JS 脚本，不参与 Python 分层；**随仓库分发**，官方 CDN 已下架旧版客户端 |
+| `third_party/` | `tools/` 里那些程序的**源码**（um / soundalike / chromaprint），**不放二进制** | 上游可能消失（`unlock-music/cli` 已因 DMCA 下架），留源码才能重建 |
+| `scripts/` | `check_docs.py`（文档校验）、`gen_web_guide_images.py`（配图）、`git_uplink.py`（开发期 git 出境代理） | 开发者工具，不参与运行时，见 [scripts/README.md](../scripts/README.md) |
 | `tests/` | 单元测试 + `tests/manual/` 手工脚本 + `tests/fixtures/` 样本 | 不随程序分发 |
 
+### `fingerprint/` 的子模块
+
+原本是 2053 行的 `musicbrainz_matcher.py`，按职责拆开。依赖方向自上而下，无环：
+
+| 模块 | 职责 | 依赖 |
+|---|---|---|
+| `models.py` | `AcoustIDConfig` / `FingerprintResult` / `Recording` / `MatchResult` | 无 |
+| `textconv.py` | 繁体 → 简体（OpenCC，缺失则降级） | 无 |
+| `similarity.py` | Picard 的相似度打分，纯函数 | 无 |
+| `http_client.py` | `urllib` 封装，失败统一成 `(None, 错误串)` | `models`、`textconv` |
+| `fpcalc.py` | 调 fpcalc 算指纹 | `models`、`config.FPCALC_LENGTH` |
+| `musicbrainz.py` | 节点转换、候选聚合、Release 加载 | `http_client`、`models` |
+| `acoustid.py` | 查询 + 权重打分选最佳 | 上述全部 |
+| `formatting.py` | 标签映射与人类可读输出（不参与主流程写盘） | `models`、`similarity` |
+| `matcher.py` | 门面 `FingerprintMatcher`，主流程只用这个 | `acoustid`、`fpcalc` |
+| `__main__.py` | `python -m fingerprint <file>`，人工验证单条链路 | `matcher`、`formatting` |
+
 命名约定：自有代码目录一律小写（`core`、`services`、`tagger`、`decrypto`、`fingerprint`、
-`music_tagger`、`scripts`、`tests`、`docs`）。外部程序文件名保持上游原样（`um.exe`、
+`scripts`、`tests`、`docs`）。外部程序文件名保持上游原样（`um.exe`、
 `soundalike.exe`），改它会连带上游脚本失效。同一程序的多平台产物用 Go 的
 `<名字>-<GOOS>-<GOARCH>` 后缀区分（`soundalike-darwin-arm64`），由 `config.py` 按平台挑选。
 

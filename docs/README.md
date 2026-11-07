@@ -12,6 +12,7 @@
 | 用浏览器走一遍完整流程 | [web-wizard.md](web-wizard.md) | 单条判定规则 |
 | 看一条文件从下载到入库的完整路径 | [workflow.md](workflow.md) | 单条规则的算法 |
 | 弄清「为什么这个文件被判重复/未入库」 | [rules.md](rules.md) | 流程顺序 |
+| 看某个判定背后的算法、公式、阈值与流程图 | [algorithms.md](algorithms.md) | 界面操作步骤 |
 | 看自检到底查了什么、报告怎么读、误判怎么排查 | [self-check.md](self-check.md) | 单条规则的公式 |
 | 查某个命令行参数 | [usage.md](usage.md) | 规则为什么这样定 |
 | 改路径、换盘符、调阈值 | [configuration.md](configuration.md) | 规则怎么使用阈值 |
@@ -29,6 +30,7 @@
 | [workflow.md](workflow.md) | 端到端流程、目录角色、状态迁移、失败处理、声纹库生命周期 | 单条规则算法、CLI 参数表 |
 | [web-guide.md](web-guide.md) | 八步向导的**操作规范**：每页看什么、按钮动哪些文件、确认点在哪、失败怎么办、安全问题 | 判定规则的原理、接口定义 |
 | [rules.md](rules.md) | 文件名、标签（完整性/来源/择优/写入）、一致性、自检、去重（集合内与跨集合）、音质比较与格式偏好、归档、执行安全、报告的全部判定规则 | 流程顺序、参数、配置位置 |
+| [algorithms.md](algorithms.md) | 初始化、拷贝、解密、标签读取与补全、文件名匹配、自检、去重、声纹、归档、`Plan` 的算法：输入输出、判定顺序、公式、阈值、复杂度、UML 图 | 界面操作步骤、配置项位置 |
 | [self-check.md](self-check.md) | 自检的完整流程、六维度的取舍、严重级别与处置、报告解读、性能特征、已知局限与误判风险 | 单条规则的比对公式、流水线其他步骤 |
 | [usage.md](usage.md) | CLI 全参数、流程入口、参数优先级、退出码、使用禁忌 | 规则为什么这样定 |
 | [configuration.md](configuration.md) | 配置来源与优先级、目录语义、外部程序、阈值、扩展名 | 规则怎么使用这些配置 |
