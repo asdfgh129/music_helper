@@ -31,11 +31,13 @@ G:\QQMusic\（普通文件）           ┘             └─► G:\Tmp      �
 1. 在 `NETEASE_VIP_DIR` / `QQ_VIP_DIR` 顶层按扩展名找加密文件（不递归）；
 2. 把本次要处理的文件移入 `NETEASE_STAGING_DIR` / `QQ_STAGING_DIR`（都在 `<WORKSPACE_DIR>\_decrypt` 下）；
 3. 网易云调用 `um -i <暂存目录> -o <WORKSPACE_DIR>`（三平台同一套参数）；
-4. QQ 按平台选通道：Windows 优先 Frida 注入正在运行的客户端；macOS / Linux，以及 Windows 上
-   没装 frida 或客户端没开时，用 `um` **逐个文件**离线解密（`.mflac → .flac`、`.mgg → .ogg`）。
+4. QQ 按平台选通道：Windows 新版 QQ 优先 Frida 注入正在运行的客户端，旧版 QQ（19.51 及以下）
+   可直接用 `um` 离线解密；macOS / Linux 用旧版 QQ（20230903）+ `um`，Windows 上没装 frida
+   或客户端没开时也退回 `um`。一律**逐个文件**离线解密（`.mflac → .flac`、`.mgg → .ogg`）。
    新版 qmc 需要 `qmc_mmkv` + `qmc_mmkv_key`，见 [configuration.md](configuration.md#31-qq-音乐解密凭据qmc_mmkv--qmc_mmkv_key)；
 5. 用**运行前后的文件快照差集**判断是否真的产出，不只看外部程序返回码；
-6. 加密原文件按 `encrypted_source_mode` 归还 / 回收 / 保留；
+6. 加密原文件按 `encrypted_source_mode` 归还 / 回收 / 保留；范围只限本次移入暂存区的文件，
+   或 Web 直解时用户已选的文件；
 7. 失败时把本次移入的加密文件原样还回 VIP 目录。
 
 为什么 QQ 逐个文件调：`um` 处理整个目录时，只要有一个文件解不开就 `FATAL` 退出，后面的
@@ -106,8 +108,8 @@ soundalike -db <DB_PATH> -fpcalc-length <FPCALC_LENGTH> -file-regexp <RE> \
 
 - 重复文件：`--trash-dup` 进回收站，否则移入 `DUPLICATE_DIR`；
 - 「时长未知」的重复组只报告，不移动——读不出时长多半是文件损坏，交人工；
-- **只有**歌曲名/歌手缺失、文件名与标签矛盾这类 `severe` 问题才移入 `INCOMPLETE_DIR`；
-- 缺封面、缺专辑、缺年份只报告，不移动文件；
+- 缺封面/专辑/年份/歌曲名/歌手，或文件名与标签矛盾这类 `severe` 问题移入 `INCOMPLETE_DIR`；
+- 缺歌词、孤立歌词只报告，不移动文件；
 - 单个 `-` 的文件名做分隔符规范化；
 - 文件名缺「歌手 - 歌名」结构、但标签齐全可信时，按标签补全文件名。
 
@@ -120,10 +122,10 @@ soundalike -db <DB_PATH> -fpcalc-length <FPCALC_LENGTH> -file-regexp <RE> \
 
 | 条件 | 去向 |
 |---|---|
-| 有歌曲名、歌手、专辑、年份（年份可解析），且文件名与标签不矛盾 | 留在 `WORKSPACE_DIR` |
-| 缺少任一核心字段、年份解析不出，或文件名与标签矛盾 | `INCOMPLETE_DIR` |
+| 有歌曲名、歌手、专辑、年份、内嵌封面（年份可解析），且文件名与标签不矛盾 | 留在 `WORKSPACE_DIR` |
+| 缺少任一上述字段、年份解析不出，或文件名与标签矛盾 | `INCOMPLETE_DIR` |
 
-封面与歌词不参与判断。分离后 `WORKSPACE_DIR` 顶层只剩完整文件与非音频文件。
+歌词不参与判断。分离后 `WORKSPACE_DIR` 顶层只剩完整文件与非音频文件。
 
 ### 2.8 工作区内按年代/年份整理
 

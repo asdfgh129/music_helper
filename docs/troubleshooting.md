@@ -256,7 +256,7 @@ um 在 macOS 上会自动去 `~/Library/Containers/com.tencent.QQMusicMac/…/mm
 
 ### 文件全进了 `INCOMPLETE_DIR`
 
-入库标准要求歌曲名、歌手、专辑、年份齐全，且文件名与标签不矛盾。
+入库标准要求歌曲名、歌手、专辑、年份、内嵌封面齐全，且文件名与标签不矛盾。
 先看报告里的「标签不完整」明细，再决定补标签还是手工处理。
 
 缺少 `mutagen` 时读不到任何标签，所有文件都会进 `INCOMPLETE_DIR`：
@@ -284,10 +284,11 @@ python -c "from core.tags import MUTAGEN_AVAILABLE; print(MUTAGEN_AVAILABLE)"
 - `--trash-dup` 只影响本地检查阶段，不影响 soundalike 的移动目标；
 - 本地查重只在检查阶段运行，`--skip-check` 会跳过。
 
-### `--fix` 没有修复缺封面/缺专辑
+### `--fix` 把缺封面/缺专辑的文件也搬走了
 
-这是刻意设计：只有歌曲名/歌手缺失、文件名与标签矛盾才移动文件。其余问题只进报告，
-避免一次 `--fix` 搬空整个库。见 [rules.md](rules.md#7-修复范围)。
+按 README「安全底线 4」的口径，这是预期行为：缺封面/专辑/年份/歌曲名/歌手，或文件名与标签
+矛盾都算未达标，会移入 `INCOMPLETE_DIR` 等人工补全；只有缺歌词、孤立歌词只进报告。
+先从 `INCOMPLETE_DIR` 搬回，补全后再跑。见 [rules.md](rules.md#7-修复范围)。
 
 ### 孤立 `.lrc`
 

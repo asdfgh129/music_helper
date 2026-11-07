@@ -6,7 +6,8 @@
 ## 项目是什么
 
 Python 音乐库流水线：解密 → 去重 → 补标签 → 检查 → 分流 → 归档 → 人工确认入库。
-入口 `python main.py`。主要目标平台 Windows（QQ 解密依赖 Frida 注入客户端），Python 3.11+。
+入口 `python main.py`。主要目标平台 Windows 与 macOS（QQ 解密在 Windows 有两条途径：
+旧版 QQ 19.51 及以下 + `um`、新版 QQ + Frida；macOS 用旧版 QQ 20230903 + `um`），Python 3.11+。
 QQ 解密前的客户端安装 / 启动 / 登录检查在 `decrypto/qq_client.py`，改动解密流程时先看它。
 
 ## 必读
@@ -50,12 +51,12 @@ python main.py --check --dry-run                     # 用真实配置预览
 4. **`config.py` 只放数据**，不许 `import core` / `import services` / `import tagger`（会重演循环导入事故）。
    配置优先级固定为环境变量 > `config.ini` > 默认值。
 5. **可选依赖延迟导入 + 降级**：缺 `requests`/`mutagen`/`fpcalc` 只降级能力，`import main` 不许失败。
-6. **`--fix` 不要扩大移动范围**：只有 `severe`（歌曲名/歌手缺失、文件名与标签矛盾）才移文件；
-   缺封面/专辑/年份只报告。否则一次 `--fix` 能把整个库搬空。
+6. **按待补全口径移动**：缺封面/专辑/年份/歌曲名/歌手，或文件名与标签矛盾，一律移入
+   `INCOMPLETE_DIR`；缺歌词、孤立歌词只报告。移动仍只走 `Plan`。
 7. **加密原文件去向**由 `ENCRYPTED_SOURCE_MODE` 控制（默认 `return` 搬回 VIP 目录），
-   只处理本次移入暂存区的文件，不许遍历目录批量搬运。
-8. **待补全判定只在 `core.check.readiness_problems()`**：歌曲名/歌手/专辑/年份齐全且
-   文件名与标签不矛盾；封面和歌词不参与。不要在 `main.py` 另写一套。
+   只处理本次移入暂存区的文件，或 Web 直解时用户已选的文件，不许遍历目录批量搬运。
+8. **待补全判定只在 `core.check.readiness_problems()`**：歌曲名/歌手/专辑/年份、内嵌封面齐全且
+   文件名与标签不矛盾；歌词不参与。不要在 `main.py` 另写一套。
 9. **外部二进制统一放 `tools/`**：同一程序的多个平台产物用 Go 的 `<名字>-<GOOS>-<GOARCH>`
    区分（`soundalike-darwin-arm64`、`um-darwin-amd64`），路径由 `config.py` 的 `_default_*()`
    按平台挑、支持环境变量覆盖；执行前一律用 `utils.tool_problem()` 预检（缺文件 / 缺
@@ -71,6 +72,10 @@ python main.py --check --dry-run                     # 用真实配置预览
     两类记录靠传播进同一份 `log/Music-*.log`。**不要在模块或包初始化里调 `logging.basicConfig`**
     ——它会多挂一个只写 stderr 的 handler，子模块日志从此绕过文件（`fingerprint` 曾因此
     整条链路不进日志）。`--debug` 只调 handler 与 `music_manager` 的级别，不要另建日志系统。
+
+> 口径来源：`README.md`「安全底线」。当前 `core/check.py`、`core/dedupe.py` 与 `tests/`
+> 仍是旧规则（封面不参与、`--fix` 只移 `severe`、集合内留更大者），改代码前先按本口径
+> 同步实现与用例，别把文档当成已落地的行为。
 
 ## 测试
 

@@ -34,14 +34,14 @@ tests/
 | `test_naming.py` | 「歌手 - 歌名」解析与规范化、多艺术家拆分、标准化、版本标记、匹配评分 |
 | `test_scan.py` | 单次遍历：音频过滤、递归开关、跳过目录、月份过滤、扩展名白名单、去重与排序 |
 | `test_lyrics.py` | 缺失歌词、孤立歌词、嵌套目录、五种音频扩展名 |
-| `test_dedupe.py` | 重复判定（标签+时长、文件名+时长）、版本标记、保留策略 |
-| `test_check.py` | 入库判定：核心标签、文件名/标签一致性、封面不参与 |
+| `test_dedupe.py` | 重复判定（标签+时长、文件名+时长）、版本标记、同音质留更小文件的保留策略 |
+| `test_check.py` | 入库判定：核心标签与内嵌封面、文件名/标签一致性、歌词不参与 |
 | `test_pipeline.py` | `WORKSPACE_DIR` 顶层完整文件保留、未达标文件移入 `INCOMPLETE_DIR`，dry-run 不移动 |
 | `test_organize.py` | 年代目录边界、归档目标路径、无法归档清单、计划生成 |
 | `test_ops.py` | 操作计划：dry-run、移动/改名、重名避让、回收站、journal、拷贝 |
 | `test_report.py` | 报告渲染、CSV 导出、检查项与修复计划 |
 | `test_soundalike.py` | 外部工具包装：`-db` / `-temp` / `-move-interactive`、成功/失败/超时/缺失可执行文件、CWD |
-| `test_decrypt.py` | 解密后加密原文件的三种去向、暂存区快照排除、只搬自己动过的文件 |
+| `test_decrypt.py` | 解密后加密原文件的三种去向、暂存区快照排除、只搬自己动过或用户已选的文件 |
 | `test_tagger.py` | MusicBrainz 解析、QQ/网易结果筛选、双平台择优、标签完整性 |
 | `test_git_uplink.py` | 出境代理工具：节点配置解析、单节点配置生成、环境变量注入（不连网） |
 

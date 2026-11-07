@@ -10,6 +10,14 @@
 
 ## [Unreleased]
 
+### 文档
+
+- 按 `README.md` 新口径同步全部相关文档：主要平台补 macOS 与 QQ 解密两条途径；
+  集合内查重改为「同音质留更小文件」；`INCOMPLETE_DIR` 纳入缺封面/专辑/年份；
+  加密原文件范围补「Web 直解时用户已选的文件」。
+- 口径先行：当前 `core/dedupe.py`、`core/check.py` 与 `tests/` 仍是旧规则，
+  改代码与补用例时需按本口径同步。
+
 ### 计划中
 
 - 支持更多音乐平台（Spotify、Apple Music 等）

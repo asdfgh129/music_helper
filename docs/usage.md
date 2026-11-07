@@ -146,8 +146,8 @@ MSVC 修饰导出名），实际解密固定走 `um` 离线；登录态无法程
 1. **`--soundalike` 会自己移文件**：不同音质的重复，较差的那份会被直接移入 `DUPLICATE_DIR`，
    不再逐个确认（这是刻意的：谁留谁走以音质为准）。不确定时先 `--dry-run` 或
    `--soundalike-report` 看计划——两者都不动文件、不写库。
-2. **`--fix` 只移动严重问题**：缺封面/专辑/年份不会移动文件。这是刻意设计，见
-   [rules.md](rules.md#7-修复范围)。
+2. **`--fix` 按待补全口径移动**：缺封面/专辑/年份/歌曲名/歌手或文件名与标签矛盾会移入
+   `INCOMPLETE_DIR`；缺歌词、孤立歌词只报告。见 [rules.md](rules.md#7-修复范围)。
 3. **`--manual-archive` 只处理工作区**：完整文件按年份并入 `LIBRARY_DIR`，未达标文件移入 `INCOMPLETE_DIR`。
 4. **目录不要互相嵌套**：`DUPLICATE_DIR`、`INCOMPLETE_DIR` 不要放进 `WORKSPACE_DIR`，否则会被
    `soundalike -temp` 重复扫描。

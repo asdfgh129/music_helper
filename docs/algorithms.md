@@ -315,7 +315,9 @@ stateDiagram-v2
 
 ### 5.6 边界
 
-- **只处理本次移入暂存区的那几个文件**。不遍历 VIP 目录、不遍历暂存区顶层——旧实现「把 TEMP 顶层所有文件搬走」正是误伤用户文件的来源。
+- **只处理本次移入暂存区的那几个文件，或 Web 直解时用户已选的文件**。不遍历 VIP 目录、
+  不遍历暂存区顶层——旧实现「把 TEMP 顶层所有文件搬走」正是误伤用户文件的来源。
+  Web 直解不经过暂存区，原文件默认留在原地，只有 `trash` 模式才把已选的原件移入回收站。
 - **`--remove-source` 不使用**。加密原件由 `Plan` 统一管，外部程序不许自己删。
 - **`--overwrite` 默认不加**。目标存在时 um 打一行 `output file already exist, skip` 正常退出，不会覆盖工作区里已打好标签的同名文件。
 
@@ -567,7 +569,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["readiness_problems(track)"] --> B{"title/artist/album/year<br/>有缺失？"}
+    A["readiness_problems(track)"] --> B{"title/artist/album/year/cover<br/>有缺失？"}
     B -->|是| C["problems += 缺少X"]
     B -->|否| D{"year 能解析成<br/>1900-2100？"}
     D -->|否| E["problems += 年份无法解析"]
@@ -580,9 +582,9 @@ flowchart TD
     H -->|否| J["进待确认目录"]
 ```
 
-两个刻意排除项：
+两个边界：
 
-- **封面与歌词不参与判定**。它们缺失只提示，不该把文件挡在库外。
+- **内嵌封面必须存在，歌词不参与判定**。缺封面算未达标，缺歌词只提示。
 - **年份必须能落进目录**。`year_int` 要求 1900-2100 的四位数字，否则出现「判定可入库、却落进 `unknown/`」的两套结论。
 
 `core/organize.py` 另有一套 `missing_fields()`（title/artist/year，不含 album）。两套并存是历史原因：归档只需要能定目录的字段，就绪判定要更严。修改时**不要合并**，否则一处放宽会同时改变两个语义。
@@ -598,13 +600,14 @@ flowchart TD
 | kind | 判据 | `fixable` | `severe` |
 |---|---|---|---|
 | `文件名格式` | `not is_canonical()` | 有目标名时 true | 否 |
-| `标签不完整` | `missing_tag_fields()` 非空 | 否 | 缺**歌曲名或歌手**时 true |
+| `标签不完整` | `missing_tag_fields()` 非空 | 否 | 缺**任一核心字段或内嵌封面**时 true |
 | `文件名与标签不一致` | `consistency_report().problem` | 否 | **是** |
 | `重复文件` | `find_duplicates()` 的 `drop` 侧 | 否 | 否 |
 | `缺少歌词` | 无同名 `.lrc` | 否 | 否 |
 | `孤立歌词` | `.lrc` 无对应音频 | 否 | 否 |
 
-`severe` 的语义是「必须人工处理，可以搬文件」。缺封面、缺专辑、缺年份一律**只报告不搬**——这是 `--fix` 不扩大移动范围的根本保障。
+`severe` 的语义是「还没达到可入库状态，可以搬文件」。缺歌曲名/歌手/专辑/年份/内嵌封面，
+或文件名与标签矛盾一律移入 `INCOMPLETE_DIR`；只有缺歌词、孤立歌词只报告。
 
 顺序上先跑文件名/标签/一致性（逐曲目），再跑歌词（集合级），最后跑重复（需要全局视图）。重复放在最后是因为它要看到所有曲目才能聚类。
 
@@ -752,11 +755,11 @@ unknown → 并入第一簇（或自成簇）
 _QUALITY = {'.flac': 5, '.dsf': 5, '.wav': 4, '.ape': 4,
             '.ogg': 3, '.opus': 3, '.mp3': 2, '.m4a': 2, '.wma': 1}
 
-_rank(track) = (_QUALITY.get(track.ext, 0), track.size)
+_rank(track) = (_QUALITY.get(track.ext, 0), -track.size)
 pick_keep    = max(tracks, key=_rank)
 ```
 
-先比格式层级，同层再比文件大小（同格式下通常码率更高）。**这是「留下哪个」的粗排，不是音质判定**；精确比较在 `core/quality.py`，只用于跨集合场景。
+先比格式层级，同层同音质再留体积更小的文件（省磁盘）。**这是「留下哪个」的粗排，不是音质判定**；精确比较在 `core/quality.py`，只用于跨集合场景。
 
 ### 10.4 跨集合比对：`match_against`
 

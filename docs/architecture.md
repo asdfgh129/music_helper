@@ -60,7 +60,7 @@
 
 | 模块 | 职责 | 依赖 |
 |---|---|---|
-| `services/decrypt.py` | 网易云 / QQ 解密编排 | `tools/um`（三平台）、`decrypto`（Frida，仅 Windows） |
+| `services/decrypt.py` | 网易云 / QQ 解密编排 | `tools/um`（三平台；macOS 与旧版 QQ 走它）、`decrypto`（Frida，仅 Windows） |
 | `services/soundalike.py` | 声纹去重、库一致性、建库/补库（`init_db`） | `tools/soundalike`（Windows 为 `soundalike.exe`）、`fpcalc` |
 | `services/steps.py` | Web 向导八步编排（CLI 与 Web 共用） | `core/*`、`services/*`、`tagger/` |
 | `services/settings_store.py` | `config.ini [paths]` 的唯一写入点（校验 + 落盘 + `config.reload()`） | 标准库 |
@@ -255,7 +255,7 @@ result = plan.execute()      # PlanResult(done, skipped, failed)
 | 解密「成功但没产出」 | 外部程序返回 0 却没写文件 | 用前后快照差集判定产出，不看返回码 |
 | 归档把文件搬进自己的子目录 | 边 `os.walk` 边在树内建年份目录 | 先扫描成列表再建计划 |
 | 标签改了不生效 | 读到的 `FPCALC_LENGTH` 是循环导入的回退值 | 已修复；新增配置项时不要反向依赖 |
-| `--fix` 把半库搬空 | 曾把缺封面/缺专辑也判为需移动 | 只有 `severe` 才移动 |
+| `--fix` 把半库搬空 | 曾把所有提示项都判为需移动 | 只有 `severe` 才移动：缺封面/专辑/年份/歌曲名/歌手算 `severe`，缺歌词、孤立歌词只报告 |
 | 结果目录被重复扫描 | `INCOMPLETE_DIR`、`DUPLICATE_DIR` 嵌在 `WORKSPACE_DIR` 内 | 默认放在 `WORKSPACE_DIR` 同级，见 [configuration.md](configuration.md) |
 | 合辑整张被搬进待补全 | 标签歌手是 `Various Artists`、文件名是具体歌手，曾被判「歌手矛盾」 | 占位歌手不参与一致性判定，见 [rules.md](rules.md#31-歌手维度是宽松的) |
 | 库里凭空多出 `xxx_1.flac` | 改名撞车时静默加后缀 | 改名撞车改为失败留痕，见 [rules.md](rules.md#72-改名撞车一律失败) |

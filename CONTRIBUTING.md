@@ -21,9 +21,11 @@ python -m pip install -r requirements-dev.txt
 ```
 
 - Python 3.11+（CI 覆盖 3.11 / 3.12）。
-- 主要目标平台是 Windows；Linux/macOS 上除 QQ 解密和 `soundalike.exe` 外均可运行。
-- 外部程序 `tools/um.exe`、`tools/soundalike.exe` 随仓库提供；缺失时对应功能降级，
-  不影响程序启动与测试。
+- 主要目标平台是 Windows 与 macOS：Windows 的 QQ 解密可走旧版 QQ（19.51 及以下）+ `um`，
+  或新版 QQ + Frida；macOS 用旧版 QQ（20230903）+ `um`。Linux 上除 QQ 解密与声纹工具
+  外均可运行。
+- 外部程序按平台放在 `tools/`：Windows 用 `tools/um.exe`、`tools/soundalike.exe`，
+  macOS 用 `<名字>-darwin-<架构>` 命名的对应产物；缺失时功能降级，不影响程序启动与测试。
 
 ## 运行与测试
 

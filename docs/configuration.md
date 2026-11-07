@@ -88,8 +88,11 @@ Web 向导第一步改的目录会**直接写回 `config.ini` 的 `[paths]`** �
 |---|---|---|---|---|
 | `soundalike` | 声纹去重、库一致性 | Windows `tools/soundalike.exe`；macOS `tools/soundalike-darwin-{arm64,amd64}` | `tools.soundalike_exe` / `MUSIC_HELPER_SOUNDALIKE_EXE` | 去重与 `--checkdb` 失败，其余流程可用 |
 | `fpcalc` | 指纹（补标签 + 查重） | `tools/fpcalc`（macOS 通用二进制）；没有则用 `PATH` | `tools.fpcalc_exe` / `MUSIC_HELPER_FPCALC_EXE` | 补标签降级为在线平台查询，声纹去重失败 |
-| `um` | 网易云 `.ncm`、QQ `.mflac/.mgg` 等离线解密 | Windows `tools/um.exe`；macOS `tools/um-darwin-{arm64,amd64}` | `tools.um_exe` / `MUSIC_HELPER_UM_EXE` | 网易云解密失败；QQ 在没有 Frida 方案时也失败 |
-| Frida hook | QQ 音乐解密（**仅 Windows**） | `tools/hook_qq_music.js` | `tools.qq_hook` / `MUSIC_HELPER_QQ_HOOK` | QQ 自动退回 `um` 离线解密 |
+| `um` | 网易云 `.ncm`、QQ `.mflac/.mgg` 等离线解密 | Windows `tools/um.exe`；macOS `tools/um-darwin-{arm64,amd64}` | `tools.um_exe` / `MUSIC_HELPER_UM_EXE` | 网易云解密失败；QQ 仍可用旧版客户端 + `um` 离线解密 |
+| Frida hook | QQ 音乐解密（**仅 Windows**；macOS 固定走 `um`） | `tools/hook_qq_music.js` | `tools.qq_hook` / `MUSIC_HELPER_QQ_HOOK` | QQ 自动退回 `um` 离线解密 |
+
+Windows 的 QQ 解密有两条途径：旧版 QQ（19.51 及以下）+ `um` 离线解密，或新版 QQ + Frida
+注入；macOS 只有旧版 QQ（20230903）+ `um` 这一条。
 
 **QQ 音乐客户端**是 QQ 解密的硬前提，由 `decrypto/qq_client.py` 统一管理：
 
@@ -164,11 +167,12 @@ Windows 的 `fpcalc.exe` 一般已在 `C:\Windows\System32`，仓库里不再单
 
 | 值 | 行为 |
 |---|---|
-| `return` | 把本次移入暂存区的加密原文件搬回对应 VIP 下载目录 |
-| `trash` | 移入 `log/_trash/` |
+| `return` | 把本次移入暂存区的加密原文件搬回对应 VIP 下载目录；Web 直解时原文件本就留在原地 |
+| `trash` | 把本次处理（搬进暂存区或用户已选）的加密原文件移入 `log/_trash/` |
 | `keep` | 留在 `<WORKSPACE_DIR>\_decrypt` 下，人工处理 |
 
-无论哪种模式，都只处理**本次运行搬进去的文件**，不遍历 VIP 目录或暂存区顶层。
+无论哪种模式，都只处理**本次运行搬进去的文件，或 Web 直解时用户已选的文件**，
+不遍历 VIP 目录或暂存区顶层；未选中的加密文件原地不动。
 
 ## 5. 扩展名集合
 
