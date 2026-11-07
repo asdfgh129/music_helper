@@ -363,6 +363,15 @@ def duration(path):
         return 0.0
 
 
+def has_embedded_cover(track):
+    """Track 是否带内嵌封面：优先用扫描缓存，未探测时现场读文件
+
+    报告与入库判定共用这一处，避免两边对「封面」得出不同结论。
+    """
+    cached = getattr(track, 'has_cover', None)
+    return has_cover(track.path) if cached is None else bool(cached)
+
+
 def missing_tag_fields(track):
     """标签完整性检查：返回缺失项中文名列表（歌曲名/歌手/专辑/年份/封面）
 
@@ -370,9 +379,7 @@ def missing_tag_fields(track):
     """
     labels = (('title', '歌曲名'), ('artist', '歌手'), ('album', '专辑'), ('year', '年份'))
     missing = [label for key, label in labels if not track.tag(key)]
-    cached = getattr(track, 'has_cover', None)
-    cover = has_cover(track.path) if cached is None else cached
-    if not cover:
+    if not has_embedded_cover(track):
         missing.append('封面')
     return missing
 

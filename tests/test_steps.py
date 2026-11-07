@@ -146,13 +146,17 @@ class TestArchivePreview(StepsTestCase):
     def _tracks(self):
         return [
             Track(path=os.path.join(self.workspace, 'a.flac'),
-                  tags={'title': 'A', 'artist': 'X', 'album': 'Al', 'year': '1995'}),
+                  tags={'title': 'A', 'artist': 'X', 'album': 'Al', 'year': '1995'},
+                  has_cover=True),
             Track(path=os.path.join(self.workspace, 'b.flac'),
-                  tags={'title': 'B', 'artist': 'Y', 'album': 'Al', 'year': '1995'}),
+                  tags={'title': 'B', 'artist': 'Y', 'album': 'Al', 'year': '1995'},
+                  has_cover=True),
             Track(path=os.path.join(self.workspace, 'c.flac'),
-                  tags={'title': 'C', 'artist': 'Z', 'album': 'Al', 'year': '2003'}),
+                  tags={'title': 'C', 'artist': 'Z', 'album': 'Al', 'year': '2003'},
+                  has_cover=True),
             Track(path=os.path.join(self.workspace, 'd.flac'),
-                  tags={'title': 'D', 'artist': 'W', 'album': 'Al'}),
+                  tags={'title': 'D', 'artist': 'W', 'album': 'Al'},
+                  has_cover=True),
         ]
 
     def test_groups_by_decade_and_year(self):

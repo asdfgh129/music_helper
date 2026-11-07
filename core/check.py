@@ -39,7 +39,7 @@ class Finding:
     path: str
     detail: str
     fixable: bool = False
-    severe: bool = False          # 是否属于「必须人工处理」级别（核心标签缺失/标签矛盾）
+    severe: bool = False          # 是否未达入库标准（核心标签/封面缺失、标签矛盾）
     track: object = None
 
 
@@ -164,13 +164,15 @@ def _consistency_problem(track):
 
 
 def readiness_problems(track):
-    """判断是否达到「可入库」标准：核心标签齐全、年份可解析、文件名与标签不矛盾
+    """判断是否达到「可入库」标准：核心标签与内嵌封面齐全、年份可解析、文件名与标签不矛盾
 
-    封面与歌词不参与判定——它们缺失时只提示，不应把文件挡在 INCOMPLETE_DIR 之外。
+    缺封面与缺核心标签一样算未达标，统一移入 INCOMPLETE_DIR；歌词不参与判定。
     年份必须能解析成 1900-2100 的四位数字，否则归档阶段进不了年份目录，
     会出现「判定可入库、却落进 unknown/」的两套结论。
     """
     problems = [f'缺少{label}' for key, label in READY_FIELDS if not track.tag(key)]
+    if not core_tags.has_embedded_cover(track):
+        problems.append('缺少封面')
     year = track.tag('year')
     if year and not track.year_int:
         problems.append(f'年份无法解析: {year}（需 1900-2100）')
@@ -226,10 +228,9 @@ def check_library(tracks, directories=None, tolerance=None, check_tags=True,
         if check_tags:
             missing = core_tags.missing_tag_fields(track)
             if missing:
-                # 只有「歌曲名/歌手」缺失才算严重，缺封面之类的仅提示，不挪动文件
-                severe = any(label in ('歌曲名', '歌手') for label in missing)
+                # 缺歌曲名/歌手/专辑/年份/封面都算未达标，可移入 INCOMPLETE_DIR
                 result.add(KIND_TAGS, track.path, '缺少: ' + '/'.join(missing),
-                           severe=severe, track=track)
+                           severe=True, track=track)
 
             problem = _consistency_problem(track)
             if problem:
@@ -288,7 +289,7 @@ def plan_fixes(result, plan, review_dir=None, rename_canonical=True,
                               f'重复于 {group.keep.filename}')
                 planned.add(track.path)
 
-    # 2. 核心标签缺失 / 文件名与标签矛盾 -> 移入待处理目录（缺封面这类只提示不动文件）
+    # 2. 未达入库标准（标签/封面缺失、文件名矛盾）-> 移入待处理目录
     if move_bad and review_dir:
         for item in result.findings:
             if item.kind not in (KIND_TAGS, KIND_MISMATCH) or item.path in planned:

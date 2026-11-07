@@ -133,20 +133,24 @@ music_helper/
 
 ## 已知限制
 
-- QQ 解密依赖 Frida 与正在运行的 QQMusic 客户端，**仅 Windows**。解密前会自动做三件事
+- QQ 解密按平台分两条途径：Windows 可用新版 QQ + Frida 注入运行中的客户端，或旧版 QQ
+  （19.51 及以下）+ `um` 离线解密；macOS 用旧版 QQ（20230903）+ `um`。解密前会自动做三件事
   （见 `decrypto/qq_client.py`）：
 
-  1. 检测客户端是否安装——Windows 读注册表 `Install` 值 + 常见路径；没装就装
-     `tools/QQMusic_Setup_1951.exe`，再打 `tools/Q音屏蔽更新.zip` 补丁（客户端升级会让
-     Frida 依赖的 MSVC 修饰导出名变化，脚本随即失效，所以补丁是解密能力的一部分）。
+  1. 检测客户端是否安装——Windows 读注册表 `Install` 值 + 常见路径，没装就装
+     `tools/QQMusic_Setup_1951.exe` 并打 `tools/Q音屏蔽更新.zip` 补丁（客户端升级会让
+     Frida 依赖的 MSVC 修饰导出名变化，脚本随即失效，所以补丁是解密能力的一部分）；
+     macOS 查 `/Applications/QQMusic.app`，没装就挂载 `tools/QQMusicMac_Mgr_8.8.0_20230903.dmg`
+     并打屏蔽升级补丁。
   2. 客户端没启动就启动它。
   3. 确认已登录——未登录时 `EncAndDesMediaFile::Open` 直接抛 `system error`，每个文件都会
-     失败；所以未登录会提示扫码并轮询等待（`qq_login_timeout` 控制等待时长）。
+     失败；Windows 会提示扫码并轮询等待（`qq_login_timeout` 控制等待时长），macOS 的登录态
+     只能提示用户自行确认。
 
   macOS 版是 Mach-O，没有 `QQMusicCommon.dll` 也没有那套导出名，Frida 定位不到函数，
-  因此 **macOS 固定走 `um` 离线解密**：安装/启动/打补丁照做，登录态只能提示用户自行确认。
-  想要免密钥效果，用 `tools/QQMusicMac_Mgr_8.8.0_20230903.dmg` 装 2023.09.03 及更早的
-  客户端——那之前的版本下载的 `.mflac` 密钥内嵌在文件里，`um` 直接能解。
+  因此 **macOS 固定走 `um` 离线解密**。想要免密钥效果，用
+  `tools/QQMusicMac_Mgr_8.8.0_20230903.dmg` 装 2023.09.03 及更早的客户端——
+  那之前的版本下载的 `.mflac` 密钥内嵌在文件里，`um` 直接能解。
 - 声纹工具是三平台二进制（`tools/soundalike.exe`、`tools/soundalike-darwin-<arch>`），
   Linux 上需要自己编一份放进 `tools/`。
 - 声纹工具是黑盒，同曲不同版本（Live/Remix/伴奏）可能给出高相似度，详见

@@ -10,13 +10,20 @@
 
 ## [Unreleased]
 
+### 修复
+
+- **集合内查重留更小文件**：`core/dedupe.pick_keep()` 在格式优先级相同时保留体积更小的
+  那份（省磁盘）；跨集合 `storage_preference()` 不变。
+- **待补全判定纳入内嵌封面**：`core/check.readiness_problems()` 与 `KIND_TAGS` 的 `severe`
+  都要求歌曲名/歌手/专辑/年份/封面齐全，缺任一项移入 `INCOMPLETE_DIR`；歌词仍只报告。
+  封面探测统一走 `core/tags.py` 的 `has_embedded_cover()`。
+- README「已知限制」改为 Windows/macOS 双平台的 QQ 解密说明，不再写「仅 Windows」。
+
 ### 文档
 
 - 按 `README.md` 新口径同步全部相关文档：主要平台补 macOS 与 QQ 解密两条途径；
   集合内查重改为「同音质留更小文件」；`INCOMPLETE_DIR` 纳入缺封面/专辑/年份；
-  加密原文件范围补「Web 直解时用户已选的文件」。
-- 口径先行：当前 `core/dedupe.py`、`core/check.py` 与 `tests/` 仍是旧规则，
-  改代码与补用例时需按本口径同步。
+  加密原文件范围补「Web 直解时用户已选的文件」。实现与用例已按本口径同步。
 
 ### 计划中
 

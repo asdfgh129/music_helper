@@ -31,8 +31,10 @@ class TestSplitIncomplete(unittest.TestCase):
 
         self.tracks = [
             Track(path=self.complete, tags={'title': 'Title', 'artist': 'Artist',
-                                            'album': 'Album', 'year': '2000'}),
-            Track(path=self.incomplete, tags={'title': 'Song', 'artist': 'Other'}),
+                                            'album': 'Album', 'year': '2000'},
+                  has_cover=True),
+            Track(path=self.incomplete, tags={'title': 'Song', 'artist': 'Other'},
+                  has_cover=True),
         ]
         self.args = SimpleNamespace(dry_run=False, limit=0)
 
@@ -106,8 +108,10 @@ class TestManualArchive(unittest.TestCase):
 
         self.tracks = [
             Track(path=self.complete, tags={'title': 'Title', 'artist': 'Artist',
-                                            'album': 'Album', 'year': '2000'}),
-            Track(path=self.incomplete, tags={'title': 'Song', 'artist': 'Other'}),
+                                            'album': 'Album', 'year': '2000'},
+                  has_cover=True),
+            Track(path=self.incomplete, tags={'title': 'Song', 'artist': 'Other'},
+                  has_cover=True),
         ]
         self.args = SimpleNamespace(dry_run=False, limit=0)
 

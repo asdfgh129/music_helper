@@ -1007,7 +1007,7 @@ def archive_preview(into_library=True):
 def run_archive(into_library=True, move_incomplete=True, progress=None):
     """执行归档
 
-    可归档的进 <年代>/<年份>/；不可归档的（缺年份/缺歌手/文件名矛盾）按既有规则
+    可归档的进 <年代>/<年份>/；不可归档的（核心标签或内嵌封面缺失、文件名矛盾）按既有规则
     移入待确认目录，不留在工作区挡路。
     """
     logger = _log()

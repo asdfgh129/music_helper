@@ -16,8 +16,9 @@ from core.ops import Plan
 from core.report import Report
 
 
-def track(path, duration=200.0, size=1000, **tags):
-    return Track(path=path, tags=dict(tags), duration=duration, size=size)
+def track(path, duration=200.0, size=1000, has_cover=True, **tags):
+    return Track(path=path, tags=dict(tags), duration=duration, size=size,
+                 has_cover=has_cover)
 
 
 class TestReport(unittest.TestCase):
@@ -93,7 +94,7 @@ class TestCheck(unittest.TestCase):
         self.assertTrue(result.by_kind(checker.KIND_FILENAME)[0].fixable)
 
     def test_tag_missing_finding(self):
-        tracks = [track('C:/lib/A - B.flac', title='B', artist='A')]
+        tracks = [track('C:/lib/A - B.flac', has_cover=False, title='B', artist='A')]
         result = checker.check_library(tracks, [], check_lyrics=False, check_duplicates=False)
         details = ' '.join(item.detail for item in result.by_kind(checker.KIND_TAGS))
         self.assertIn('专辑', details)
@@ -105,6 +106,33 @@ class TestCheck(unittest.TestCase):
                         album='x', year='2003')]
         result = checker.check_library(tracks, [], check_lyrics=False, check_duplicates=False)
         self.assertEqual(len(result.by_kind(checker.KIND_MISMATCH)), 1)
+
+    def test_missing_cover_or_album_is_severe_and_moved(self):
+        """缺封面/缺专辑都算未达标，--fix 会移入待补全目录"""
+        tracks = [
+            track('C:/lib/A - B.flac', has_cover=False,
+                  title='B', artist='A', album='x', year='2000'),
+            track('C:/lib/C - D.flac', title='D', artist='C', year='2000'),
+        ]
+        result = checker.check_library(tracks, [], check_lyrics=False,
+                                       check_duplicates=False)
+        findings = result.by_kind(checker.KIND_TAGS)
+        self.assertEqual(len(findings), 2)
+        self.assertTrue(all(item.severe for item in findings))
+
+        plan = Plan('fix', dry_run=True)
+        checker.plan_fixes(result, plan, review_dir='C:/review', move_bad=True,
+                           rename_canonical=False)
+        self.assertEqual(len([op for op in plan if op.action == 'move']), 2)
+
+    def test_missing_lyrics_is_only_reported(self):
+        """缺歌词仍只报告，不产生移动计划"""
+        result = checker.CheckResult()
+        result.add(checker.KIND_NO_LRC, 'C:/lib/A - B.flac', '没有同名 .lrc')
+        plan = Plan('fix', dry_run=True)
+        checker.plan_fixes(result, plan, review_dir='C:/review', move_bad=True,
+                           rename_canonical=False)
+        self.assertTrue(plan.is_empty)
 
     def test_duplicate_finding_and_plan(self):
         tracks = [

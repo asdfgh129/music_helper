@@ -41,7 +41,7 @@ class TestDedupe(unittest.TestCase):
         b = track('b.flac', 201, 4000, title='晴天', artist='周杰伦')
         groups = find_by_tag([a, b])
         self.assertEqual(len(groups), 1)
-        self.assertEqual(groups[0].keep, a)          # 同格式优先更大文件
+        self.assertEqual(groups[0].keep, b)          # 同格式同音质留更小文件
         self.assertEqual(len(groups[0].drop), 1)
 
     def test_duration_out_of_tolerance_not_duplicate(self):
@@ -75,6 +75,12 @@ class TestDedupe(unittest.TestCase):
         mp3 = track('a.mp3', 200, 9000, title='x', artist='y')
         flac = track('b.flac', 200, 5000, title='x', artist='y')
         self.assertEqual(pick_keep([mp3, flac]), flac)
+
+    def test_pick_keep_prefers_smaller_within_same_format(self):
+        """格式相同时，同音质下保留更省磁盘的那份"""
+        bigger = track('a.flac', 200, 9000, title='x', artist='y')
+        smaller = track('b.flac', 200, 5000, title='x', artist='y')
+        self.assertEqual(pick_keep([bigger, smaller]), smaller)
 
     def test_filename_suffix_group(self):
         a = track('晴天.flac', 200, 5000)

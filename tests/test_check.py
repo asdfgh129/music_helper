@@ -11,10 +11,10 @@ from core.check import _consistency_problem, _filename_from_tags, consistency_re
 from core.model import Track
 
 
-def make_track(filename='Artist - Title.flac', **tags):
+def make_track(filename='Artist - Title.flac', has_cover=True, **tags):
     base = {'title': 'Title', 'artist': 'Artist', 'album': 'Album', 'year': '2000'}
     base.update(tags)
-    return Track(path=os.path.join('C:/lib', filename), tags=base)
+    return Track(path=os.path.join('C:/lib', filename), tags=base, has_cover=has_cover)
 
 
 class TestReadiness(unittest.TestCase):
@@ -40,9 +40,13 @@ class TestReadiness(unittest.TestCase):
         problems = readiness_problems(self._track(filename='Artist - Other.flac'))
         self.assertTrue(any('歌名' in problem for problem in problems))
 
-    def test_cover_is_not_required(self):
-        """封面缺失只提示，不应挡在 INCOMPLETE_DIR 之外"""
-        self.assertEqual(readiness_problems(self._track()), [])
+    def test_missing_cover_is_unready(self):
+        """缺内嵌封面与缺核心标签一样，不能入库"""
+        problems = readiness_problems(self._track(has_cover=False))
+        self.assertIn('缺少封面', problems)
+
+    def test_cover_present_is_ready(self):
+        self.assertEqual(readiness_problems(self._track(has_cover=True)), [])
 
     def test_unparseable_year_is_unready(self):
         """年份非空但读不出四位数字时，归档会落进 unknown/，必须提前挡住"""

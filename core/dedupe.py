@@ -8,7 +8,7 @@
 3. 时长未知（读取失败）时，只要名称一致即视为候选，但会在报告中标注「时长未知」，
    并由 plan_fixes() 转人工——损坏文件不应被自动搬走。
 
-保留策略：优先无损格式，其次文件更大者（同格式下通常码率更高）。
+保留策略：优先无损格式，同格式同音质下留体积更小者（省磁盘）。
 """
 
 import os
@@ -50,11 +50,12 @@ class DuplicateGroup:
 
 
 def _rank(track):
-    return (_QUALITY.get(track.ext, 0), track.size)
+    # 格式优先级相同时，体积越小越优先保留（省磁盘）
+    return (_QUALITY.get(track.ext, 0), -track.size)
 
 
 def pick_keep(tracks):
-    """在候选集合中选出应保留的文件"""
+    """在候选集合中选出应保留的文件（格式优先，同格式留更小者）"""
     return max(tracks, key=_rank)
 
 

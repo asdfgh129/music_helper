@@ -73,10 +73,6 @@ python main.py --check --dry-run                     # 用真实配置预览
     ——它会多挂一个只写 stderr 的 handler，子模块日志从此绕过文件（`fingerprint` 曾因此
     整条链路不进日志）。`--debug` 只调 handler 与 `music_manager` 的级别，不要另建日志系统。
 
-> 口径来源：`README.md`「安全底线」。当前 `core/check.py`、`core/dedupe.py` 与 `tests/`
-> 仍是旧规则（封面不参与、`--fix` 只移 `severe`、集合内留更大者），改代码前先按本口径
-> 同步实现与用例，别把文档当成已落地的行为。
-
 ## 测试
 
 - 单元测试不得触碰真实音乐库、网络、外部 exe；一律用 `tempfile`。
