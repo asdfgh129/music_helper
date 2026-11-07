@@ -7,7 +7,7 @@
     2. 文件名 → QQ音乐 / 网易云 → 标签
     3. 顺带下载封面与歌词
 
-可选依赖（Fingerprint、music_tagger.platforms、requests）全部延迟导入，
+可选依赖（fingerprint、platforms、requests）全部延迟导入，
 缺失时只降级对应能力，不影响程序启动。
 """
 
@@ -303,13 +303,14 @@ class Tagger:
         if self._online_ready:
             return self._qq, self._netease
         self._online_ready = True
+        # 两个平台各自独立降级：netease 缺 pycryptodomex 不影响 QQ 音乐
         try:
-            from music_tagger.platforms.qqmusic import QQMusicApi
+            from .platforms.qqmusic import QQMusicApi
             self._qq = QQMusicApi()
         except Exception:  # noqa: BLE001
             self._qq = None
         try:
-            from music_tagger.platforms.netease import NetEaseMusicClient
+            from .platforms.netease import NetEaseMusicClient
             self._netease = NetEaseMusicClient()
         except Exception:  # noqa: BLE001
             self._netease = None

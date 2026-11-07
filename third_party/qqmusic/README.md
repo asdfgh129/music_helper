@@ -17,7 +17,7 @@
 19.51 及以下下载的文件把密钥**内嵌在文件里**，`um` 直接能解，不需要任何凭据。
 
 官方 CDN 已下架（`https://dldir1v6.qq.com/music/clntupate/QQMusic_Setup_1951.exe` → `404`），
-现存的取法：
+包已随仓库分发。下面是溯源记录，供核对来源时参考：
 
 - **Telegram**：`https://t.me/um_lsr_ch/24`（71.4 MB，必须用客户端，网页版不给文件直链）
 - 夸克分享 `https://pan.quark.cn/s/e09758934faf` 里有「去广告安装版 / 绿色版」，
@@ -96,6 +96,12 @@ xattr -d com.apple.quarantine /Applications/QQMusic.app
 
 ## 关于入库
 
-`.gitignore` 目前排除了 `third_party/qqmusic/*.{exe,dmg,zip}`。这两个包合计约 118 MB，
-进 git 会让每次 clone 都变慢且没有增量压缩。要入库就删掉那一行——但要注意
-`tools/` 下的同名文件并不受这条规则约束，需要单独判断。
+**两个安装包已入库**，就在上表的 `tools/` 路径下，合计约 120 MB。这是一次有意识的取舍：
+
+- 不入库的代价：官方 CDN 全部 `404`，第三方转载无法校验真伪，换一台机器就再也拿不到
+  一份可验证的 19.51 / 8.8.0，而项目运行时若缺这两个程序，QQ 音乐解密只能走 Frida 或
+  直接失败；
+- 入库的代价：clone 变慢，且 git 对已压缩的安装包几乎没有增量压缩能力。
+
+因为「拿不回来」比「clone 慢」严重，所以选择入库。`third_party/` 则只留源码与本说明，
+不放任何二进制——`.gitignore` 里的 `third_party/**/*.{exe,dmg,zip}` 是防止误放的护栏。

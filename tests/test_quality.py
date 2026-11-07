@@ -3,8 +3,7 @@
 
 import unittest
 
-from core.quality import (compare, describe, is_compressed_lossless, is_lossless,
-                          storage_preference)
+from core.quality import compare, describe, is_compressed_lossless, is_lossless, storage_preference
 
 
 def spec(ext='.flac', **kwargs):

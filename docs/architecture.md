@@ -64,14 +64,25 @@
 | `services/soundalike.py` | 声纹去重、库一致性、建库/补库（`init_db`） | `tools/soundalike`（Windows 为 `soundalike.exe`）、`fpcalc` |
 | `services/steps.py` | Web 向导八步编排（CLI 与 Web 共用） | `core/*`、`services/*`、`tagger/` |
 | `services/settings_store.py` | `config.ini [paths]` 的唯一写入点（校验 + 落盘 + `config.reload()`） | 标准库 |
+
 ### `tagger/`
 
 | 模块 | 职责 | 依赖 |
 |---|---|---|
-| `tagger/__init__.py` | 声纹 + 在线标签、封面、歌词 | `fingerprint/`、`music_tagger/platforms/`、`requests` |
+| `tagger/__init__.py` | 声纹 + 在线标签、封面、歌词 | `fingerprint/`、`tagger/platforms/`、`requests` |
+| `tagger/platforms/qqmusic.py` | QQ 音乐搜索 / 歌词接口 | `requests` |
+| `tagger/platforms/netease.py` | 网易云搜索 / 歌词接口（weapi、linuxapi） | `requests`、`_netease_crypto` |
+| `tagger/platforms/_netease_crypto.py` | 网易云请求签名（AES + RSA） | `pycryptodomex` |
 
-`music_tagger/` 只保留 `platforms/{qqmusic,netease}.py` 两个客户端，不含标签匹配或写盘逻辑；
-匹配与择优的唯一实现是 `core/scoring.py` 与 `tagger/__init__.py`。
+`tagger/platforms/` 只有客户端，不含标签匹配或写盘逻辑；匹配与择优的唯一实现是
+`core/scoring.py` 与 `tagger/__init__.py`。
+
+**`tagger/platforms/__init__.py` 不做顶层转导出**，改用 PEP 562 的模块级 `__getattr__` 惰性取属性。
+因为 `netease.py` 依赖 `pycryptodomex` 而 `qqmusic.py` 不依赖，一旦在包初始化时就
+`from .netease import ...`，缺 `Cryptodome` 会把 QQ 音乐客户端一起带崩——两个平台同时降级。
+
+**`_netease_crypto.py` 不是音频解密**。项目里做音频解密的是 `decrypto/`（.ncm/.mflac/.mgg）；
+这个文件只给网易云的 HTTP 请求做参数签名，名字加下划线前缀表示它是 `platforms` 的私有实现。
 
 外部依赖一律**延迟导入 + 失败降级**：缺 `requests` 只是不下载封面，缺 `fpcalc` 只是跳过声纹，
 缺 `mutagen` 只是读不到标签——主程序永远能启动。
@@ -97,14 +108,31 @@
 | 目录 | 是什么 | 为什么不在 `core` / `services` |
 |---|---|---|
 | `decrypto/` | QQ 音乐解密的 Python 调用与来源检索；`qq_client.py` 负责客户端安装检测 / 启动 / 登录确认 | 半独立上游代码，自带 CLI；由 `services/decrypt.py` 调用 |
-| `fingerprint/` | AcoustID / MusicBrainz 指纹匹配 | 自带 HTTP 客户端与解析，被 `tagger/` 借用 |
-| `music_tagger/` | QQ 音乐 / 网易云平台客户端 | 上游项目名沿用；包内只剩客户端 |
-| `tools/` | `um`（三平台）、`soundalike`（三平台）、`fpcalc`、Frida hook | 外部二进制与脚本，不参与 Python 分层 |
-| `scripts/` | `check_docs.py`、`git_uplink.py` | 开发者工具，不参与运行时 |
+| `fingerprint/` | AcoustID / MusicBrainz 指纹匹配（子模块见下表） | 自带 HTTP 客户端与解析，被 `tagger/` 借用 |
+| `tools/` | 运行时第三方程序：`um`（三平台）、`soundalike`（三平台）、`fpcalc`、`hook_qq_music.js`、旧版 QQ 音乐安装包与屏蔽更新补丁 | 二进制与 JS 脚本，不参与 Python 分层；**随仓库分发**，官方 CDN 已下架旧版客户端 |
+| `third_party/` | `tools/` 里那些程序的**源码**（um / soundalike / chromaprint），**不放二进制** | 上游可能消失（`unlock-music/cli` 已因 DMCA 下架），留源码才能重建 |
+| `scripts/` | `check_docs.py`（文档校验）、`gen_web_guide_images.py`（配图）、`git_uplink.py`（开发期 git 出境代理） | 开发者工具，不参与运行时，见 [scripts/README.md](../scripts/README.md) |
 | `tests/` | 单元测试 + `tests/manual/` 手工脚本 + `tests/fixtures/` 样本 | 不随程序分发 |
 
+### `fingerprint/` 的子模块
+
+原本是 2053 行的 `musicbrainz_matcher.py`，按职责拆开。依赖方向自上而下，无环：
+
+| 模块 | 职责 | 依赖 |
+|---|---|---|
+| `models.py` | `AcoustIDConfig` / `FingerprintResult` / `Recording` / `MatchResult` | 无 |
+| `textconv.py` | 繁体 → 简体（OpenCC，缺失则降级） | 无 |
+| `similarity.py` | Picard 的相似度打分，纯函数 | 无 |
+| `http_client.py` | `urllib` 封装，失败统一成 `(None, 错误串)` | `models`、`textconv` |
+| `fpcalc.py` | 调 fpcalc 算指纹 | `models`、`config.FPCALC_LENGTH` |
+| `musicbrainz.py` | 节点转换、候选聚合、Release 加载 | `http_client`、`models` |
+| `acoustid.py` | 查询 + 权重打分选最佳 | 上述全部 |
+| `formatting.py` | 标签映射与人类可读输出（不参与主流程写盘） | `models`、`similarity` |
+| `matcher.py` | 门面 `FingerprintMatcher`，主流程只用这个 | `acoustid`、`fpcalc` |
+| `__main__.py` | `python -m fingerprint <file>`，人工验证单条链路 | `matcher`、`formatting` |
+
 命名约定：自有代码目录一律小写（`core`、`services`、`tagger`、`decrypto`、`fingerprint`、
-`music_tagger`、`scripts`、`tests`、`docs`）。外部程序文件名保持上游原样（`um.exe`、
+`scripts`、`tests`、`docs`）。外部程序文件名保持上游原样（`um.exe`、
 `soundalike.exe`），改它会连带上游脚本失效。同一程序的多平台产物用 Go 的
 `<名字>-<GOOS>-<GOARCH>` 后缀区分（`soundalike-darwin-arm64`），由 `config.py` 按平台挑选。
 
@@ -234,6 +262,17 @@ result = plan.execute()      # PlanResult(done, skipped, failed)
 | 检查报告全是 0 | 目标目录配错，扫描空目录得到空结果 | `--check` 目录不存在时直接以退出码 1 结束 |
 | 每首歌被解析三遍 | `read_tags` + `duration` + `has_cover` 各开一次文件 | `read_meta()` 一次读完，扫描阶段专用 |
 | 新格式整类「缺标签」 | 只在 `config.py` 加了扩展名，`core/tags.py` 没有读取器 | `tests/test_tags.py` 检查每个扩展名都有读取器 |
+| 声纹去重「跑到一半就失败」 | `-temp` 用第一个音乐目录推算相对路径，跨盘时 `filepath.Rel` 报错 | 调用前用 `services.soundalike.temp_supported()` 判断同盘，不同盘退化为只比对音乐库 |
+| 声纹去重「卡住不动」 | 外部程序 stdout 被 `capture_output` 吞掉，提示语又不带换行 | 交互式运行（有 TTY）时不捕获输出，直接交给终端 |
+| 声纹库改了长度打不开 | `Settings` 表锁定了 `-fpcalc-length` / `-algorithm` | 参数必须来自 `config.FPCALC_LENGTH`；改参数要删 `music.db` 重建 |
+| macOS 上声纹工具「Exec format error」 | 只有 `soundalike.exe`，且 `fpcalc` 不在 PATH | `tools/soundalike-darwin-*` + 调用时注入 `tools/` 到 PATH |
+| 预览过一遍就再也查不出重复 | 预览（`--soundalike-report`）也会把指纹写进库，而扫描只比对「新文件/变化过的文件」 | 预览统一走 `-dry-run`：复用库里指纹但不写库 |
+| 未知扩展名被当成「最差的格式」 | 老 `formatPriority` 对不认识的扩展名返回 `-1`，`.dsf` 因此被判成比 mp3 还差 | 改成层级表 + 未知格式不参与自动判断，整组退回人工 |
+| 跨盘移动「另一个程序正在使用此文件」 | `copyAndRemoveFile` 用 `defer sf.Close()`，`os.Remove` 时源句柄还开着 | 显式关句柄后再删；`moveFile` 还拒绝覆盖已有文件 |
+| macOS 上「可执行文件却跑不起来」 | 配置指向了别的平台的产物，或克隆后丢了 exec 位 | 统一用 `utils.tool_problem()` 预检（缺文件 / 缺 `chmod +x` / PE 与 Mach-O 不匹配），并在报错里写清怎么修 |
+| QQ 解密在 mac 上「找不到进程」 | Frida 方案只认 `QQMusic.exe` + `QQMusicCommon.dll` | `decrypt_backend()` 按平台选方案，macOS 固定走 `decrypto/um.py`；Frida 起不来时自动退回 um |
+| 拿源文件路径直接调 `EncAndDesMediaFile::Open`，文件被清成 0 字节 | `Open` 会截断/重写传入路径，不是只读 | 一律先复制到暂存副本，只对副本 Open；探针脚本同理（`tests/manual/manual_frida_openprobe.py` 已强制走副本） |
+| 只配 mmkv 没配密钥，连旧版 qmc 也解不开 | `um` 只要拿到 `--qmc-mmkv` 就会去开 vault，缺 key 直接 `unexpected EOF` | `um.run()` 只在 mmkv 与 key **同时存在**时才传这两个参数 |
 
 ## 8. Web UI
 
@@ -251,6 +290,15 @@ Web UI 是 `main.py` 之外的第二个编排入口，形态为「本机跑服�
 
 进度有两个来源：CLI 流程按 `_STAGES` 里的阶段关键字从日志**推断**；向导流程由业务代码通过 `Task.set_progress(done, total, item)` **直报**逐条进度（`done/total/item` 会原样传给前端）。后者更准，前者不需要改任何业务代码，两者可以共存。任务运行时临时给根 logger 挂一个缓冲 Handler，结束后摘掉，因此多个任务不会串日志。
 
+日志只有一套 handler，装在**根 logger** 上（`utils.setup_logging`）；`utils.main_logger`（`music_manager`）
+与包内模块的 `logging.getLogger(__name__)`（如 `fingerprint.fpcalc`、`fingerprint.http_client`）
+都靠传播写进同一份 `log/Music-*.log`。两个约束：
+
+- **包初始化里不许调 `logging.basicConfig`**：那会在根 logger 上多挂一个只写 stderr 的 handler，
+  子模块日志就绕过文件——声纹与 HTTP 的明细会只剩控制台可见。
+- **新模块直接用 `logging.getLogger(__name__)`**，需要显式传递日志对象时传 `utils.main_logger`，
+  不要自己再建 handler。`--debug` 把 handler 级别放到 DEBUG，所有子模块的调试记录一起放开。
+
 ### 8.3 安全边界
 
 Web 端没有自己的删除/移动实现，所有破坏性动作都走 `core.ops.Plan`：`/api/plan/execute` 与任务里的各 `flow_*` 都先生成计划、写 `log/journal.jsonl`，再执行。接口默认 `dry_run`，非 dry-run 前会 `utils.ensure_dirs()` 保证目录存在。
@@ -258,14 +306,3 @@ Web 端没有自己的删除/移动实现，所有破坏性动作都走 `core.op
 ### 8.4 解密随运行机器 OS 分支
 
 Web 不假设「只有 Windows 能解密」。`/api/platform` 返回运行平台（macOS / Windows / 其它）与对应解密能力；`/api/decrypt` 把动作交给 `services.decrypt`，由 `decrypto/qq.py:decrypt_backend()` 按本机 OS 选 Frida（Windows，需客户端已登录）或 um（macOS 离线免密钥）。纯服务器环境只处理离线可解的文件。
-| 声纹去重「跑到一半就失败」 | `-temp` 用第一个音乐目录推算相对路径，跨盘时 `filepath.Rel` 报错 | 调用前用 `services.soundalike.temp_supported()` 判断同盘，不同盘退化为只比对音乐库 |
-| 声纹去重「卡住不动」 | 外部程序 stdout 被 `capture_output` 吞掉，提示语又不带换行 | 交互式运行（有 TTY）时不捕获输出，直接交给终端 |
-| 声纹库改了长度打不开 | `Settings` 表锁定了 `-fpcalc-length` / `-algorithm` | 参数必须来自 `config.FPCALC_LENGTH`；改参数要删 `music.db` 重建 |
-| macOS 上声纹工具「Exec format error」 | 只有 `soundalike.exe`，且 `fpcalc` 不在 PATH | `tools/soundalike-darwin-*` + 调用时注入 `tools/` 到 PATH |
-| 预览过一遍就再也查不出重复 | 预览（`--soundalike-report`）也会把指纹写进库，而扫描只比对「新文件/变化过的文件」 | 预览统一走 `-dry-run`：复用库里指纹但不写库 |
-| 未知扩展名被当成「最差的格式」 | 老 `formatPriority` 对不认识的扩展名返回 `-1`，`.dsf` 因此被判成比 mp3 还差 | 改成层级表 + 未知格式不参与自动判断，整组退回人工 |
-| 跨盘移动「另一个程序正在使用此文件」 | `copyAndRemoveFile` 用 `defer sf.Close()`，`os.Remove` 时源句柄还开着 | 显式关句柄后再删；`moveFile` 还拒绝覆盖已有文件 |
-| macOS 上「可执行文件却跑不起来」 | 配置指向了别的平台的产物，或克隆后丢了 exec 位 | 统一用 `utils.tool_problem()` 预检（缺文件 / 缺 `chmod +x` / PE 与 Mach-O 不匹配），并在报错里写清怎么修 |
-| QQ 解密在 mac 上「找不到进程」 | Frida 方案只认 `QQMusic.exe` + `QQMusicCommon.dll` | `decrypt_backend()` 按平台选方案，macOS 固定走 `decrypto/um.py`；Frida 起不来时自动退回 um |
-| 拿源文件路径直接调 `EncAndDesMediaFile::Open`，文件被清成 0 字节 | `Open` 会截断/重写传入路径，不是只读 | 一律先复制到暂存副本，只对副本 Open；探针脚本同理（`tests/manual/manual_frida_openprobe.py` 已强制走副本） |
-| 只配 mmkv 没配密钥，连旧版 qmc 也解不开 | `um` 只要拿到 `--qmc-mmkv` 就会去开 vault，缺 key 直接 `unexpected EOF` | `um.run()` 只在 mmkv 与 key **同时存在**时才传这两个参数 |

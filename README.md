@@ -91,10 +91,10 @@ music_helper/
 │   ├── decrypt.py          # 网易云 / QQ 音乐解密编排
 │   └── soundalike.py       # 声纹去重（外部 exe 包装）
 ├── tagger/                 # 标签、封面、歌词服务
+│   └── platforms/          # QQ 音乐 / 网易云客户端 + 网易云请求签名
 ├── decrypto/               # QQ 音乐 Frida 调用与来源检索
-├── fingerprint/            # AcoustID / MusicBrainz 指纹匹配
-├── music_tagger/           # 平台客户端（QQ 音乐、网易云）
-├── tools/                  # um.exe、soundalike.exe、fpcalc、Frida hook
+├── fingerprint/            # AcoustID / MusicBrainz 指纹匹配（按职责分模块）
+├── tools/                  # um.exe、soundalike.exe、fpcalc、hook 脚本、旧版客户端安装包
 ├── third_party/            # 上述外部程序的源码（um / soundalike / chromaprint）
 ├── tests/                  # 单元测试 + manual/ 手工脚本 + fixtures/ 样本
 ├── docs/                   # 用户与开发文档
@@ -110,6 +110,7 @@ music_helper/
 | [docs/web-guide.md](docs/web-guide.md)             | 八步向导的操作说明（配图）        |
 | [docs/workflow.md](docs/workflow.md)               | 端到端流程、状态迁移、失败处理    |
 | [docs/rules.md](docs/rules.md)                     | 全部判定规则                      |
+| [docs/algorithms.md](docs/algorithms.md)           | 去重/声纹/解密等算法的判定顺序、阈值与 UML 图 |
 | [docs/usage.md](docs/usage.md)                     | 命令行手册                        |
 | [docs/configuration.md](docs/configuration.md)     | 配置、目录语义、外部工具、阈值    |
 | [docs/architecture.md](docs/architecture.md)       | 分层、模块、`Plan`、扩展指南    |

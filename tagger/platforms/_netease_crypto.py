@@ -1,10 +1,18 @@
 # -*- coding: utf-8 -*-
+"""网易云音乐 API 请求签名（AES + RSA）
+
+**这不是音频解密**。项目里 `decrypto/` 负责把加密音频（.ncm/.mflac/.mgg）还原成
+普通文件；本模块只负责给网易云的 HTTP 请求做参数签名——weapi 用 AES-CBC + RSA，
+linuxapi 用 AES-ECB。两者同名容易混，所以文件名带 `_netease_` 前缀并加上下划线，
+表示它是 `platforms` 包的私有实现，不对外导出。
+
+上游算法与密钥常量来自：
+    weapi      https://github.com/darknessomi/musicbox/blob/master/NEMbox/encrypt.py
+    linuxapi   https://github.com/Binaryify/NeteaseCloudMusicApi/blob/master/util/crypto.js
 """
-加密模块 - AES和RSA加密
-"""
+
 from base64 import b64encode
 from binascii import hexlify
-from hashlib import md5
 from json import dumps
 from os import urandom
 
@@ -20,18 +28,10 @@ MODULUS = (
 PUBKEY = "010001"
 NONCE = b"0CoJUm6Qyw8W8jud"
 LINUXKEY = b"rFgB&h#%2?^eDg:Q"
-EAPIKEY = b'e82ckenh8dichen8'
-
-
-def MD5(value):
-    """计算MD5"""
-    m = md5()
-    m.update(value.encode())
-    return m.hexdigest()
 
 
 def aes(text, key, method={}):
-    """AES加密"""
+    """AES 加密；method 带 iv 走 CBC，带 base64 则输出 Base64 而非十六进制"""
     pad = 16 - len(text) % 16
     text = text + bytearray([pad] * pad)
     if "iv" in method:
@@ -45,7 +45,7 @@ def aes(text, key, method={}):
 
 
 def rsa(text, pubkey, modulus):
-    """RSA加密"""
+    """RSA 加密（网易云用的是教科书式裸 RSA，文本先反转）"""
     text = text[::-1]
     rs = pow(int(hexlify(text), 16),
              int(pubkey, 16), int(modulus, 16))
@@ -53,16 +53,12 @@ def rsa(text, pubkey, modulus):
 
 
 def create_key(size):
-    """生成随机密钥"""
+    """生成随机密钥（weapi 每次请求都换一把）"""
     return hexlify(urandom(size))[:16]
 
 
 def weEncrypt(text):
-    """
-    网易云音乐网页API加密方式
-
-    引用自: https://github.com/darknessomi/musicbox/blob/master/NEMbox/encrypt.py#L40
-    """
+    """网易云网页版 API（weapi）加密：AES-CBC 两次 + RSA 加密随机密钥"""
     data = dumps(text).encode("utf-8")
     secret = create_key(16)
     method = {"iv": True, "base64": True}
@@ -72,21 +68,7 @@ def weEncrypt(text):
 
 
 def linuxEncrypt(text):
-    """
-    网易云音乐Linux API加密方式
-
-    参考自: https://github.com/Binaryify/NeteaseCloudMusicApi/blob/master/util/crypto.js#L28
-    """
+    """网易云 Linux 版 API（linuxapi）加密：单层 AES-ECB"""
     text = str(text).encode()
     data = aes(text, LINUXKEY)
     return {"eparams": data.decode()}
-
-
-def eEncrypt(url, text):
-    """
-    网易云音乐E-API加密方式
-    """
-    text = str(text)
-    digest = MD5("nobody{}use{}md5forencrypt".format(url, text))
-    data = "{}-36cd479b6b5-{}-36cd479b6b5-{}".format(url, text, digest)
-    return {"params": aes(data.encode(), EAPIKEY)}

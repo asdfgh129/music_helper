@@ -52,7 +52,7 @@ python -m unittest discover -s tests -p 'test_*.py'
 提交前跑一遍 CI 等价命令：
 
 ```bash
-python -m compileall -q core services tagger music_tagger decrypto fingerprint scripts tests main.py config.py utils.py
+python -m compileall -q core services tagger decrypto fingerprint scripts tests main.py config.py utils.py
 python -c "import config, utils, main"
 python -m ruff check .
 python -m pytest -q

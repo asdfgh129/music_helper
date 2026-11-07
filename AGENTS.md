@@ -15,6 +15,7 @@ QQ 解密前的客户端安装 / 启动 / 登录检查在 `decrypto/qq_client.py
 |---|---|
 | 改代码前 | [docs/architecture.md](docs/architecture.md)（分层与唯一实现原则） |
 | 改判定规则前 | [docs/rules.md](docs/rules.md)（文件名/标签/重复/歌词/归档） |
+| 查某个判定用的算法/公式/阈值 | [docs/algorithms.md](docs/algorithms.md)（含流程图与 UML） |
 | 改自检逻辑/读报告前 | [docs/self-check.md](docs/self-check.md)（流程、级别、局限、误判排查） |
 | 改流程顺序前 | [docs/workflow.md](docs/workflow.md)（端到端状态迁移） |
 | 加命令行参数 | [docs/usage.md](docs/usage.md)（参数优先级顺序敏感） |
@@ -29,7 +30,7 @@ python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -p 'test_*.py'   # 不装 pytest 也能跑
 python -m pytest -q                                  # 全量测试，必须全绿
 python -m ruff check .                               # 静态检查（CI lint job 同款）
-python -m compileall -q core services tagger music_tagger decrypto fingerprint scripts tests main.py config.py utils.py
+python -m compileall -q core services tagger decrypto fingerprint scripts tests main.py config.py utils.py
 python -c "import config, utils, main"               # 导入冒烟
 python scripts/check_docs.py                         # 文档校验：链接 / 路径 / 命令
 python main.py --check --dry-run                     # 用真实配置预览
@@ -65,6 +66,11 @@ python main.py --check --dry-run                     # 用真实配置预览
 10. **新增音频格式要成对改**：`config.AUDIO_EXTENSIONS` 与 `core/tags.py` 的 `_READERS` /
     `_COVER_READERS`。只加扩展名不加读取器，整类文件会被判成「缺标签」搬进 `INCOMPLETE_DIR`；
     `tests/test_tags.py` 会拦住这种漏改。
+11. **日志只配一次，handler 挂在根 logger**：`utils.setup_logging()` 负责装文件 + 控制台两个
+    handler，业务代码显式用 `utils.main_logger`，包内模块用 `logging.getLogger(__name__)`，
+    两类记录靠传播进同一份 `log/Music-*.log`。**不要在模块或包初始化里调 `logging.basicConfig`**
+    ——它会多挂一个只写 stderr 的 handler，子模块日志从此绕过文件（`fingerprint` 曾因此
+    整条链路不进日志）。`--debug` 只调 handler 与 `music_manager` 的级别，不要另建日志系统。
 
 ## 测试
 

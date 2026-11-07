@@ -1,8 +1,14 @@
-# third_party —— 外部程序的源码与安装包
+# third_party —— 外部程序的源码
 
-`tools/` 里放的是**编译好的产物**，本目录放它们的**源码**，目的是让仓库自带可复现的
-构建链：换一台机器、上游仓库哪天消失（`unlock-music/cli` 已经因为 DMCA 被整站下架），
-仍然能从这里的源码重新编出可用的 `tools/`。
+**本目录只放源码，不放任何二进制。** 编译产物、安装包、屏蔽更新补丁一律在 [`tools/`](../tools/)：
+那里是运行时的第三方程序仓库，随项目一起打包，缺了就要装。
+
+两个目录的分工：
+
+| 目录 | 放什么 | 入库 | 理由 |
+|---|---|---|---|
+| `third_party/` | 上游源码快照 | 是 | 上游仓库可能消失（`unlock-music/cli` 已因 DMCA 整站下架），留着才能重建 |
+| `tools/` | 编译产物 + 安装包 + hook 脚本 | 是 | 运行时依赖；官方 CDN 已下架旧版客户端，仓库不带就无法复现 |
 
 许可证跟着各自的 `LICENSE` 文件走，本仓库不改变它们的授权。
 
@@ -80,19 +86,19 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath \
 > 解不开（`no any decoder can resolve the file`）的原因。要批量解密，要么降到 19.51，
 > 要么走 Frida 注入（`tools/hook_qq_music.js`）。
 
-**当前状态：安装包未入库。** 2026-11-01 实测所有已知下载源都不可用：
+**安装包已入库**，在 `tools/QQMusic_Setup_1951.exe`（72 MB）与
+`tools/QQMusicMac_Mgr_8.8.0_20230903.dmg`（48 MB），SHA256 见
+[qqmusic/README.md](qqmusic/README.md)。之所以把这两个大文件放进仓库：2026-11-01 复核时
+所有官方源都已下架，第三方转载的包无法校验真伪。留着它们，换机器时直接装即可；不留，
+就再也拿不到一份可验证的 19.51 了。
 
 | 源 | 结果 |
 |---|---|
 | `https://dldir1v6.qq.com/music/clntupate/QQMusic_Setup_1951.exe`（官方） | `404`，腾讯已下架 |
 | `https://dldir1.qq.com/music/clntupate/mac/QQMusicMac_Mgr.dmg`（官方） | `404` |
-| `web.archive.org` 快照 | 本机直连与走代理均不通（`000`） |
+| `web.archive.org` 快照 | 直连不通，必须走 `scripts/git_uplink.py` 代理，见 [qqmusic/README.md](qqmusic/README.md) |
 | `t.me/um_lsr_ch`（um 官方分发频道） | 不通 |
-| 第三方软件站 / 网盘转载 | 可访问，但**包无法校验真伪**，不放进仓库 |
+| 第三方软件站 / 网盘转载 | 可访问，但**包无法校验真伪**，不作为入库来源 |
 
-因此本目录只保留上表的地址清单，安装包需要人工获取：**优先用仍能访问官方 CDN 的网络
-下载；拿不到时再去腾讯软件中心或可信归档，装完用 `QQMusic.exe` 的文件版本号确认是
-19.51**（右键属性 → 详细信息）。第三方站点转载的安装包有捆绑风险，装之前建议先丢进
-虚拟机或沙箱跑一次。
-
-macOS 侧对应的是 **8.8.0（20230903）**，同样需要人工获取；安装后不要让它自动升级。
+安装完成后，用 `QQMusic.exe` 的文件版本号确认是 **19.51**（右键属性 → 详细信息）。
+macOS 侧对应 **8.8.0（20230903）**，装完不要让它自动升级。

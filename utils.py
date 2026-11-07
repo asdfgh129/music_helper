@@ -4,7 +4,11 @@
 日志约定：
 1. `setup_logging` 可重复调用，不会叠加 handler；
 2. 对外统一通过 `utils.main_logger` 访问，不要 `from utils import main_logger`
-   （那样拿到的是旧引用，重新初始化后不会更新）。
+   （那样拿到的是旧引用，重新初始化后不会更新）；
+3. handler 挂在**根 logger** 上，包内模块用 `logging.getLogger(__name__)`
+   （如 `fingerprint.fpcalc`）也靠传播写进同一份 `log/Music-*.log`；
+   包初始化里不许调 `logging.basicConfig`（会多挂一个只往 stderr 写的 handler，
+   日志就绕过了文件）。
 
 文件名解析、艺术家拆分、歌词判断等逻辑统一在 `core.naming` / `core.lyrics`。
 本模块历史上有一层「兼容壳」把它们再包一遍，但生产代码零调用、测试只测到壳，
@@ -25,6 +29,9 @@ LOG_DIR = config.LOG_DIR
 
 main_logger = logging.getLogger('music_manager')
 log_file = None
+# setup_logging 自己装的 handler；重新初始化时只摘这些，不动别人挂的
+# （Web 任务采集用的 _TaskHandler 也挂在根 logger 上，不能误删）
+_log_handlers = []
 
 
 _WINDOWS_ABS = re.compile(r'^[A-Za-z]:[\\/]')
@@ -137,8 +144,15 @@ def _make_handler(kind, path, level, fmt):
 
 
 def setup_logging(debug_mode=False):
-    """初始化主日志（可重复调用，不会叠加 handler）"""
-    global main_logger, log_file
+    """初始化主日志（可重复调用，不会叠加 handler）
+
+    handler 挂根 logger，不挂 `music_manager`：业务代码显式用
+    `utils.main_logger`，包内模块用 `logging.getLogger(__name__)`
+    （`fingerprint.*`、`decrypto.*`），两类记录都靠传播汇入同一组 handler。
+    只挂 `music_manager` 会让子模块日志落到 basicConfig 的 stderr 上，
+    `log/Music-*.log` 里永远看不到声纹与 HTTP 的明细。
+    """
+    global main_logger, log_file, _log_handlers
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     os.makedirs(LOG_DIR, exist_ok=True)
@@ -148,13 +162,21 @@ def setup_logging(debug_mode=False):
     main_logger = logging.getLogger('music_manager')
     main_logger.setLevel(level)
 
-    for handler in main_logger.handlers[:]:
-        main_logger.removeHandler(handler)
+    root = logging.getLogger()
+    for handler in _log_handlers:
+        root.removeHandler(handler)
         handler.close()
 
-    main_logger.addHandler(_make_handler('file', log_file, level,
-                                         '%(asctime)s - %(levelname)s - %(message)s'))
-    main_logger.addHandler(_make_handler('console', None, level, '%(levelname)s: %(message)s'))
+    _log_handlers = [
+        _make_handler('file', log_file, level,
+                      '%(asctime)s - %(levelname)s - %(message)s'),
+        _make_handler('console', None, level, '%(levelname)s: %(message)s'),
+    ]
+    # 根 logger 放到 DEBUG，让子模块的 DEBUG 记录能到达 handler；
+    # 真正输出什么级别由 handler 的 level 决定（正常模式 INFO / 调试模式 DEBUG）
+    root.setLevel(logging.DEBUG)
+    for handler in _log_handlers:
+        root.addHandler(handler)
 
     main_logger.info(f'运行模式: {"调试" if debug_mode else "正常"}')
     main_logger.info(f'日志文件: {log_file}')

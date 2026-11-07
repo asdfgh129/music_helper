@@ -44,6 +44,7 @@ class TestMonthTools(unittest.TestCase):
 
 
 class TestSetupLogging(unittest.TestCase):
+    """日志初始化：handler 挂根 logger，子模块日志必须能落盘"""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix='mh_log_')
@@ -51,25 +52,38 @@ class TestSetupLogging(unittest.TestCase):
         self.addCleanup(self._reset_handlers)
 
     def _reset_handlers(self):
-        """把主日志的 handler 全关掉，否则 Windows 上临时目录删不掉。"""
-        for handler in utils_mod.main_logger.handlers[:]:
-            utils_mod.main_logger.removeHandler(handler)
+        """把本模块装的 handler 全关掉，否则 Windows 上临时目录删不掉。"""
+        root = logging.getLogger()
+        for handler in utils_mod._log_handlers:
+            root.removeHandler(handler)
             handler.close()
+        utils_mod._log_handlers = []
+
+    def _read_log(self):
+        for handler in utils_mod._log_handlers:
+            handler.flush()
+        with open(utils_mod.log_file, encoding='utf-8') as handle:
+            return handle.read()
 
     def test_creates_log_file_and_two_handlers(self):
         with mock.patch.object(utils_mod, 'LOG_DIR', self.tmp):
-            logger = utils_mod.setup_logging()
-            self.assertEqual(len(logger.handlers), 2)          # 文件 + 控制台
+            utils_mod.setup_logging()
+            root = logging.getLogger()
+            self.assertEqual(len(utils_mod._log_handlers), 2)   # 文件 + 控制台
+            for handler in utils_mod._log_handlers:
+                self.assertIn(handler, root.handlers)
             self.assertTrue(os.path.exists(utils_mod.log_file))
             self.assertTrue(utils_mod.log_file.startswith(self.tmp))
 
     def test_repeated_call_does_not_stack_handlers(self):
         with mock.patch.object(utils_mod, 'LOG_DIR', self.tmp):
             first = utils_mod.setup_logging()
-            count = len(first.handlers)
+            count = len(utils_mod._log_handlers)
             second = utils_mod.setup_logging()
             self.assertIs(first, second)
-            self.assertEqual(len(second.handlers), count)
+            self.assertEqual(len(utils_mod._log_handlers), count)
+            self.assertEqual(sum(1 for h in logging.getLogger().handlers
+                                 if h in utils_mod._log_handlers), count)
 
     def test_debug_mode_sets_debug_level(self):
         with mock.patch.object(utils_mod, 'LOG_DIR', self.tmp):
@@ -77,6 +91,24 @@ class TestSetupLogging(unittest.TestCase):
             self.assertEqual(logger.level, logging.DEBUG)
             normal = utils_mod.setup_logging(debug_mode=False)
             self.assertEqual(normal.level, logging.INFO)
+
+    def test_child_logger_writes_into_same_file(self):
+        """回归：fingerprint.* 这类子模块日志曾因 handler 挂错位置而只进 stderr"""
+        with mock.patch.object(utils_mod, 'LOG_DIR', self.tmp):
+            utils_mod.setup_logging()
+            logging.getLogger('fingerprint.fpcalc').info('CHILD-INFO-LINE')
+            self.assertIn('CHILD-INFO-LINE', self._read_log())
+
+    def test_child_debug_only_in_debug_mode(self):
+        with mock.patch.object(utils_mod, 'LOG_DIR', self.tmp):
+            utils_mod.setup_logging()
+            logging.getLogger('fingerprint.fpcalc').debug('CHILD-DEBUG-LINE')
+            self.assertNotIn('CHILD-DEBUG-LINE', self._read_log())
+
+        with mock.patch.object(utils_mod, 'LOG_DIR', self.tmp):
+            utils_mod.setup_logging(debug_mode=True)
+            logging.getLogger('fingerprint.fpcalc').debug('CHILD-DEBUG-LINE')
+            self.assertIn('CHILD-DEBUG-LINE', self._read_log())
 
 
 class TestPlatformTools(unittest.TestCase):

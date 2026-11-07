@@ -76,6 +76,9 @@ Web 向导第一步改的目录会**直接写回 `config.ini` 的 `[paths]`** �
 | 报告 | `log/reports/` |
 | 回收站 | `log/_trash/` |
 
+运行日志只有一份，主流程、解密、声纹/指纹都写进去；`--debug` 决定是否包含 HTTP 请求与
+外部程序输出的明细，位置不变。
+
 旧配置名 `MAIN_DIR`、`TEMP_COMPLETED_DIR`、`TEMP_MOVE_DIR`、`TEMP_REVIEW_DIR`、
 `NETEASE_TMP_DIR`、`QQ_TMP_DIR` 仍作为别名存在，但新代码与文档只使用语义名。
 

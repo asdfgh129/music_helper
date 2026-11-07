@@ -12,7 +12,8 @@ addopts = "-ra --strict-markers"
 [tool.ruff]
 line-length = 110
 target-version = "py311"
-exclude = ["decrypto", "fingerprint", "log", ".git", "tmp", "third_party"]
+# decrypto 里的 Frida 注入脚本与上游移植代码尚未整形，先排除；fingerprint 已拆分重写，纳入检查
+exclude = ["decrypto", "log", ".git", "tmp", "third_party"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
