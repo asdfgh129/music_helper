@@ -181,13 +181,17 @@ if match.success and match.recordings:
 ## 7. 调试
 
 ```bash
-# 提高日志级别看每一步请求与响应
+# debug_mode=True 把 fingerprint 包的日志级别放到 DEBUG，
+# 独立运行时输出到 stderr（此时没有主流程的日志文件）
 python -c "
 from fingerprint import FingerprintMatcher
 m = FingerprintMatcher(debug_mode=True)
 print(m.match_file('tests/fixtures/1.flac').recordings[:1])
 "
 ```
+
+在流水线里不要直接改代码：`python main.py --debug` 会把同一个包的 DEBUG 记录写进
+`log/Music-*.log`（与主流程共用一套 handler），排查完直接 `grep AcoustID log/Music-*.log`。
 
 `tests/manual/manual_musicbrainz.py` 是现成的手工验证脚本（需要真实网络与 AcoustID key）：
 `--mode match` 跑全链路，`--mode api` 只打裸接口用来区分网络问题与匹配链路问题，

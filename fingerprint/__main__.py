@@ -5,6 +5,7 @@
 不参与流水线。流水线走 `tagger` 的 `Tagger.update()`。
 """
 
+import logging
 import sys
 
 from .formatting import format_complete_tags
@@ -13,6 +14,8 @@ from .matcher import FingerprintMatcher
 
 def main(argv=None):
     """匹配单个音频文件并打印完整标签信息"""
+    logging.basicConfig(level=logging.INFO,
+                        format='%(levelname)s: %(message)s')
     argv = list(sys.argv[1:] if argv is None else argv)
 
     if not argv:

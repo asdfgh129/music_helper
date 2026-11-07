@@ -26,6 +26,12 @@ class FingerprintMatcher:
         self.acoustid_client = AcoustIDClient(client_version)
         self.debug_mode = debug_mode
         if debug_mode:
+            # debug_mode 只管开关：真正让 DEBUG 记录可见还得把级别放开。
+            # 主程序已配好根 handler 时只调级别，不抢它的输出目标。
+            logging.getLogger('fingerprint').setLevel(logging.DEBUG)
+            if not logging.getLogger().handlers:
+                logging.basicConfig(level=logging.DEBUG,
+                                    format='%(levelname)s: %(message)s')
             logger.debug("=" * 60)
             logger.debug("FingerprintMatcher 初始化")
             logger.debug(f"  debug_mode = {debug_mode}")

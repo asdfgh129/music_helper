@@ -410,12 +410,15 @@ class TaskManager:
         task.started_at = time.time()
         task.stage = "启动"
         logger = utils.main_logger
+        # 采集 handler 挂根 logger：main_logger 的记录靠传播到这里，
+        # 包内模块（fingerprint.* 等）的日志也能进前端实时日志。
+        root_logger = logging.getLogger()
         handler = _TaskHandler(task)
         handler.setLevel(logging.DEBUG)
         wizard = task.kind in _WIZARD_KINDS
         args = None if wizard else _build_args(task.opts)
         try:
-            logger.addHandler(handler)
+            root_logger.addHandler(handler)
             # 向导步骤自己负责建目录（init 就是干这个的）；CLI 流程沿用老规矩：
             # 只有真执行（非试运行）才建目录
             if args is not None and not args.dry_run:
@@ -436,7 +439,7 @@ class TaskManager:
                 task.finished_at = time.time()
                 return
         finally:
-            logger.removeHandler(handler)
+            root_logger.removeHandler(handler)
             handler.close()
         task.status = "done"
         task.progress = 100

@@ -15,6 +15,10 @@
 `journal.jsonl` 每行一个 JSON，字段包括 `time`、`plan`、`action`、`src`、`dst`、`reason`、
 `ok`、`error`。排查「文件去哪了」优先看它。
 
+`Music-*.log` 是**一份**日志：主流程、解密、声纹/指纹（`fingerprint.*`）都写在这里，行首没有模块名。
+正常模式只记摘要；要看 AcoustID 请求参数、HTTP 响应、fpcalc 输出，加 `--debug` 重跑——
+这些明细**只**在调试模式落盘，正常模式的下游没有第二份副本。
+
 ## 2. 启动与配置
 
 ### `import main` 失败
@@ -125,6 +129,19 @@ python -c "import config; print(config.FPCALC_EXE)"
   也可以 `brew install chromaprint`，再用 `MUSIC_HELPER_FPCALC_EXE` 指过去；
 - Windows：一般已装在 `C://Windows//System32//fpcalc.exe`；
 - 想换版本就覆盖 `tools/fpcalc`，注意指纹长度仍受 `Settings` 表约束（见上一节）。
+
+### 日志里看不到 AcoustID / MusicBrainz 的请求
+
+正常模式只写摘要，HTTP 明细（URL、参数、状态码、fpcalc 输出）只在 `--debug` 下记录：
+
+```bash
+python main.py --debug 2>&1 | tee /tmp/run.log   # Windows PowerShell: python main.py --debug *>&1 | Tee-Object run.log
+grep -n "AcoustID\|HTTPClient\|fpcalc" log/Music-*.log
+```
+
+如果加了 `--debug` 仍然没有，检查是不是有模块在包初始化里调了 `logging.basicConfig`——
+它会把 handler 抢到根 logger 且只写 stderr，文件里就只剩主流程的记录。约定见
+[architecture.md](architecture.md#82-任务与日志)。
 
 ### QQ 音乐解密失败
 

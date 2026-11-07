@@ -110,6 +110,7 @@ music_helper/
 | [docs/web-guide.md](docs/web-guide.md) | 八步向导的操作说明（配图） |
 | [docs/workflow.md](docs/workflow.md) | 端到端流程、状态迁移、失败处理 |
 | [docs/rules.md](docs/rules.md) | 全部判定规则 |
+| [docs/algorithms.md](docs/algorithms.md) | 去重/声纹/解密等算法的判定顺序、阈值与 UML 图 |
 | [docs/usage.md](docs/usage.md) | 命令行手册 |
 | [docs/configuration.md](docs/configuration.md) | 配置、目录语义、外部工具、阈值 |
 | [docs/architecture.md](docs/architecture.md) | 分层、模块、`Plan`、扩展指南 |

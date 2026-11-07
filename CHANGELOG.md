@@ -195,6 +195,16 @@
 
 ### 修复
 
+- **声纹/指纹的日志从来没进过日志文件**：`fingerprint/__init__.py` 在导入时调了
+  `logging.basicConfig`，把 `fingerprint.*` 的记录抢到 stderr；主流程的 handler 只挂在
+  `music_manager` 上，于是 `log/Music-*.log` 里没有 AcoustID 请求、HTTP 响应与 fpcalc 输出，
+  `--debug` 也只放开主流程的级别。现在 handler 统一挂在根 logger（`utils.setup_logging`），
+  子模块按 `logging.getLogger(__name__)` 取 logger 即可落盘；Web 任务的实时日志采集也改挂
+  根 logger，指纹链路在页面上同样可见。包初始化里不再有 `basicConfig`，独立跑
+  `python -m fingerprint` 时由 `__main__` 自己配。
+- **`FingerprintMatcher(debug_mode=True)` 之前只是多打了几行，并没有真开 DEBUG**：
+  现在会同时把 `fingerprint` 包的级别放到 DEBUG（无 handler 时补一个），文档里的调试示例
+  才真的能看到请求与响应。
 - **QQ 解密「一个都解不开」的根因查清了**（上一版记的「Open 第 2 个 bool 传 true 必抛 /
   对象尺寸 0x28 不够」是误判，`tools/hook_qq_music.js` 已保持原样，`Open(path,1,0)` +
   `Memory.alloc(0x28)` 本身没问题）：
@@ -328,6 +338,13 @@
 
 ### 文档
 
+- 同步日志约定：[architecture.md](docs/architecture.md#82-任务与日志) 写清「handler 挂根 logger、
+  包初始化不许 `basicConfig`」，[troubleshooting.md](docs/troubleshooting.md) 新增
+  「日志里看不到 AcoustID / MusicBrainz 的请求」，[usage.md](docs/usage.md) /
+  [configuration.md](docs/configuration.md) 说明 `--debug` 只是放开级别、日志位置不变，
+  [fingerprint.md](docs/fingerprint.md#7-调试) 修正 `debug_mode=True` 的调试示例。
+- 修正 `docs/architecture.md` 的一处结构错误：11 行「已知坑」表格漂在 §8.4 之后、没有标题，
+  已移回 §7。
 - `docs/architecture.md` 更新 `tagger/` 与 `tools/`、`third_party/`、`scripts/` 的职责边界，
   新增 `fingerprint/` 子模块表与「为什么 `platforms/__init__.py` 不做转导出」的说明。
 - 新增 [scripts/README.md](scripts/README.md)：讲清 `check_docs.py`、`gen_web_guide_images.py`、

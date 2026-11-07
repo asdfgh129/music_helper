@@ -66,6 +66,11 @@ python main.py --check --dry-run                     # 用真实配置预览
 10. **新增音频格式要成对改**：`config.AUDIO_EXTENSIONS` 与 `core/tags.py` 的 `_READERS` /
     `_COVER_READERS`。只加扩展名不加读取器，整类文件会被判成「缺标签」搬进 `INCOMPLETE_DIR`；
     `tests/test_tags.py` 会拦住这种漏改。
+11. **日志只配一次，handler 挂在根 logger**：`utils.setup_logging()` 负责装文件 + 控制台两个
+    handler，业务代码显式用 `utils.main_logger`，包内模块用 `logging.getLogger(__name__)`，
+    两类记录靠传播进同一份 `log/Music-*.log`。**不要在模块或包初始化里调 `logging.basicConfig`**
+    ——它会多挂一个只写 stderr 的 handler，子模块日志从此绕过文件（`fingerprint` 曾因此
+    整条链路不进日志）。`--debug` 只调 handler 与 `music_manager` 的级别，不要另建日志系统。
 
 ## 测试
 

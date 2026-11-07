@@ -18,9 +18,12 @@
 | `matcher` | 门面 `FingerprintMatcher`，主流程只用这个 |
 
 命令行验证单条链路：`python -m fingerprint <audio_file>`。
-"""
 
-import logging
+日志：本包只 `logging.getLogger(__name__)`，handler 由使用者配置
+（主程序走 `utils.setup_logging`，CLI 走 `__main__` 里的 basicConfig）。
+包初始化里**不要**调 `logging.basicConfig`——它会在根 logger 上多挂一个只写
+stderr 的 handler，`log/Music-*.log` 就收不到指纹链路的日志了。
+"""
 
 from .acoustid import AcoustIDClient
 from .formatting import format_complete_tags, format_recording_info, map_recording_to_tags
@@ -29,9 +32,6 @@ from .http_client import HTTPClient
 from .matcher import FingerprintMatcher
 from .models import AcoustIDConfig, FingerprintResult, MatchResult, Recording
 from .musicbrainz import JSONHelpers, RecordingResolver, ReleaseLoader
-
-# 原单文件模块在导入时就配好日志；拆包后统一放在包初始化处，行为不变
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 __all__ = [
     'FingerprintMatcher',
