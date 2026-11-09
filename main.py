@@ -441,6 +441,13 @@ def flow_manual_archive(args):
     executed = len(organized) if args.dry_run else (len(result.done) if result else 0)
 
     report.add_summary('入库成功', executed)
+    if executed and config.FP_WRITE_ON_ARCHIVE and not args.dry_run:
+        refreshed = soundalike.refresh_db()
+        report.add_summary('声纹库补录', refreshed.summary())
+        if not refreshed.ok:
+            utils.main_logger.warning(
+                f'新入库文件的指纹未写入声纹库：{refreshed.message}；'
+                f'请执行 python main.py --init 补建后再做下一轮查重')
     report.add_summary('待人工', len(incomplete) + len(unknown))
 
     waiting = scanner.scan([config.INCOMPLETE_DIR])

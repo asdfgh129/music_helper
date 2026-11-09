@@ -47,7 +47,7 @@
 | `core/naming.py` | 文件名规则（唯一实现） | `parse_filename`、`canonicalize`、`format_filename`、`version_key` |
 | `core/tags.py` | 标签读写 + 封面 + 时长 + 音频规格（唯一实现） | `read_meta`、`read_tags`、`read_quality`、`write_tags`、`write_cover`、`has_cover`、`duration` |
 | `core/lyrics.py` | 歌词缺失 / 孤立 | `missing_lrc`、`orphan_lrc` |
-| `core/dedupe.py` | 本地重复判定 + 跨集合比对 | `find_by_tag`、`find_by_filename`、`find_duplicates`、`match_against` |
+| `core/dedupe.py` | 本地重复判定 + 跨集合比对（含声纹信号，唯一实现） | `find_by_tag`、`find_by_filename`、`find_duplicates`、`match_against`、`fingerprint_similarity`、`fingerprint_candidates`、`version_markers_conflict` |
 | `core/quality.py` | 音质比较（同一录音该留哪一份） | `is_lossless`、`compare`、`describe` |
 | `core/organize.py` | 年代/年份归档 | `plan_organize(tracks, base_dir, plan)` |
 | `core/check.py` | 检查、修复计划、入库判定 | `check_library`、`plan_fixes`、`report_into`、`readiness_problems` |
@@ -61,7 +61,7 @@
 | 模块 | 职责 | 依赖 |
 |---|---|---|
 | `services/decrypt.py` | 网易云 / QQ 解密编排 | `tools/um`（三平台；macOS 与旧版 QQ 走它）、`decrypto`（Frida，仅 Windows） |
-| `services/soundalike.py` | 声纹去重、库一致性、建库/补库（`init_db`） | `tools/soundalike`（Windows 为 `soundalike.exe`）、`fpcalc` |
+| `services/soundalike.py` | 声纹去重、库一致性、建库/补库（`init_db` / `refresh_db`）、只读查询库指纹（`library_fingerprints`）、现场算指纹（`fingerprint_of`） | `tools/soundalike`（Windows 为 `soundalike.exe`）、`fpcalc` |
 | `services/steps.py` | Web 向导八步编排（CLI 与 Web 共用） | `core/*`、`services/*`、`tagger/` |
 | `services/settings_store.py` | `config.ini [paths]` 的唯一写入点（校验 + 落盘 + `config.reload()`） | 标准库 |
 

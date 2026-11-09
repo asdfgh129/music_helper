@@ -4,16 +4,21 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import config
 from core.dedupe import (
     find_by_filename,
     find_by_tag,
     find_duplicates,
+    fingerprint_candidates,
+    fingerprint_similarity,
     match_against,
     pick_keep,
     strip_suffix,
+    version_markers_conflict,
 )
 from core.model import Track
 from core.ops import Plan
@@ -328,6 +333,69 @@ class TestMatchAgainst(unittest.TestCase):
         result = match_against(targets, [])
         self.assertEqual([item.track.path for item in result],
                          [t.path for t in targets])
+
+
+class TestFingerprintSignals(unittest.TestCase):
+    """声纹是第三条查重信号：不同文件名、不同标签的同一录音也必须命中"""
+
+    def setUp(self):
+        patcher = mock.patch.multiple(config, FP_LOOKUP_THRESHOLD=0.25,
+                                      FP_MATCH_THRESHOLD=0.95)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def _fp(count=120):
+        return tuple((1 + index * 7919) & 0xFFFFFFFF for index in range(count))
+
+    @staticmethod
+    def _probe(_track):
+        return {'duration': 200.0, 'bitrate': 900,
+                'sample_rate': 44100, 'bit_depth': 16}
+
+    def test_identical_fingerprint_scores_one(self):
+        fp = self._fp()
+        self.assertAlmostEqual(fingerprint_similarity(fp, fp), 1.0)
+
+    def test_unrelated_fingerprint_scores_low(self):
+        self.assertLess(fingerprint_similarity((0,) * 120, (0xFFFFFFFF,) * 120), 0.1)
+
+    def test_offset_alignment(self):
+        fp = self._fp()
+        self.assertGreater(fingerprint_similarity(fp[3:], fp), 0.5)
+
+    def test_candidates_find_pool_entry(self):
+        fp = self._fp()
+        other = track('D:/lib/a.flac')
+        hits = fingerprint_candidates(fp, [(other, fp)])
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0][0].path, other.path)
+        self.assertAlmostEqual(hits[0][1], 1.0)
+
+    def test_different_name_and_tags_is_duplicate(self):
+        fp = self._fp()
+        library = track('D:/lib/1990-1999/1990/别的歌手 - 完全不同的名字.flac',
+                        200, 5000, title='完全不同的名字', artist='别的歌手')
+        workspace = track('D:/ws/周杰伦 - 晴天.flac', 200, 5000,
+                          title='晴天', artist='周杰伦')
+        workspace.fingerprint = fp
+        result = match_against([workspace], [library], probe=self._probe,
+                               fp_pool=[(library, fp)])
+        self.assertEqual(result[0].kind, '声纹')
+        self.assertEqual(result[0].status, 'duplicate')
+        self.assertEqual(result[0].matched[0].path, library.path)
+
+    def test_version_marker_conflict_goes_unknown(self):
+        fp = self._fp()
+        library = track('D:/lib/1990-1999/1990/周杰伦 - 晴天 (Live).flac',
+                        200, 5000, title='晴天 (Live)', artist='周杰伦')
+        workspace = track('D:/ws/周杰伦 - 晴天 (Remix).flac', 200, 5000,
+                          title='晴天 (Remix)', artist='周杰伦')
+        workspace.fingerprint = fp
+        result = match_against([workspace], [library], probe=self._probe,
+                               fp_pool=[(library, fp)])
+        self.assertTrue(version_markers_conflict(workspace, library))
+        self.assertEqual(result[0].status, 'unknown')
 
 
 if __name__ == '__main__':

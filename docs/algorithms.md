@@ -1044,9 +1044,22 @@ flowchart TD
 
 `into_library=False` 时基准目录是工作区，用于「先在工作区内整理成年代结构、暂不入库」。
 
-### 12.3 归档不判定重复
+### 12.3 归档只复核，不重新判定
 
-`plan_organize()` 只管目录，不查库。查重是第 6 步的事（`match_against`），归档是第 8 步。分开的理由：查重需要人工确认（`upgrade` 要动库存量文件），归档要一次跑完；混在一起会让「归档」这个本该纯粹的步骤带上高风险决策。
+`plan_organize()` 只管目录，不查库；判定仍只在第 6 步的 `match_against`。但
+`run_archive(into_library=True)` 在动手前会**复核**第 6 步结论，防止用户跳过查重
+直接归档：
+
+1. `dedupe_preview()` 的 `fingerprint_ready` 为假（声纹库缺失/空库/工具不可用）时
+   抛错，一项 Plan 都不执行；
+2. `duplicate` / `unknown` / `upgrade` 的文件从待归档列表剔除，留在工作区
+   （`upgrade` 必须先在第 6 步让库里旧版本移走），返回结果里的 `blocked`
+   列出路径与原因；标签不达标的文件仍按原规则移入 `INCOMPLETE_DIR`；
+3. 真正进入 `LIBRARY_DIR` 后，调 `soundalike.refresh_db()` 把新文件的指纹增量
+   写入 `music.db`（幂等、试运行不写库），并让库索引与指纹池缓存失效。
+
+分开的理由没变：查重需要人工确认（`upgrade` 要动库存量文件），归档要一次跑完；
+复核只是把「第 6 步必须做过且声纹库就绪」变成不可绕过的闸门，不新增判定规则。
 
 ---
 
@@ -1118,7 +1131,11 @@ sequenceDiagram
 | `DURATION_TOLERANCE` | `duration_tolerance` | 3.0 s | 时长聚类与跨集合同录音判定 |
 | `BITRATE_TOLERANCE` | 常量 | 0.10 | 有损码率视为同水平的相对差 |
 | `FPCALC_LENGTH` | `fpcalc_length` | 120 s | 指纹采样长度；改它必须重建声纹库 |
-| `FINGERPRINT_THRESHOLD` | `fingerprint_threshold` | 50 | 声纹结果是否被采用 |
+| `FINGERPRINT_THRESHOLD` | `fingerprint_threshold` | 50 | 声纹结果是否被采用（AcoustID） |
+| `FP_DEDUPE_ENABLED` | `fp_dedupe` | 1 | 第 6 步是否启用声纹信号；关闭也不放行入库 |
+| `FP_WRITE_ON_ARCHIVE` | `fp_write_on_archive` | 1 | 归档成功后是否补录新文件指纹 |
+| `FP_LOOKUP_THRESHOLD` | `fp_lookup_threshold` | 0.25 | 16 位截断倒排筛选比例 |
+| `FP_MATCH_THRESHOLD` | `fp_match_threshold` | 0.95 | 逐位相似度判定同一录音 |
 | `MAX_COVER_SIZE` | `max_cover_size` | 5 MB | 封面下载上限 |
 | `SUBPROCESS_TIMEOUT` | `subprocess_timeout` | 3600 s | 所有外部程序超时 |
 | `ENCRYPTED_SOURCE_MODE` | `encrypted_source_mode` | `return` | 加密原件去向 |
@@ -1127,6 +1144,23 @@ sequenceDiagram
 | `MATCHED_LIMIT` | 常量 | 50 | 单个工作区文件最多列出的库内对应文件数 |
 | `SOURCE_THRESHOLD_NO_METADATA` | 常量 | 0.25 | 触发 MusicBrainz 补拉的 sources 占比 |
 | `MAX_NO_METADATA_RECORDINGS` | 常量 | 3 | 同一结果最多补拉几条 |
+
+### 14.1 跨集合查重的声纹公式
+
+`core/dedupe.fingerprint_similarity(a, b)` 与 soundalike 的 `compareFingerprints`
+同式：在所有偏移上取「对应 32 位里相同位数」之和的最大值，除以
+\(32 \times \max(|a|, |b|)\)：
+
+\[
+score = \frac{\max_{offset} \sum_{i} \left(32 - \operatorname{popcount}(a_i \oplus b_i)\right)}
+              {32 \times \max(|a|, |b|)}
+\]
+
+`fingerprint_candidates()` 先用高 16 位建倒排表，命中数不足
+\(|fp| \times 0.25\) 的库记录直接跳过，剩下的才做逐位精算；\(score \ge 0.95\)
+判为同一录音。指纹来自 `fpcalc -raw -json -length 120 -algorithm 2`，库里以
+小端 uint32 BLOB 存储，两边同源；阈值不要单独调整，否则与 soundalike 的全库
+去重结论会分叉。
 
 配置优先级固定为**环境变量 > `config.ini` > 默认值**（见 [configuration.md](configuration.md)）。
 

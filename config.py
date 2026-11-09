@@ -165,6 +165,7 @@ def reload():
     global QMC_MMKV, QMC_MMKV_KEY
     global SUBPROCESS_TIMEOUT, FPCALC_LENGTH, FINGERPRINT_THRESHOLD
     global DURATION_TOLERANCE, MAX_COVER_SIZE, ENCRYPTED_SOURCE_MODE
+    global FP_DEDUPE_ENABLED, FP_WRITE_ON_ARCHIVE, FP_LOOKUP_THRESHOLD, FP_MATCH_THRESHOLD
     # 旧名兼容别名（下游脚本可能还在用；新代码请用上面的语义名）
     global MAIN_DIR, TEMP_COMPLETED_DIR, TEMP_MOVE_DIR, TEMP_REVIEW_DIR
     global NETEASE_TMP_DIR, QQ_TMP_DIR
@@ -228,6 +229,16 @@ def reload():
     SUBPROCESS_TIMEOUT = _int('MUSIC_HELPER_TIMEOUT', 'settings', 'subprocess_timeout', 3600)
     FPCALC_LENGTH = _int('MUSIC_HELPER_FPCALC_LENGTH', 'settings', 'fpcalc_length', 120)
     FINGERPRINT_THRESHOLD = _int('MUSIC_HELPER_FP_THRESHOLD', 'settings', 'fingerprint_threshold', 50)
+    # 工作区入库查重：声纹是「该不该入库」的必要信号，不是可选增强
+    FP_DEDUPE_ENABLED = bool(_int('MUSIC_HELPER_FP_DEDUPE', 'settings', 'fp_dedupe', 1))
+    # 归档成功后把新文件指纹增量补进 music.db
+    FP_WRITE_ON_ARCHIVE = bool(_int('MUSIC_HELPER_FP_WRITE_ON_ARCHIVE', 'settings',
+                                    'fp_write_on_archive', 1))
+    # 与 soundalike 的 0.25 / 0.95 保持一致，别单独调：改了就等于换判定口径
+    FP_LOOKUP_THRESHOLD = _float('MUSIC_HELPER_FP_LOOKUP_THRESHOLD', 'settings',
+                                 'fp_lookup_threshold', 0.25)
+    FP_MATCH_THRESHOLD = _float('MUSIC_HELPER_FP_MATCH_THRESHOLD', 'settings',
+                                'fp_match_threshold', 0.95)
     DURATION_TOLERANCE = _float('MUSIC_HELPER_DURATION_TOLERANCE', 'settings',
                                 'duration_tolerance', 3.0)
     MAX_COVER_SIZE = _int('MUSIC_HELPER_MAX_COVER_SIZE', 'settings', 'max_cover_size',
@@ -291,6 +302,8 @@ def as_dict():
         'QQ目录': QQ_DIR,
         'QQVIP': QQ_VIP_DIR,
         '声纹库': DB_PATH,
+        '声纹查重': FP_DEDUPE_ENABLED,
+        '入库补录指纹': FP_WRITE_ON_ARCHIVE,
         '报告目录': REPORT_DIR,
         '回收站': TRASH_DIR,
     }

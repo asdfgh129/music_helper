@@ -158,7 +158,11 @@ Windows 的 `fpcalc.exe` 一般已在 `C:\Windows\System32`，仓库里不再单
 |---|---|---|---|
 | `subprocess_timeout` | `3600` 秒 | `MUSIC_HELPER_TIMEOUT` | 外部程序单次执行上限 |
 | `fpcalc_length` | `120` 秒 | `MUSIC_HELPER_FPCALC_LENGTH` | 指纹采样长度；补标签与声纹去重共用。声纹库会锁定该值，改它要删库重建（见 [fingerprint.md](fingerprint.md#85-阈值)） |
-| `fingerprint_threshold` | `50` | `MUSIC_HELPER_FP_THRESHOLD` | 声纹/在线匹配最低分（0–100） |
+| `fingerprint_threshold` | `50` | `MUSIC_HELPER_FP_THRESHOLD` | 声纹/在线匹配最低分（0–100，AcoustID 用） |
+| `fp_dedupe` | `1` | `MUSIC_HELPER_FP_DEDUPE` | 第 6 步是否启用声纹信号。声纹库是入库必要前置，关闭后所有文件都不会下发 `archive_ok`、第 8 步拒绝入库 |
+| `fp_write_on_archive` | `1` | `MUSIC_HELPER_FP_WRITE_ON_ARCHIVE` | 归档成功后是否把新文件指纹增量写入 `music.db`（试运行不写） |
+| `fp_lookup_threshold` | `0.25` | `MUSIC_HELPER_FP_LOOKUP_THRESHOLD` | 16 位截断倒排筛选比例，与 soundalike 一致 |
+| `fp_match_threshold` | `0.95` | `MUSIC_HELPER_FP_MATCH_THRESHOLD` | 逐位相似度判定同一录音，与 soundalike 一致 |
 | `duration_tolerance` | `3.0` 秒 | `MUSIC_HELPER_DURATION_TOLERANCE` | 标签/文件名查重允许的时长误差 |
 | `max_cover_size` | `5242880` 字节 | `MUSIC_HELPER_MAX_COVER_SIZE` | 封面下载上限，超过直接放弃 |
 | `encrypted_source_mode` | `return` | `MUSIC_HELPER_ENCRYPTED_MODE` | 解密成功后加密原文件去向 |

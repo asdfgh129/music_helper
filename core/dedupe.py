@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass, field
 
 from core import quality
-from core.naming import normalize_text
+from core.naming import normalize_text, version_markers
 
 # 数值越大越优先保留
 _QUALITY = {'.flac': 5, '.dsf': 5, '.wav': 4, '.ape': 4,
@@ -255,16 +255,99 @@ def _probe_info(track, probe, cache):
     return info
 
 
-def match_against(targets, pool, tolerance=None, probe=None):
+def default_fp_thresholds():
+    """声纹查重的两个阈值，唯一来源是 config（与 soundalike 的默认值一致）"""
+    from config import FP_LOOKUP_THRESHOLD, FP_MATCH_THRESHOLD
+
+    return FP_LOOKUP_THRESHOLD, FP_MATCH_THRESHOLD
+
+
+def fingerprint_similarity(left, right):
+    """两条原始指纹的位相似度：所有偏移上取最高分 / (32 × 较长者长度)
+
+    与 `third_party/soundalike/scan.go` 的 `compareFingerprints` 同一公式。
+    输入是 `fpcalc -raw -json` 的 uint32 数组；声纹库里以小端 BLOB 存放。
+    """
+    if not left or not right:
+        return 0.0
+
+    def matching(a, b):
+        return sum(32 - (a[i] ^ b[i]).bit_count() for i in range(min(len(a), len(b))))
+
+    best = matching(left, right)
+    for offset in range(1, len(left)):
+        best = max(best, matching(left[offset:], right))
+    for offset in range(1, len(right)):
+        best = max(best, matching(left, right[offset:]))
+    return best / (32 * max(len(left), len(right)))
+
+
+def fingerprint_candidates(target_fp, pool, lookup_threshold=None, match_threshold=None):
+    """在库指纹池里找同一录音：16 位截断倒排筛选 → 逐位精算
+
+    `pool` 是 `[(Track, fingerprint), ...]`。返回 `[(Track, score)]`，按分数降序。
+    名称与标签完全不参与判定——这正是声纹相对「歌手+歌名」「文件名」两条
+    本地规则多出来的能力：不同文件名、不同标签的同一录音也能命中。
+    """
+    if not target_fp or not pool:
+        return []
+    default_lookup, default_match = default_fp_thresholds()
+    lookup_threshold = default_lookup if lookup_threshold is None else lookup_threshold
+    match_threshold = default_match if match_threshold is None else match_threshold
+
+    table = {}
+    for index, (_track, fp) in enumerate(pool):
+        for value in fp:
+            key = (value >> 16) & 0xFFFF
+            bucket = table.setdefault(key, {})
+            bucket[index] = bucket.get(index, 0) + 1
+
+    hits = {}
+    for value in target_fp:
+        key = (value >> 16) & 0xFFFF
+        for index, count in table.get(key, {}).items():
+            seen = hits.setdefault(index, {})
+            if seen.get(key, 0) < count:
+                seen[key] = seen.get(key, 0) + 1
+
+    needed = int(len(target_fp) * lookup_threshold)
+    scored = []
+    for index, seen in hits.items():
+        if sum(seen.values()) < needed:
+            continue
+        score = fingerprint_similarity(target_fp, pool[index][1])
+        if score >= match_threshold:
+            scored.append((pool[index][0], score))
+    return sorted(scored, key=lambda item: -item[1])
+
+
+def version_markers_conflict(target, other):
+    """两侧版本标记不同时不自动判重复（Live / Remix / 伴奏 等）
+
+    只比较标记类别，不比较歌手/歌名：文件名与标签完全不同、但标记不冲突的
+    同一录音仍然要能被声纹认出来；反过来，指纹很像却是「Live vs 录音室」
+    时一律转人工，不让声纹覆盖版本标记。
+    """
+    def marks(track):
+        return set(version_markers(track.title)) | set(version_markers(track.stem))
+
+    left, right = marks(target), marks(other)
+    return bool(left or right) and left != right
+
+
+def match_against(targets, pool, tolerance=None, probe=None, fp_pool=None):
     """把一批文件逐个与「已在库里的文件」比对，判断是新的、重复的还是要替换的
 
     与 `find_duplicates()` 的区别：
     - 这里是**两个集合之间**的比对，不是同一堆文件内部找重复；
     - 要回答的是「这份该不该入库」，以及「库里那份该不该让位」。
 
-    判定沿用库内查重的两条规则，但更保守：
+    判定沿用库内查重的两条规则，声纹库就绪时再叠加第三条「声纹」信号：
+    不同文件名、不同标签的同一录音也能被认出来。更保守的部分：
     - 大小与时长都拿不到时只标 `unknown`，不判重复（损坏文件不应被自动移走）；
-    - 文件名维度要求有「歌手 - 歌名」结构，`Intro.flac` 这类不跨目录比对。
+      声纹命中不受此限，指纹本身就是同一录音的证据；
+    - 文件名维度要求有「歌手 - 歌名」结构，`Intro.flac` 这类不跨目录比对；
+    - 声纹很像但版本标记不同（Live / Remix / 伴奏）时转人工，不自动判重复。
 
     确认同一录音之后，再用 `core.quality` 比音质：
     - 库里有同等或更好的 → `duplicate`（工作区这份是多余的）
@@ -303,13 +386,35 @@ def match_against(targets, pool, tolerance=None, probe=None):
                 candidates = list(by_name.get(norm, []))
                 kind = '文件名'
 
+        fp_hits = []
+        if fp_pool is not None:
+            target_fp = getattr(track, 'fingerprint', ()) or ()
+            if target_fp:
+                fp_hits = fingerprint_candidates(target_fp, fp_pool)
+        fp_paths = {other.path for other, _score in fp_hits}
+        if fp_hits:
+            kind = '声纹'
+            known = {other.path for other in candidates}
+            for other, _score in fp_hits:
+                if other.path not in known:
+                    candidates.append(other)
+                    known.add(other.path)
+
         if not candidates:
             results.append(CrossMatch(track=track, status='unique',
-                                      reason='库中没有同名或同歌手+歌名的曲目'))
+                                      reason='库中没有同录音的曲目（含声纹比对）'))
             continue
 
         same_recordings, unresolved = [], []
         for other in candidates:
+            if other.path in fp_paths:
+                # 指纹相同本身就是同一录音的证据，不再要求大小/时长吻合；
+                # 但版本标记不同仍转人工，不让声纹覆盖 Live / Remix 等版本差异
+                if version_markers_conflict(track, other):
+                    unresolved.append(other)
+                else:
+                    same_recordings.append(other)
+                continue
             same = _same_recording(track, other, tolerance, info_of)
             if same is None:
                 unresolved.append(other)

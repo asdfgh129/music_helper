@@ -161,6 +161,7 @@ class DedupeRunReq(BaseModel):
 class ArchiveRunReq(BaseModel):
     into_library: bool = True           # True 直接入库，False 在工作区内整理
     move_incomplete: bool = True        # 不可归档的移入待确认目录
+    write_fingerprints: bool = True     # 入库成功后补录声纹库
 
 
 class MkdirReq(BaseModel):
@@ -564,7 +565,8 @@ def api_archive_preview(into_library: bool = True):
 @app.post("/api/archive/run")
 def api_archive_run(req: ArchiveRunReq):
     return _submit("archive", {"into_library": req.into_library,
-                               "move_incomplete": req.move_incomplete})
+                               "move_incomplete": req.move_incomplete,
+                               "write_fingerprints": req.write_fingerprints})
 
 
 # --------------------------------------------------------------------------- #

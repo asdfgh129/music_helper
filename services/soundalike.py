@@ -31,14 +31,17 @@ soundalike 直接拒绝打开库；改 `FPCALC_LENGTH` 等于换了一套指纹�
 缺文件、缺 `chmod +x`、拿错平台的产物都在这里直接报出来，而不是等 subprocess 抛异常。
 """
 
+import json
 import os
 import sqlite3
+import struct
 import subprocess
 import sys
 from dataclasses import dataclass
 
 import config
 import utils
+from core.model import Track
 
 # soundalike 认得、但流水线不处理的格式：只参与声纹比对，不影响其他步骤。
 # 与 config.AUDIO_EXTENSIONS 取并集传给 `-file-regexp`，否则这些文件连指纹都不会算。
@@ -279,6 +282,128 @@ def init_db(debug=False):
     if error:
         return ToolResult(False, None, error)
     return ToolResult(completed.returncode == 0, completed.returncode, '')
+
+
+def fpcalc_path():
+    """当前平台该用的 fpcalc：配置路径 > PATH 里的同名程序"""
+    return utils.resolve_tool(config.FPCALC_EXE, 'fpcalc')
+
+
+def fpcalc_problem():
+    """fpcalc 在本机能否执行；可用返回空串"""
+    return utils.tool_problem(fpcalc_path(), '指纹工具 fpcalc')
+
+
+def fingerprint_of(path, runner=None):
+    """现场算一个文件的原始指纹：`fpcalc -raw -json -length N -algorithm 2`
+
+    返回 `(fingerprint, duration)`；算不出来返回 `((), 0.0)`，不抛异常——
+    查重时一个坏文件只该降级成 unknown，不该让整轮预览失败。
+    `runner` 仅用于测试注入，签名与 `_exec` 一致：`(cmd) -> (completed, error)`。
+    """
+    problem = fpcalc_problem()
+    if problem:
+        return (), 0.0
+    cmd = [fpcalc_path(), '-raw', '-json', '-length', str(config.FPCALC_LENGTH),
+           '-algorithm', '2', str(path)]
+    completed, error = runner(cmd) if runner is not None else _exec(cmd)
+    if error or completed is None or completed.returncode not in (0, 3):
+        return (), 0.0
+    try:
+        payload = json.loads(completed.stdout or '')
+        fingerprint = tuple(int(value) & 0xFFFFFFFF for value in payload.get('fingerprint') or ())
+        duration = float(payload.get('duration') or 0)
+    except (TypeError, ValueError, AttributeError):
+        return (), 0.0
+    return fingerprint, duration
+
+
+def library_fingerprints():
+    """只读声纹库，取出全库指纹：`[(Track, fingerprint), ...]`
+
+    库文件由 soundalike 维护，Python 侧一律只读：写库仍交给 Go 程序，避免两处
+    各写一套 schema。`Fingerprint` 是小端 uint32 数组，与 `fpcalc -raw` 同源；
+    `Files.Path` 是相对 `Directories.Path` 的路径。
+    """
+    if not db_exists():
+        return [], f'声纹库不存在：{config.DB_PATH}（先补建声纹库）'
+    problem = settings_problem()
+    if problem:
+        return [], problem
+    connection = None
+    try:
+        uri = 'file:' + str(config.DB_PATH).replace('\\', '/') + '?mode=ro'
+        connection = sqlite3.connect(uri, uri=True)
+        rows = connection.execute(
+            'SELECT d.Path, f.Path, f.Size, f.ModTime, f.Duration, f.Fingerprint '
+            'FROM Files f JOIN Directories d ON f.DirectoryID = d.DirectoryID'
+        ).fetchall()
+    except (sqlite3.Error, OSError) as exc:
+        return [], f'声纹库读取失败：{exc}'
+    finally:
+        if connection is not None:
+            connection.close()
+    pool = []
+    for directory, relative, size, mtime, duration, blob in rows:
+        if not blob or len(blob) % 4:
+            continue
+        fingerprint = struct.unpack(f'<{len(blob) // 4}I', bytes(blob))
+        track = Track(path=os.path.join(directory, relative), tags={},
+                      duration=float(duration or 0), size=int(size or 0),
+                      mtime=float(mtime or 0))
+        pool.append((track, fingerprint))
+    return pool, ''
+
+
+_fp_pool_cache = {'pool': None, 'status': None}
+
+
+def invalidate_fingerprint_cache():
+    """库目录 / 配置 / 库内容变了，丢掉只读指纹池"""
+    _fp_pool_cache['pool'] = None
+    _fp_pool_cache['status'] = None
+
+
+def fingerprint_status(refresh=False):
+    """声纹查重的前置条件与全库指纹池（唯一实现，结果在进程内缓存）
+
+    返回 `(info, pool)`；`info` 是 `{'status','count','reason'}`，status 取
+    ready / missing / unavailable / disabled。「库为空但库目录已有文件」的
+    stale 由调用方结合库目录文件数判定（只有编排层有这个上下文）。
+    """
+    if not refresh and _fp_pool_cache['status'] is not None:
+        return _fp_pool_cache['status'], _fp_pool_cache['pool']
+    pool = []
+    if not config.FP_DEDUPE_ENABLED:
+        info = {'status': 'disabled', 'count': 0,
+                'reason': '声纹查重已关闭（fp_dedupe=0）；入库前必须开启'}
+    elif not db_exists():
+        info = {'status': 'missing', 'count': 0,
+                'reason': f'声纹库不存在：{config.DB_PATH}，请先在初始化或自检时补建'}
+    else:
+        problem = settings_problem() or fpcalc_problem()
+        if problem:
+            info = {'status': 'unavailable', 'count': 0, 'reason': problem}
+        else:
+            pool, problem = library_fingerprints()
+            info = ({'status': 'ready', 'count': len(pool), 'reason': ''} if not problem
+                    else {'status': 'unavailable', 'count': 0, 'reason': problem})
+    _fp_pool_cache['status'], _fp_pool_cache['pool'] = info, pool
+    return info, pool
+
+
+def refresh_db(debug=False, dry_run=False):
+    """入库后把新文件的指纹补进声纹库（幂等增量）
+
+    soundalike 按 size/mtime 判断哪些需要重算，已入库的不重复算；本命令不带
+    `-move-interactive`，因此不会移动任何文件。写库只走这一条出口。
+    """
+    if dry_run:
+        return ToolResult(True, None, '试运行：跳过声纹库补录')
+    result = init_db(debug=debug)
+    if result.ok:
+        invalidate_fingerprint_cache()
+    return result
 
 
 def check(main_dir=None):

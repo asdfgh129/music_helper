@@ -80,7 +80,9 @@
 ### 2.1 初始化判定（`core/library.status`）
 
 「已初始化」= 库目录存在，且（已有 `<年代>/<年份>` 结构 **或** 至少有一个音频文件）。
-声纹库缺失不算未初始化——它是可单独补建的，只作为建议列出。
+声纹库缺失不算未初始化——它是可单独补建的，所以在初始化状态里只作为建议列出；
+但它是**入库查重的必要前置**：缺库时第 6 步所有 `archive_ok=False`、第 8 步拒绝执行，
+必须先补建（见 [6. 查重](#6-查重工作区--库目录)）。
 
 | 状态 | 页面表现 |
 |---|---|
@@ -248,12 +250,25 @@
 这是**两个集合之间**的比对，与 `find_duplicates()` 的「同一堆文件内部找重复」不同：
 不只要回答「工作区这份是不是新的」，还要回答「库里那份该不该让位」。
 
-命中候选有两个维度：
+命中候选有三个维度，第三条是**入库的必要前置**：
 
 | 维度 | 命中条件 | 说明 |
 |---|---|---|
 | 歌手+歌名 | `version_key(artist)` + `version_key(title)` 相同 | `version_key` 保留 Live/Remix/伴奏/feat 标记，不同版本不会互判 |
 | 文件名 | 去掉 `(1)`/`_1` 后同名，且原文含「 - 」结构 | `Intro.flac` 这类没有歌手结构的名字不跨目录比对 |
+| 声纹 | `fpcalc -raw` 指纹与 `music.db` 中某条库指纹的逐位相似度 ≥ `fp_match_threshold`（0.95） | 不看文件名与标签，专治「换名/换标签的同一录音」；版本标记冲突转 `unknown` |
+
+声纹信号由 `steps._fingerprint_pool()` 只读加载库指纹、`soundalike.fingerprint_of()`
+现场算工作区指纹，判定仍在 `core.dedupe.match_against(fp_pool=...)` 一处。
+预览返回 `fingerprint`（`status` / `count` / `reason`）与 `fingerprint_ready`；
+每条结果带 `fingerprint_ok` / `blocked_reason`。**声纹库未就绪时所有
+`archive_ok` 都是 False**，查重页会显示 `fingerprint.status` 与 `reason` 并提示
+先在第 2 步补建声纹库；就绪时显示参与判定的库内指纹数。
+
+第 8 步 `run_archive()` 会再复核一次：库未就绪直接报错，`duplicate`/`unknown`/
+`upgrade` 的文件留在工作区（升级档要先在第 6 步让库里旧版本移走）；
+归档成功后把新文件指纹增量写入 `music.db`（返回结果里的 `fingerprint_db`），
+试运行不写库。
 
 命中之后先确认是不是同一录音：
 

@@ -518,5 +518,120 @@ class TestTrackAccess(StepsTestCase):
         self.assertEqual(data['consistency']['file']['artist'], '周杰伦')
 
 
+class TestFingerprintGate(StepsTestCase):
+    """声纹库是入库必要前置：缺库/空库拦截、跨名称标签命中、归档后补录"""
+
+    @staticmethod
+    def _ready_pool(pool=()):
+        return list(pool), {'status': 'ready', 'count': len(pool), 'reason': ''}
+
+    def _use_isolated_db(self):
+        self._patch('DB_PATH', os.path.join(self.root, 'missing.db'))
+        steps.invalidate_library_cache()
+        self.addCleanup(steps.invalidate_library_cache)
+
+    def test_missing_db_blocks_archive(self):
+        self._use_isolated_db()
+        self._touch('workspace', '周杰伦 - 晴天.flac', content='abcd')
+        data = steps.dedupe_preview(refresh=True)
+        self.assertEqual(data['fingerprint']['status'], 'missing')
+        self.assertFalse(data['fingerprint_ready'])
+        self.assertEqual(data['ready_to_archive'], 0)
+        self.assertTrue(all(item['blocked_reason'] for item in data['items']))
+
+    def test_empty_pool_with_library_files_is_stale(self):
+        self._touch('workspace', '甲 - 歌A.flac', content='abcd')
+        self._touch('library', '2020-2029', '2020', '乙 - 歌B.flac', content='abcd')
+        with mock.patch.object(steps, '_fingerprint_pool',
+                               return_value=self._ready_pool()), \
+             mock.patch.object(steps.soundalike, 'fingerprint_of',
+                               return_value=((), 0.0)):
+            data = steps.dedupe_preview(refresh=True)
+        self.assertEqual(data['fingerprint']['status'], 'stale')
+        self.assertEqual(data['ready_to_archive'], 0)
+
+    def test_same_recording_different_names_is_duplicate(self):
+        self._touch('workspace', '甲 - 歌A.flac', content='abcd')
+        other_path = self._touch('library', '2020-2029', '2020',
+                                 '乙 - 歌B.flac', content='abcd')
+        fp = tuple(range(1, 121))
+        other = Track(path=other_path, tags={}, size=4, duration=200.0)
+        specs = {'duration': 200.0, 'bitrate': 900,
+                 'sample_rate': 44100, 'bit_depth': 16}
+        with mock.patch.object(steps, '_fingerprint_pool',
+                               return_value=self._ready_pool([(other, fp)])), \
+             mock.patch.object(steps.soundalike, 'fingerprint_of',
+                               return_value=(fp, 200.0)), \
+             mock.patch.object(steps.core_tags, 'read_quality', return_value=specs):
+            data = steps.dedupe_preview(refresh=True)
+        self.assertTrue(data['fingerprint_ready'])
+        self.assertEqual(data['items'][0]['status'], 'duplicate')
+        self.assertEqual(data['items'][0]['kind'], '声纹')
+
+    def test_archive_rejects_when_fingerprint_db_missing(self):
+        self._touch('workspace', '甲 - 歌A.flac', content='abcd')
+        self._use_isolated_db()
+        with self.assertRaises(ValueError) as ctx:
+            steps.run_archive(into_library=True)
+        self.assertIn('声纹库未就绪', str(ctx.exception))
+
+    def test_archive_refreshes_fingerprint_db(self):
+        path = self._touch('workspace', '甲 - 歌A.flac', content='abcd')
+        complete = Track(path=path, tags={'title': '歌A', 'artist': '甲',
+                                          'album': '专辑', 'year': '2020'},
+                         size=4, duration=200.0, has_cover=True)
+        gate = {'fingerprint_ready': True,
+                'fingerprint': {'status': 'ready', 'count': 1, 'reason': ''},
+                'items': [{'path': path, 'status': 'unique',
+                           'archive_ok': True, 'reason': ''}]}
+        refreshed = mock.Mock(ok=True)
+        refreshed.summary.return_value = '成功'
+        with mock.patch.object(steps.scanner, 'scan', return_value=[complete]), \
+             mock.patch.object(steps.checker, 'readiness_problems', return_value=[]), \
+             mock.patch.object(steps, 'dedupe_preview', return_value=gate), \
+             mock.patch.object(steps.soundalike, 'refresh_db',
+                               return_value=refreshed) as refresh:
+            data = steps.run_archive(into_library=True)
+        refresh.assert_called_once()
+        self.assertTrue(data['fingerprint_db']['attempted'])
+        self.assertEqual(data['fingerprint_db']['message'], '成功')
+
+    def test_archive_dry_run_does_not_write_db(self):
+        path = self._touch('workspace', '甲 - 歌A.flac', content='abcd')
+        complete = Track(path=path, tags={'title': '歌A', 'artist': '甲',
+                                          'album': '专辑', 'year': '2020'},
+                         size=4, duration=200.0, has_cover=True)
+        gate = {'fingerprint_ready': True,
+                'fingerprint': {'status': 'ready', 'count': 1, 'reason': ''},
+                'items': []}
+        with mock.patch.object(steps.scanner, 'scan', return_value=[complete]), \
+             mock.patch.object(steps.checker, 'readiness_problems', return_value=[]), \
+             mock.patch.object(steps, 'dedupe_preview', return_value=gate), \
+             mock.patch.object(steps.soundalike, 'refresh_db') as refresh:
+            data = steps.run_archive(into_library=True, dry_run=True)
+        refresh.assert_not_called()
+        self.assertFalse(data['fingerprint_db']['attempted'])
+
+
+    def test_unconfirmed_upgrade_is_blocked(self):
+        path = self._touch('workspace', '甲 - 歌A.flac', content='abcd')
+        complete = Track(path=path, tags={'title': '歌A', 'artist': '甲',
+                                          'album': '专辑', 'year': '2020'},
+                         size=4, duration=200.0, has_cover=True)
+        gate = {'fingerprint_ready': True,
+                'fingerprint': {'status': 'ready', 'count': 1, 'reason': ''},
+                'items': [{'path': path, 'status': 'upgrade',
+                           'archive_ok': True, 'reason': '音质更好'}]}
+        with mock.patch.object(steps.scanner, 'scan', return_value=[complete]), \
+             mock.patch.object(steps.checker, 'readiness_problems', return_value=[]), \
+             mock.patch.object(steps, 'dedupe_preview', return_value=gate), \
+             mock.patch.object(steps.soundalike, 'refresh_db') as refresh:
+            data = steps.run_archive(into_library=True)
+        self.assertEqual(len(data['blocked']), 1)
+        self.assertEqual(data['blocked'][0]['status'], 'upgrade')
+        self.assertTrue(os.path.isfile(path))
+        refresh.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

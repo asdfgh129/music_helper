@@ -28,6 +28,12 @@
     },
     computed: {
       items: function () { return (this.data && this.data.items) || []; },
+      fingerprintStatus: function () {
+        return (this.data && this.data.fingerprint) || { status: '', count: 0, reason: '' };
+      },
+      fingerprintBlocked: function () {
+        return !!this.data && this.data.fingerprint_ready === false;
+      },
       filtered: function () {
         if (this.filter === 'all') return this.items;
         if (this.filter === 'pending') {
@@ -318,6 +324,17 @@
           <div class="stat"><div class="n" :class="stats.upgrade ? 'warn' : ''">{{ stats.upgrade }}</div><div class="l">可替换库内</div></div>
           <div class="stat"><div class="n" :class="stats.unknown ? 'warn' : ''">{{ stats.unknown }}</div><div class="l">需人工确认</div></div>
           <div class="stat"><div class="n">{{ stats.ready }}</div><div class="l">可入库</div></div>
+        </div>
+
+        <div v-if="fingerprintBlocked" class="note" style="margin-top:12px">
+          <b class="err">声纹库未就绪（{{ fingerprintStatus.status }}）</b>：
+          {{ fingerprintStatus.reason }}。本轮所有文件都不会标记为「可入库」，
+          第 8 步也会拒绝归档。请回第 2 步补建声纹库或执行
+          <span class="mono">python main.py --init</span>，再点「重新扫描库」。
+        </div>
+        <div v-else-if="fingerprintStatus.status === 'ready'" class="note" style="margin-top:12px">
+          声纹比对已启用：库内 {{ fingerprintStatus.count }} 条指纹参与判定，
+          不同文件名、不同标签的同一录音也会被认出来；版本标记不同的候选仍转人工。
         </div>
 
         <div class="card" style="margin-top:14px;padding:12px 16px">

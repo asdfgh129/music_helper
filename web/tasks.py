@@ -317,6 +317,7 @@ def _dispatch_wizard(task):
     if kind == "archive":
         return steps.run_archive(into_library=bool(opts.get("into_library", True)),
                                  move_incomplete=bool(opts.get("move_incomplete", True)),
+                                 write_fingerprints=bool(opts.get("write_fingerprints", True)),
                                  progress=progress)
     raise ValueError("unknown wizard kind: " + kind)
 

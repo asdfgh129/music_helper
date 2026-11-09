@@ -4,6 +4,7 @@
 import os
 import shutil
 import sqlite3
+import struct
 import sys
 import tempfile
 import unittest
@@ -175,9 +176,13 @@ class TestDbSettings(unittest.TestCase):
         shutil.rmtree(self.root, ignore_errors=True)
 
     def _make_db(self, desc):
-        with sqlite3.connect(self.db) as connection:
-            connection.execute('CREATE TABLE Settings (Desc STRING PRIMARY KEY NOT NULL)')
-            connection.execute('INSERT INTO Settings VALUES(?)', (desc,))
+        connection = sqlite3.connect(self.db)
+        try:
+            with connection:
+                connection.execute('CREATE TABLE Settings (Desc STRING PRIMARY KEY NOT NULL)')
+                connection.execute('INSERT INTO Settings VALUES(?)', (desc,))
+        finally:
+            connection.close()
 
     def test_missing_db_is_not_an_error(self):
         self.assertIsNone(soundalike.db_fpcalc_length())
@@ -201,6 +206,78 @@ class TestDbSettings(unittest.TestCase):
         with open(self.db, 'wb') as handle:
             handle.write(b'not a sqlite file')
         self.assertIsNone(soundalike.db_fpcalc_length())
+
+
+class TestFingerprintIO(unittest.TestCase):
+    """现场算指纹、只读声纹库、入库后补录：都不碰真实外部程序"""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix='mh_fp_')
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.db = os.path.join(self.root, 'music.db')
+        saved = config.DB_PATH
+        config.DB_PATH = self.db
+        self.addCleanup(setattr, config, 'DB_PATH', saved)
+
+    def _make_db(self):
+        connection = sqlite3.connect(self.db)
+        try:
+            connection.execute('CREATE TABLE Settings (Desc STRING PRIMARY KEY NOT NULL)')
+            connection.execute('INSERT INTO Settings VALUES(?)',
+                               (f'length={float(config.FPCALC_LENGTH):.3f},algorithm=2',))
+            connection.execute('CREATE TABLE Directories ('
+                               'DirectoryID INTEGER PRIMARY KEY AUTOINCREMENT, '
+                               'Path STRING UNIQUE NOT NULL)')
+            connection.execute('INSERT INTO Directories (Path) VALUES(?)', ('/lib',))
+            connection.execute('CREATE TABLE Files ('
+                               'Path STRING NOT NULL, DirectoryID INTEGER NOT NULL, '
+                               'Duration FLOAT NOT NULL, Size INTEGER NOT NULL, '
+                               'ModTime INTEGER NOT NULL, Fingerprint BLOB NOT NULL)')
+            connection.execute('INSERT INTO Files VALUES(?,?,?,?,?,?)',
+                               ('1990/歌手 - 歌.flac', 1, 200.0, 5000, 0,
+                                struct.pack('<3I', 1, 2, 3)))
+            connection.commit()
+        finally:
+            connection.close()
+
+    def test_fingerprint_of_parses_raw_json(self):
+        completed = MagicMock()
+        completed.returncode = 0
+        completed.stdout = '{"fingerprint": [1, 2, 3], "duration": 210.5}'
+        with patch.object(soundalike, 'fpcalc_problem', return_value=''), \
+             patch.object(soundalike, 'fpcalc_path', return_value='fpcalc'):
+            fp, duration = soundalike.fingerprint_of(
+                'a.flac', runner=lambda cmd: (completed, ''))
+        self.assertEqual(fp, (1, 2, 3))
+        self.assertEqual(duration, 210.5)
+
+    def test_fingerprint_of_bad_output_is_empty(self):
+        completed = MagicMock(returncode=0, stdout='not json')
+        with patch.object(soundalike, 'fpcalc_problem', return_value=''), \
+             patch.object(soundalike, 'fpcalc_path', return_value='fpcalc'):
+            self.assertEqual(soundalike.fingerprint_of(
+                'a.flac', runner=lambda cmd: (completed, '')), ((), 0.0))
+
+    def test_library_fingerprints_reads_little_endian_blob(self):
+        self._make_db()
+        pool, problem = soundalike.library_fingerprints()
+        self.assertEqual(problem, '')
+        self.assertEqual(len(pool), 1)
+        self.assertEqual(pool[0][1], (1, 2, 3))
+        self.assertEqual(pool[0][0].path,
+                         os.path.join('/lib', '1990/歌手 - 歌.flac'))
+        self.assertEqual(pool[0][0].duration, 200.0)
+
+    def test_missing_db_is_reported(self):
+        pool, problem = soundalike.library_fingerprints()
+        self.assertEqual(pool, [])
+        self.assertIn('声纹库不存在', problem)
+
+    def test_refresh_db_dry_run_does_not_execute(self):
+        with patch.object(soundalike, 'init_db') as init:
+            result = soundalike.refresh_db(dry_run=True)
+        init.assert_not_called()
+        self.assertTrue(result.ok)
 
 
 if __name__ == '__main__':

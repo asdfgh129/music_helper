@@ -21,6 +21,8 @@ class Track:
     mtime: float = 0.0
     # 扫描阶段顺带记录的封面探测结果；None 表示「还没探测」，需要时现场读
     has_cover: object = None
+    # 声纹查重：现场由 fpcalc 算出的原始指纹（uint32 序列），空表示尚未计算
+    fingerprint: tuple = ()
 
     # ---------- 基础属性 ----------
 

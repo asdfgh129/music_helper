@@ -23,7 +23,7 @@
 | 文件名 ↔ 标签一致性 | `core/check.py` | 第 6、7 步 | `tests/test_check.py` |
 | 自检项与可入库判定 | `core/check.py` | 第 7 步 | `tests/test_check.py` |
 | 集合内查重 | `core/dedupe.py: find_duplicates` | `--check` / 声纹去重 | `tests/test_dedupe.py` |
-| 跨集合查重（工作区 ↔ 库） | `core/dedupe.py: match_against` | 第 6 步 | `tests/test_dedupe.py` |
+| 跨集合查重（工作区 ↔ 库，含声纹） | `core/dedupe.py: match_against` | 第 6 步（第 8 步复核） | `tests/test_dedupe.py`、`tests/test_steps.py` |
 | 音质比较与格式偏好 | `core/quality.py` | 第 6 步 | `tests/test_quality.py` |
 | 歌词 | `core/lyrics.py` | 第 6、7 步 | `tests/test_lyrics.py` |
 | 归档路径 | `core/organize.py` | 第 8 步 | `tests/test_organize.py` |
@@ -427,11 +427,25 @@ token 由 `core/naming.py: artist_tokens()` 生成，收录三种写法：拆分
 
 ### 5.8 声纹与版本碰撞
 
-`soundalike` 的声纹比对与上面的本地规则是**两条独立信号**：
+跨集合查重（第 6 步）有**三条信号**：歌手+歌名、文件名、声纹。前两条只看名字，
+只有声纹能识别「不同文件名、不同标签但同一录音」——这是入库查重的硬要求。
+声纹库 `music.db` 因此是入库的必要前置：缺库、参数冲突、`fpcalc` 不可用时，
+所有文件一律 `archive_ok=False`，第 8 步也会拒绝执行，绝不静默放行。
 
-- 声纹对「同一录音换格式/换专辑」最有效；
-- 对 Live、Remix、伴奏、不同歌手同伴奏等场景可能给出高相似度；
-- 因此声纹结果不能覆盖版本标记。版本标记不同的候选应转人工，不自动移入 `DUPLICATE_DIR`。
+- 全库去重与写库仍由 `services.soundalike` 调外部 `soundalike` 负责；
+- 第 6 步由 `core.dedupe.match_against(fp_pool=...)` 只读查询 `music.db`、现场用
+  `fpcalc -raw` 算工作区指纹，判定与音质分流都收敛在 `core/dedupe.py` 一处；
+- 阈值/公式与 soundalike 一致：`fp_lookup_threshold=0.25`（16 位截断倒排筛选）、
+  `fp_match_threshold=0.95`（逐位精算），见 [algorithms.md](algorithms.md)；
+- 声纹对「同一录音换格式/换专辑」最有效；对 Live、Remix、伴奏、不同歌手同伴奏
+  等场景可能给出高相似度；
+- 因此声纹结果不能覆盖版本标记：`version_markers_conflict()` 在两侧版本标记不同
+  时把候选转 `unknown`（人工），不自动移入 `DUPLICATE_DIR`；标记不冲突时，
+  文件名与标签完全不同也照常判重复；
+- 声纹命中本身就是同一录音的证据，不再要求大小/时长吻合；版本标记冲突除外。
+
+入库成功后必须把新文件的指纹补进 `music.db`（`soundalike.refresh_db()`，
+幂等增量），否则下一轮认不出这批新歌；流程见 [workflow.md](workflow.md#6-声纹库生命周期)。
 
 完整的碰撞场景与处理策略见 [fingerprint.md](fingerprint.md#6-同曲不同版本的碰撞)。
 

@@ -350,6 +350,16 @@ SQLite，四张表：`Settings`（指纹参数，改了就拒绝打开）、`Dir
 - `--checkdb` 做双向同步：库里有磁盘没有 → 删记录；磁盘有库没有 → 算指纹补进去；
 - 每次运行还会在库文件所在目录写一份 `SoundAlike-<时间戳>.log`（便于事后追查移动了什么）。
 
+**入库后的增量补录**：工作区文件归档进 `LIBRARY_DIR` 后，第 8 步（以及
+`flow_manual_archive`）调 `services.soundalike.refresh_db()` → `init_db()`，
+按 size/mtime 只给新增/变动的文件算指纹并写库；不带 `-move-interactive`，
+不移动任何文件，试运行不写库。少了这一步，下一轮第 6 步就认不出这批新歌。
+
+**Python 侧只读**：第 6 步用 `library_fingerprints()` 以 `mode=ro` 打开
+`music.db`，把 `Files.Fingerprint` 的小端 uint32 BLOB 解成指纹序列，再用
+`fingerprint_of()` 现场算工作区文件的 `fpcalc -raw -json` 指纹，交给
+`core.dedupe.match_against(fp_pool=...)` 判定。写库仍只有 soundalike 一个出口。
+
 ### 8.7 平台
 
 | 平台 | 程序 | 说明 |

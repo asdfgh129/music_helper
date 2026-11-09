@@ -167,9 +167,23 @@ soundalike -db <DB_PATH> -fpcalc-length <FPCALC_LENGTH> -file-regexp <RE> \
 
 | 操作 | 命令 | 行为 |
 |---|---|---|
-| 首次建库 | 任意去重步骤，或 `python main.py --init` | 扫描 `LIBRARY_DIR` 建库 |
+| 首次建库 | 第 2a 步初始化 / 2b 自检，或 `python main.py --init` | 扫描 `LIBRARY_DIR` 建库 |
 | 日常增量 | `python main.py` | 更新 `LIBRARY_DIR`，工作区只比对不写库 |
+| **入库后补录** | 第 8 步归档成功后 / `flow_manual_archive` | `soundalike.refresh_db()` 把新入库文件的指纹写进库 |
 | 一致性检查 | `python main.py --checkdb` | 校验库记录与实际文件 |
 | 换库位置 | 改 `DB_PATH` / `MUSIC_HELPER_DB` | 新位置会被当作新库重新建立 |
 
+声纹库**不是一次性产物**：每次有工作区文件入库，都要把它算出的 `fpcalc` 指纹写进库，
+下一轮第 6 步才能拿它比对「不同文件名、不同标签的同一录音」。因此：
+
+1. 第 6 步查重先读 `music.db` 的全库指纹，再现场算工作区文件指纹；库缺失、空库
+   （库目录已有文件但库里没有指纹）、`fpcalc` 不可用时，所有文件 `archive_ok=False`
+   并给出可照做的提示；
+2. 第 8 步入 `LIBRARY_DIR` 前复核一次第 6 步结论：声纹库未就绪直接拒绝执行，
+   `duplicate`/`unknown`/`upgrade` 的文件留在工作区（`upgrade` 要先在第 6 步
+   让库里旧版本移走），不能绕过查重直接归档；
+3. 归档成功（真正进入 `LIBRARY_DIR`）后才补录指纹，试运行不写库；
+   移入 `INCOMPLETE_DIR` 的文件不算入库，不补录。
+
 `DB_PATH` 与 `tools/soundalike.exe` 是两回事：前者是数据，后者是程序。
+Python 侧对 `music.db` 一律只读，写库统一交给 soundalike，避免两处各写一套 schema。

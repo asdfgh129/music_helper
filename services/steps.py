@@ -632,11 +632,23 @@ def _quality_probe(track):
     return info
 
 
+def _fingerprint_pool(refresh=False):
+    """库目录的声纹指纹池与查重前置状态（唯一实现在 `services.soundalike`）
+
+    声纹库是「工作区文件能否入库」的必要信号：缺库、参数冲突、fpcalc 不可用
+    一律返回非 ready，由 `dedupe_preview` 拦下归档，绝不静默放行。库里没有
+    指纹但库目录已有文件的「空库」情况由 `dedupe_preview` 判成 `stale`。
+    """
+    info, pool = soundalike.fingerprint_status(refresh=refresh)
+    return pool, info
+
+
 def invalidate_library_cache():
-    """库目录或配置变了，丢弃查重用的两份缓存"""
+    """库目录或配置变了，丢弃查重用的三份缓存（含声纹指纹池）"""
     _library_cache['dir'] = ''
     _library_cache['tracks'] = None
     _quality_cache.clear()
+    soundalike.invalidate_fingerprint_cache()
 
 
 def _library_tracks(refresh=False):
@@ -676,19 +688,39 @@ def _library_tracks(refresh=False):
     return tracks
 
 
-def dedupe_preview(refresh=False):
+def dedupe_preview(refresh=False, with_fingerprint=True):
     """第 6 步：工作区文件与库目录比对，判断哪些库里已经有
 
     入库前必须先确认不是重复：库中已有一份的文件再归档一次，年份目录里会出现
     两条相同记录，声纹库也会重复。判定规则见 `core.dedupe.match_against`。
+
+    三条判定信号会合：歌手+歌名 / 文件名 / 声纹。声纹库是入库的必要前置，
+    缺库或工具不可用时所有 `archive_ok` 一律为 False，并给出可照做的提示。
     """
     workspace = _workspace_tracks()
     library_tracks = _library_tracks(refresh=refresh)
     if refresh:
         # 文件可能刚被替换/移走，规格缓存跟着作废
         _quality_cache.clear()
+
+    fp_pool = None
+    fp_status = {'status': 'disabled', 'count': 0, 'reason': '本次未启用声纹比对'}
+    if with_fingerprint:
+        pool, fp_status = _fingerprint_pool(refresh=refresh)
+        if fp_status['status'] == 'ready':
+            if not pool and library_tracks:
+                fp_status = {'status': 'stale', 'count': 0,
+                             'reason': '声纹库为空但库目录已有文件：请先在初始化或自检时补建声纹库'}
+            else:
+                fp_pool = pool
+                for track in workspace:
+                    fingerprint, _duration = soundalike.fingerprint_of(track.path)
+                    track.fingerprint = fingerprint
+    fp_ready = fp_status['status'] == 'ready'
+    fp_reason = '' if fp_ready else fp_status['reason']
+
     matches = dedupe_mod.match_against(workspace, library_tracks,
-                                       probe=_quality_probe)
+                                       probe=_quality_probe, fp_pool=fp_pool)
 
     items = []
     for match in matches:
@@ -736,8 +768,12 @@ def dedupe_preview(refresh=False):
             'replace': replace if match.status == 'upgrade' else [],
             'problems': problems,
             'ready': not problems,
-            # unique 照常入库；upgrade 的工作区文件同样要入库，只是库里旧版本先让位
-            'archive_ok': match.status in ('unique', 'upgrade') and not problems,
+            # unique 照常入库；upgrade 的工作区文件同样要入库，只是库里旧版本先让位。
+            # 声纹库未就绪时一律不下发「可入库」，避免绕过同一录音的判定。
+            'archive_ok': bool(match.status in ('unique', 'upgrade')
+                               and not problems and fp_ready),
+            'fingerprint_ok': fp_ready,
+            'blocked_reason': fp_reason,
         })
 
     return {
@@ -755,6 +791,8 @@ def dedupe_preview(refresh=False):
         'unknown': sum(1 for item in items if item['status'] == 'unknown'),
         'replace_count': sum(len(item['replace']) for item in items),
         'ready_to_archive': sum(1 for item in items if item['archive_ok']),
+        'fingerprint': fp_status,
+        'fingerprint_ready': fp_ready,
     }
 
 
@@ -1004,20 +1042,45 @@ def archive_preview(into_library=True):
     }
 
 
-def run_archive(into_library=True, move_incomplete=True, progress=None):
+def run_archive(into_library=True, move_incomplete=True, progress=None,
+                write_fingerprints=None, dry_run=False, enforce_dedupe=True):
     """执行归档
 
     可归档的进 <年代>/<年份>/；不可归档的（核心标签或内嵌封面缺失、文件名矛盾）按既有规则
     移入待确认目录，不留在工作区挡路。
+
+    入库前必须过第 6 步的声纹查重：声纹库未就绪直接拒绝执行，重复/待人工的
+    文件留在工作区，不能绕过查重直接归档。归档成功后再把新文件的 fpcalc
+    指纹增量补进声纹库，否则下一轮就认不出「不同文件名、不同标签的同一录音」。
+    补录与试运行都由 `services.soundalike` 统一负责。
     """
     logger = _log()
     preview = archive_preview(into_library=into_library)
     base_dir = preview['base_dir']
     tracks = scanner.scan([config.WORKSPACE_DIR], with_tags=True, recursive=False)
+
+    blocked = []
+    if into_library and enforce_dedupe:
+        gate = dedupe_preview()
+        if not gate['fingerprint_ready']:
+            raise ValueError('声纹库未就绪，拒绝入库：'
+                             + str(gate['fingerprint'].get('reason')
+                                   or gate['fingerprint']['status']))
+        # upgrade 也要先在第 6 步把库里旧版本让位，否则直接归档会多出一份
+        blocked_paths = {os.path.normcase(item['path']) for item in gate['items']
+                         if item['status'] in ('duplicate', 'unknown', 'upgrade')}
+        blocked = [{'path': item['path'], 'status': item['status'], 'reason': item['reason']}
+                   for item in gate['items']
+                   if os.path.normcase(item['path']) in blocked_paths]
+        tracks = [track for track in tracks
+                  if os.path.normcase(track.path) not in blocked_paths]
+        if logger and blocked:
+            logger.warning(f'入库闸门拦下 {len(blocked)} 个重复/升级待替换/待人工文件，仍留在工作区')
+
     total = len(tracks)
 
     plan = ops.Plan(f"归档-{'入库' if into_library else '工作区'}",
-                    dry_run=False, journal_path=config.JOURNAL_PATH,
+                    dry_run=dry_run, journal_path=config.JOURNAL_PATH,
                     trash_dir=config.TRASH_DIR)
     organized, unknown = organizer.plan_organize(tracks, base_dir, plan)
     if move_incomplete:
@@ -1043,6 +1106,25 @@ def run_archive(into_library=True, move_incomplete=True, progress=None):
         _emit(progress, index, max(total, len(plan.operations)), item)
 
     executed = len(result.done) if result else 0
+    if write_fingerprints is None:
+        write_fingerprints = config.FP_WRITE_ON_ARCHIVE
+    fp_result = {'attempted': False, 'ok': True, 'message': ''}
+    # 只有真正进了 LIBRARY_DIR 的文件才需要补指纹；移到待补全目录不算入库
+    archived = len(organized)
+    if into_library and archived and write_fingerprints:
+        if dry_run:
+            fp_result = {'attempted': False, 'ok': True,
+                         'message': '试运行：跳过声纹库补录'}
+        else:
+            outcome = soundalike.refresh_db()
+            fp_result = {'attempted': True, 'ok': outcome.ok,
+                         'message': outcome.summary()}
+            if outcome.ok:
+                # 库里多了文件，库索引与声纹池都必须重读
+                invalidate_library_cache()
+            if logger:
+                logger.info(f'归档后补录声纹库：{outcome.summary()}')
+
     return {
         'planned': len(plan.operations),
         'executed': executed,
@@ -1051,4 +1133,6 @@ def run_archive(into_library=True, move_incomplete=True, progress=None):
         'base_dir': base_dir,
         'items': items,
         'summary': result.summary() if result else '无需归档',
+        'fingerprint_db': fp_result,
+        'blocked': blocked,
     }
