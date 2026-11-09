@@ -10,6 +10,17 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **声纹库成为入库查重的必要信号**：第 6 步 `core.dedupe.match_against(fp_pool=...)`
+  叠加声纹判定（只读 `music.db` + 现场 `fpcalc -raw`），可识别不同文件名、不同标签的
+  同一录音；声纹库缺失/空库/工具不可用时一律不下发 `archive_ok`，第 8 步拒绝入库。
+  版本标记不同（Live / Remix / 伴奏）仍转人工，不让声纹覆盖版本差异。
+- **入库后补录指纹**：第 8 步归档成功后调 `soundalike.refresh_db()` 增量写库，
+  试运行不写库，移入 `INCOMPLETE_DIR` 的不算入库；CLI `--manual-archive` 同步处理。
+- 新增配置 `fp_dedupe` / `fp_write_on_archive` / `fp_lookup_threshold` /
+  `fp_match_threshold`（默认 `1 / 1 / 0.25 / 0.95`，与 soundalike 阈值一致）。
+
 ### 修复
 
 - **集合内查重留更小文件**：`core/dedupe.pick_keep()` 在格式优先级相同时保留体积更小的
@@ -24,6 +35,11 @@
 - 按 `README.md` 新口径同步全部相关文档：主要平台补 macOS 与 QQ 解密两条途径；
   集合内查重改为「同音质留更小文件」；`INCOMPLETE_DIR` 纳入缺封面/专辑/年份；
   加密原文件范围补「Web 直解时用户已选的文件」。实现与用例已按本口径同步。
+- 新增 [docs/browser-local-roadmap.md](docs/browser-local-roadmap.md)：下一个分支（纯服务器
+  Web + 浏览器本机实现）的基石文档与可行性研究报告，记录目标、现状基线、问题与方案、
+  技术选型、必须保持的行为契约、分期路线、验收策略、补充事项与待决决策。
+- 新增全仓文档可浏览索引 [docs/index.html](docs/index.html) 与生成脚本
+  `scripts/build_docs_index.py`；`docs/README.md`、`scripts/README.md`、`AGENTS.md` 同步登记。
 
 ### 计划中
 

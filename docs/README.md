@@ -21,6 +21,8 @@
 | 出问题了 / 文件找不到了 | [troubleshooting.md](troubleshooting.md) | 正常运行说明 |
 | 跑测试 | [../tests/README.md](../tests/README.md) | 项目整体使用 |
 | 推不上 GitHub | [git-proxy.md](git-proxy.md) | 音乐流水线 |
+| 规划「纯服务器 Web + 浏览器本机实现」分支 | [browser-local-roadmap.md](browser-local-roadmap.md) | 主干现有行为 |
+| 浏览全部文档（可搜索、可离线打开） | [index.html](index.html) | 单篇规则细节 |
 | 看历史决策 | [history/](history/) | 当前行为 |
 
 ## 每篇文档的边界
@@ -39,6 +41,7 @@
 | [fingerprint.md](fingerprint.md) | 指纹原理、AcoustID/MusicBrainz、声纹查重（soundalike）的流程与算法、阈值、平台支持、同曲不同版本的碰撞策略与审核结论 | 本地查重流程 |
 | [troubleshooting.md](troubleshooting.md) | 症状 → 原因 → 处理、日志与 journal、数据恢复 | 正常流程说明 |
 | [git-proxy.md](git-proxy.md) | GitHub 推拉失败时的本地代理 | 音乐库流水线 |
+| [browser-local-roadmap.md](browser-local-roadmap.md) | 下一个分支（纯服务器 Web + 浏览器本机实现）的目标、可行性、问题与方案、分期路线、验收与待决决策 | 主干行为定义、具体算法与阈值 |
 
 同一事实只在一个地方写完整版，其余文档链接过去。
 
@@ -67,4 +70,7 @@
 - 所有文档用中文，代码标识符保持英文；
 - 表格优先于长段落，命令示例必须可直接复制执行；
 - 每篇文档开头三行说明「负责 / 不负责 / 权威来源」；
-- 新增或移动文档后运行 `python scripts/check_docs.py`，CI 会拦住死链与失效路径。
+- 新增或移动文档后先运行 `python scripts/build_docs_index.py` 重新生成 [index.html](index.html)，
+  再运行 `python scripts/check_docs.py`，CI 会拦住死链与失效路径；
+- [index.html](index.html) 是生成产物，覆盖仓库内全部 Markdown（含历史归档与第三方自带文档），
+  不要手工编辑；`python scripts/build_docs_index.py --check` 可在 CI 里检查索引是否过期。

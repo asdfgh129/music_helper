@@ -22,6 +22,7 @@ QQ 解密前的客户端安装 / 启动 / 登录检查在 `decrypto/qq_client.py
 | 加命令行参数 | [docs/usage.md](docs/usage.md)（参数优先级顺序敏感） |
 | 改配置项 | [docs/configuration.md](docs/configuration.md) |
 | 写文档/移动文档 | [docs/README.md](docs/README.md)、[CONTRIBUTING.md](CONTRIBUTING.md) |
+| 开发「纯服务器 Web + 浏览器本机实现」分支 | [docs/browser-local-roadmap.md](docs/browser-local-roadmap.md)（基石文档、行为契约与待决决策） |
 | 推不上 GitHub | [docs/git-proxy.md](docs/git-proxy.md)（`scripts/git_uplink.py`） |
 
 ## 常用命令
@@ -67,7 +68,12 @@ python main.py --check --dry-run                     # 用真实配置预览
 10. **新增音频格式要成对改**：`config.AUDIO_EXTENSIONS` 与 `core/tags.py` 的 `_READERS` /
     `_COVER_READERS`。只加扩展名不加读取器，整类文件会被判成「缺标签」搬进 `INCOMPLETE_DIR`；
     `tests/test_tags.py` 会拦住这种漏改。
-11. **日志只配一次，handler 挂在根 logger**：`utils.setup_logging()` 负责装文件 + 控制台两个
+11. **声纹库是入库查重的必要前置**：第 6 步必须读 `music.db` 并叠加声纹信号
+    （唯一实现 `core/dedupe.match_against`），入库成功后再把新文件指纹补录回库
+    （唯一出口 `services.soundalike.refresh_db`）。Python 侧对 `music.db` 只读，
+    不要在 `main.py` / `web/` 另写一套判重或写库逻辑；缺库、空库、`fpcalc`
+    不可用时必须拦下入库，不许静默放行。
+12. **日志只配一次，handler 挂在根 logger**：`utils.setup_logging()` 负责装文件 + 控制台两个
     handler，业务代码显式用 `utils.main_logger`，包内模块用 `logging.getLogger(__name__)`，
     两类记录靠传播进同一份 `log/Music-*.log`。**不要在模块或包初始化里调 `logging.basicConfig`**
     ——它会多挂一个只写 stderr 的 handler，子模块日志从此绕过文件（`fingerprint` 曾因此
