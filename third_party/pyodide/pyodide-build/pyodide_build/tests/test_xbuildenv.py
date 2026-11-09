@@ -1,0 +1,837 @@
+import json
+import os
+import shutil
+import sys
+from collections import namedtuple
+from pathlib import Path
+
+import pytest
+
+from pyodide_build import build_env
+from pyodide_build.common import download_and_unpack_archive
+from pyodide_build.logger import logger
+
+# imported as module to avoid being collected as a test itself
+from pyodide_build.tests import conftest as test_conftest
+from pyodide_build.xbuildenv import (
+    CrossBuildEnvManager,
+    _same_version,
+    _url_to_version,
+)
+
+
+def _pins(manager, *names):
+    """The `(name, version)` pins the xbuildenv ships for cross-build packages."""
+    requirements = build_env.read_pinned_requirements(
+        manager.symlink_dir.resolve() / "xbuildenv" / "requirements.txt"
+    )
+    return [(name, requirements[name]) for name in names]
+
+
+def _pinned(manager, name):
+    """The `name==version` pin the xbuildenv ships for a cross-build package."""
+    [(name, version)] = _pins(manager, name)
+    return f"{name}=={version}"
+
+
+@pytest.fixture()
+def monkeypatch_subprocess_run_pip(monkeypatch):
+    """
+    Intercept `pip install` / `uv pip install` invocations, recording each
+    call's argv and faking the resulting installation (a top-level package
+    directory plus a .dist-info directory per pinned requirement) inside the
+    --target directory.
+    """
+    import subprocess
+
+    calls: list[list[str]] = []
+    orig_run = subprocess.run
+
+    def is_pip_install(cmds):
+        cmds = [str(cmd) for cmd in cmds]
+        if cmds[0:3] == [sys.executable, "-m", "pip"]:
+            return True
+        if cmds[0] == "pip":
+            return True
+        # uv: `<path-to-uv> pip install ...`
+        return Path(cmds[0]).name.split(".")[0] == "uv" and cmds[1:2] == ["pip"]
+
+    def fake_install(cmds):
+        if "--target" not in cmds:
+            return
+        target = Path(cmds[cmds.index("--target") + 1])
+        for arg in cmds:
+            if arg.startswith("-") or "==" not in arg:
+                continue
+            name, _, version = arg.partition("==")
+            (target / name).mkdir(parents=True, exist_ok=True)
+            (target / f"{name}-{version}.dist-info").mkdir(parents=True, exist_ok=True)
+
+    def monkeypatch_func(cmds, *args, **kwargs):
+        if is_pip_install(cmds):
+            calls.append(list(cmds))
+            fake_install(cmds)
+            return subprocess.CompletedProcess(cmds, 0, "", "")
+        else:
+            return orig_run(cmds, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", monkeypatch_func)
+    yield calls
+
+
+class TestCrossBuildEnvManager:
+    def test_symlink_dir(self, tmp_path):
+        manager = CrossBuildEnvManager(tmp_path)
+        assert manager.symlink_dir == tmp_path / "xbuildenv"
+
+    def test_list_versions(self, tmp_path):
+        manager = CrossBuildEnvManager(tmp_path)
+
+        versions = [
+            "0.25.0",
+            "0.25.0dev0",
+            "0.25.1",
+            "0.26.0a1",
+            "0.26.0a2",
+            _url_to_version("https://github.com/url/xbuildenv-0.26.0a3.tar.bz2"),
+        ]
+
+        for version in versions:
+            (tmp_path / version).mkdir()
+
+        (tmp_path / "xbuildenv").mkdir()
+        (tmp_path / "not_version").touch()
+
+        assert set(manager.list_versions()) == set(versions)
+
+    def test_use_version(self, tmp_path):
+        manager = CrossBuildEnvManager(tmp_path)
+        cur_version_dir = manager.symlink_dir
+
+        cur_version_dir.mkdir(exist_ok=True)
+        (cur_version_dir / "file").touch()
+
+        (tmp_path / "0.25.0").mkdir()
+        (tmp_path / "0.25.0" / "0.25.0_file").touch()
+
+        with pytest.raises(
+            ValueError, match="Cannot find cross-build environment version not_version"
+        ):
+            manager.use_version("not_version")
+
+        manager.use_version("0.25.0")
+
+        assert cur_version_dir.is_symlink()
+        assert cur_version_dir.resolve() == tmp_path / "0.25.0"
+        assert (cur_version_dir / "0.25.0_file").exists()
+        assert not (cur_version_dir / "file").exists()
+
+    def test_current_version(self, tmp_path):
+        manager = CrossBuildEnvManager(tmp_path)
+
+        assert manager.current_version is None
+
+        (tmp_path / "0.25.0").mkdir()
+        (tmp_path / "0.26.0").mkdir()
+
+        manager.use_version("0.25.0")
+        assert manager.current_version == "0.25.0"
+
+        manager.use_version("0.26.0")
+        assert manager.current_version == "0.26.0"
+
+        manager.uninstall_version("0.26.0")
+        assert manager.current_version is None
+
+        manager.use_version("0.25.0")
+        assert manager.current_version == "0.25.0"
+
+    def test_download(self, tmp_path, dummy_xbuildenv_url):
+        download_path = tmp_path / "test"
+        download_and_unpack_archive(dummy_xbuildenv_url, download_path, "")
+
+        assert download_path.exists()
+        assert (download_path / "xbuildenv").exists()
+        assert (download_path / "xbuildenv" / "pyodide-root").exists()
+
+    def test_download_verifies_sha256(self, tmp_path, dummy_xbuildenv_url):
+        download_path = tmp_path / "test"
+        download_and_unpack_archive(
+            dummy_xbuildenv_url,
+            download_path,
+            "",
+            sha256=test_conftest.dummy_xbuildenv_sha256(),
+        )
+
+        assert (download_path / "xbuildenv" / "pyodide-root").exists()
+
+    def test_download_rejects_bad_sha256(self, tmp_path, dummy_xbuildenv_url):
+        download_path = tmp_path / "test"
+        bad = "0" * 64
+
+        with pytest.raises(ValueError, match="Invalid sha256 checksum") as excinfo:
+            download_and_unpack_archive(
+                dummy_xbuildenv_url, download_path, "", sha256=bad
+            )
+
+        # The message names both digests so a user can compare them.
+        assert test_conftest.dummy_xbuildenv_sha256() in str(excinfo.value)
+        assert bad in str(excinfo.value)
+        # Nothing is extracted from an archive that failed verification.
+        assert not download_path.exists()
+
+    def test_download_file_url(self, tmp_path):
+        """A local archive can be installed through a ``file://`` URL."""
+        download_path = tmp_path / "test"
+        download_and_unpack_archive(
+            test_conftest.test_xbuildenv_path().as_uri(),
+            download_path,
+            "",
+            sha256=test_conftest.dummy_xbuildenv_sha256(),
+        )
+
+        assert (download_path / "xbuildenv" / "pyodide-root").exists()
+
+    def test_download_path_exists(self, tmp_path):
+        download_path = tmp_path / "test"
+        download_path.mkdir()
+
+        with pytest.raises(FileExistsError, match="Path .* already exists"):
+            download_and_unpack_archive(
+                "https://example.com/xbuildenv-0.25.0.tar.bz2", download_path, ""
+            )
+
+    def test_find_latest_version(self, tmp_path, fake_xbuildenv_releases_compatible):
+        manager = CrossBuildEnvManager(
+            tmp_path, str(fake_xbuildenv_releases_compatible)
+        )
+        latest_version = manager._find_latest_version()
+        assert latest_version == "0.2.0", latest_version
+
+    def test_find_latest_version_incompat(
+        self, tmp_path, fake_xbuildenv_releases_incompatible, monkeypatch
+    ):
+        PatchedVersionInfo = namedtuple(
+            "PatchedVersionInfo", ["major", "minor", "patch"]
+        )
+        monkeypatch.setattr(sys, "version_info", PatchedVersionInfo(3, 11, 0))
+        manager = CrossBuildEnvManager(
+            tmp_path, str(fake_xbuildenv_releases_incompatible)
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="Python version 3.11 is too old. The oldest supported version of Python is 4.5.",
+        ):
+            manager._find_latest_version()
+
+        monkeypatch.setattr(sys, "version_info", PatchedVersionInfo(5, 11, 0))
+        with pytest.raises(
+            ValueError,
+            match="Python version 5.11 is not yet supported. The newest supported version of Python is 4.5.",
+        ):
+            manager._find_latest_version()
+
+    def test_get_default_xbuildenv_url(
+        self, tmp_path, fake_xbuildenv_releases_compatible, reset_cache, reset_env_vars
+    ):
+        manager = CrossBuildEnvManager(
+            tmp_path, str(fake_xbuildenv_releases_compatible)
+        )
+        url = manager._get_default_xbuildenv_url()
+        assert url == ""
+
+        reset_cache()
+
+        os.environ["DEFAULT_CROSS_BUILD_ENV_URL"] = (
+            "https://example.com/xbuildenv-0.25.0.tar.bz2"
+        )
+
+        url = manager._get_default_xbuildenv_url()
+        assert url == "https://example.com/xbuildenv-0.25.0.tar.bz2"
+
+    def test_install_version(
+        self,
+        tmp_path,
+        dummy_xbuildenv_url,
+        monkeypatch,
+        monkeypatch_subprocess_run_pip,
+        fake_xbuildenv_releases_compatible,
+    ):
+        manager = CrossBuildEnvManager(
+            tmp_path, str(fake_xbuildenv_releases_compatible)
+        )
+        version = "0.1.0"
+
+        manager.install(version)
+
+        assert (tmp_path / version).exists()
+        assert (tmp_path / version / ".installed").exists()
+        assert manager.current_version == version
+
+        assert manager.symlink_dir.is_symlink()
+        assert manager.symlink_dir.resolve() == tmp_path / version
+        assert (manager.symlink_dir / "xbuildenv").exists()
+        assert (manager.symlink_dir / "xbuildenv" / "pyodide-root").exists()
+        assert (
+            manager.symlink_dir / "xbuildenv" / "pyodide-root" / "package_index"
+        ).exists()
+        assert (manager.symlink_dir / "xbuildenv" / "site-packages-extras").exists()
+
+        assert (manager.symlink_dir / ".build-python-version").exists()
+        assert (
+            manager.symlink_dir / ".build-python-version"
+        ).read_text() == f"{sys.version_info.major}.{sys.version_info.minor}"
+
+        # installing the same version again should be a no-op
+        manager.install(version)
+
+    def test_install_url(
+        self, tmp_path, dummy_xbuildenv_url, monkeypatch, monkeypatch_subprocess_run_pip
+    ):
+        manager = CrossBuildEnvManager(tmp_path)
+
+        manager.install(version=None, url=dummy_xbuildenv_url)
+        version = _url_to_version(dummy_xbuildenv_url)
+
+        assert (tmp_path / version).exists()
+        assert (tmp_path / version / ".installed").exists()
+        assert manager.current_version == version
+
+        assert manager.symlink_dir.is_symlink()
+        assert manager.symlink_dir.resolve() == tmp_path / version
+        assert (manager.symlink_dir / "xbuildenv").exists()
+        assert (manager.symlink_dir / "xbuildenv" / "pyodide-root").exists()
+        assert not (
+            manager.symlink_dir / "xbuildenv" / "pyodide-root" / "package_index"
+        ).exists()
+        assert (manager.symlink_dir / "xbuildenv" / "site-packages-extras").exists()
+
+        assert (manager.symlink_dir / ".build-python-version").exists()
+        assert (
+            manager.symlink_dir / ".build-python-version"
+        ).read_text() == f"{sys.version_info.major}.{sys.version_info.minor}"
+
+    def test_install_url_default(
+        self,
+        tmp_path,
+        dummy_xbuildenv_url,
+        monkeypatch,
+        monkeypatch_subprocess_run_pip,
+        reset_cache,
+        reset_env_vars,
+    ):
+        manager = CrossBuildEnvManager(tmp_path)
+
+        os.environ["DEFAULT_CROSS_BUILD_ENV_URL"] = dummy_xbuildenv_url
+        manager.install(version=None)
+        version = _url_to_version(dummy_xbuildenv_url)
+
+        assert (tmp_path / version).exists()
+        assert (tmp_path / version / ".installed").exists()
+        assert manager.current_version == version
+
+        assert manager.symlink_dir.is_symlink()
+        assert manager.symlink_dir.resolve() == tmp_path / version
+        assert (manager.symlink_dir / "xbuildenv").exists()
+        assert (manager.symlink_dir / "xbuildenv" / "pyodide-root").exists()
+        assert (manager.symlink_dir / "xbuildenv" / "site-packages-extras").exists()
+
+        assert (manager.symlink_dir / ".build-python-version").exists()
+        assert (
+            manager.symlink_dir / ".build-python-version"
+        ).read_text() == f"{sys.version_info.major}.{sys.version_info.minor}"
+
+    def test_install_force(
+        self,
+        tmp_path,
+        dummy_xbuildenv_url,
+        monkeypatch,
+        monkeypatch_subprocess_run_pip,
+        fake_xbuildenv_releases_incompatible,
+    ):
+        manager = CrossBuildEnvManager(
+            tmp_path, str(fake_xbuildenv_releases_incompatible)
+        )
+        version = "0.1.0"
+
+        with pytest.raises(
+            ValueError,
+            match=f"Version {version} is not compatible with the current environment",
+        ):
+            manager.install(version)
+
+        manager.install(version, force_install=True)
+
+        assert (tmp_path / version).exists()
+        assert (tmp_path / version / ".installed").exists()
+        assert manager.current_version == version
+
+    @pytest.mark.parametrize("use_uv", [False, True])
+    def test_install_cross_build_packages(
+        self,
+        tmp_path,
+        dummy_xbuildenv_url,
+        monkeypatch_subprocess_run_pip,
+        monkeypatch,
+        use_uv,
+    ):
+        from pyodide_build import uv_helper
+
+        monkeypatch.setattr(uv_helper, "should_use_uv", lambda: use_uv)
+        monkeypatch.setattr(uv_helper, "find_uv_bin", lambda: "/fake/bin/uv")
+
+        pip_calls = monkeypatch_subprocess_run_pip
+        manager = CrossBuildEnvManager(tmp_path)
+
+        download_path = tmp_path / "test"
+        download_and_unpack_archive(dummy_xbuildenv_url, download_path, "")
+
+        xbuildenv_root = download_path / "xbuildenv"
+        xbuildenv_pyodide_root = xbuildenv_root / "pyodide-root"
+        hostsitepackages = manager._host_site_packages_dir(xbuildenv_pyodide_root)
+        numpy_version = build_env.read_pinned_requirements(
+            xbuildenv_root / "requirements.txt"
+        )["numpy"]
+
+        manager._install_cross_build_packages(
+            xbuildenv_root, xbuildenv_pyodide_root, {"numpy": numpy_version}
+        )
+
+        install_prefix = (
+            ["/fake/bin/uv", "pip", "install"]
+            if use_uv
+            else [sys.executable, "-m", "pip", "install", "--no-user"]
+        )
+        install_suffix = [
+            "--constraint",
+            str(xbuildenv_root / "requirements.txt"),
+            "--target",
+            str(hostsitepackages),
+            f"numpy=={numpy_version}",
+        ]
+        # The requested packages are upgraded without their dependencies, then a
+        # second pass installs the dependencies without replacing anything that
+        # is already there.
+        assert pip_calls == [
+            [*install_prefix, "--upgrade", "--no-deps", *install_suffix],
+            [*install_prefix, *install_suffix],
+        ]
+
+        assert hostsitepackages.exists()
+
+        # The extras of the installed package are overlaid...
+        assert (hostsitepackages / "numpy" / "_core" / "lib" / "libnpymath.a").exists()
+        # ...but the extras of packages we did not install are not.
+        assert not (hostsitepackages / "scipy").exists()
+
+    def test_create_package_index(self, tmp_path, dummy_xbuildenv_url):
+        manager = CrossBuildEnvManager(tmp_path)
+
+        download_path = tmp_path / "test"
+        download_and_unpack_archive(dummy_xbuildenv_url, download_path, "")
+
+        xbuildenv_root = download_path / "xbuildenv"
+        xbuildenv_pyodide_root = xbuildenv_root / "pyodide-root"
+
+        manager._create_package_index(xbuildenv_pyodide_root, version="0.25.0")
+        (xbuildenv_pyodide_root / "package_index").exists()
+
+    def test_uninstall_version(self, tmp_path):
+        manager = CrossBuildEnvManager(tmp_path)
+
+        versions = [
+            "0.25.0",
+            "0.25.0dev0",
+            "0.25.1",
+            "0.26.0a1",
+            "0.26.0a2",
+            _url_to_version("https://github.com/url/xbuildenv-0.26.0a3.tar.bz2"),
+        ]
+
+        for version in versions:
+            (tmp_path / version).mkdir()
+
+        manager.use_version("0.25.0")
+
+        assert manager.symlink_dir.is_symlink()
+        assert manager.symlink_dir.resolve() == tmp_path / "0.25.0"
+
+        with pytest.raises(
+            ValueError, match="Cannot find cross-build environment version not_version"
+        ):
+            manager.uninstall_version("not_version")
+
+        manager.uninstall_version("0.25.1")
+        assert not manager._path_for_version("0.25.1").exists()
+
+        manager.uninstall_version("0.25.0")
+        assert not manager._path_for_version("0.25.0").exists()
+        assert not manager.symlink_dir.exists()
+
+        assert set(manager.list_versions()) == set(versions) - {"0.25.0", "0.25.1"}
+
+    def test_install_version_rejects_bad_sha256(
+        self,
+        tmp_path,
+        dummy_xbuildenv_url,
+        monkeypatch_subprocess_run_pip,
+        fake_xbuildenv_releases_compatible,
+    ):
+        """A release whose archive does not match its published sha256 is not installed."""
+        metadata = json.loads(fake_xbuildenv_releases_compatible.read_text())
+        metadata["releases"]["0.1.0"]["sha256"] = "0" * 64
+        fake_xbuildenv_releases_compatible.write_text(json.dumps(metadata))
+
+        manager = CrossBuildEnvManager(
+            tmp_path, str(fake_xbuildenv_releases_compatible)
+        )
+
+        with pytest.raises(ValueError, match="Invalid sha256 checksum"):
+            manager.install("0.1.0")
+
+        assert not (tmp_path / "0.1.0").exists()
+        assert manager.current_version is None
+
+    def test_install_version_without_published_sha256_warns(
+        self,
+        tmp_path,
+        dummy_xbuildenv_url,
+        monkeypatch,
+        monkeypatch_subprocess_run_pip,
+        fake_xbuildenv_releases_compatible,
+    ):
+        """A release without a sha256 still installs, with a warning."""
+        metadata = json.loads(fake_xbuildenv_releases_compatible.read_text())
+        del metadata["releases"]["0.1.0"]["sha256"]
+        fake_xbuildenv_releases_compatible.write_text(json.dumps(metadata))
+
+        # The pyodide-build logger writes through Rich, not through the root
+        # logger, so record warnings directly instead of using caplog.
+        warnings: list[str] = []
+        monkeypatch.setattr(
+            logger, "warning", lambda msg, *args: warnings.append(msg % args)
+        )
+
+        manager = CrossBuildEnvManager(
+            tmp_path, str(fake_xbuildenv_releases_compatible)
+        )
+        manager.install("0.1.0")
+
+        assert any("No sha256 checksum is published" in w for w in warnings)
+        assert (tmp_path / "0.1.0" / ".installed").exists()
+
+    def test_install_url_does_not_verify(
+        self,
+        tmp_path,
+        dummy_xbuildenv_url,
+        monkeypatch_subprocess_run_pip,
+    ):
+        """An install from an explicit URL has no checksum to check against."""
+        manager = CrossBuildEnvManager(tmp_path)
+        manager.install(url=dummy_xbuildenv_url)
+
+        assert manager.current_version is not None
+        assert (manager.symlink_dir / ".installed").exists()
+
+    def test_version_marker(
+        self,
+        tmp_path,
+        dummy_xbuildenv_url,
+        monkeypatch,
+        monkeypatch_subprocess_run_pip,
+        fake_xbuildenv_releases_compatible,
+    ):
+        manager = CrossBuildEnvManager(
+            tmp_path, str(fake_xbuildenv_releases_compatible)
+        )
+        version = "0.1.0"
+
+        manager.install(version)
+
+        assert (manager.symlink_dir / ".build-python-version").exists()
+        assert (
+            manager.symlink_dir / ".build-python-version"
+        ).read_text() == f"{sys.version_info.major}.{sys.version_info.minor}"
+
+        # No error
+        assert manager.version_marker_matches() == (True, None)
+
+        (manager.symlink_dir / ".build-python-version").write_text("2.7.10")
+
+        res, err = manager.version_marker_matches()
+        assert not res
+        assert "does not match the Python version" in err
+
+    def test__init_xbuild_env(
+        self, monkeypatch, monkeypatch_subprocess_run_pip, tmp_path
+    ):
+        manager = CrossBuildEnvManager(tmp_path)
+        VersionInfo = namedtuple("VersionInfo", ("major", "minor"))
+        monkeypatch.setattr(sys, "version_info", VersionInfo(3, 13))
+        build_env._init_xbuild_env(xbuildenv_path=tmp_path)
+        assert manager.current_version >= "0.28.2"
+        monkeypatch.setattr(sys, "version_info", VersionInfo(3, 12))
+        build_env._init_xbuild_env(xbuildenv_path=tmp_path)
+        assert manager.current_version >= "0.27.7"
+
+    def test_ensure_cross_build_packages_installed_idempotent(
+        self, tmp_path, dummy_xbuildenv_url, monkeypatch_subprocess_run_pip
+    ):
+        pip_calls = monkeypatch_subprocess_run_pip
+        manager = CrossBuildEnvManager(tmp_path)
+
+        # Installing the xbuildenv never installs cross-build packages
+        manager.install(version=None, url=dummy_xbuildenv_url)
+        assert pip_calls == []
+
+        # First ensure installs once (two pip invocations, see
+        # _install_cross_build_packages)
+        manager.ensure_cross_build_packages_installed(_pins(manager, "numpy"))
+        assert len(pip_calls) == 2
+        assert pip_calls[0][-1] == _pinned(manager, "numpy")
+
+        # Second ensure is a no-op: numpy's dist-info is already there
+        manager.ensure_cross_build_packages_installed(_pins(manager, "numpy"))
+        assert len(pip_calls) == 2
+
+        # ...but a package we have not installed yet still gets installed, and
+        # only that package.
+        manager.ensure_cross_build_packages_installed(_pins(manager, "numpy", "scipy"))
+        assert len(pip_calls) == 4
+        assert pip_calls[2][-1] == _pinned(manager, "scipy")
+
+    def test_ensure_cross_build_packages_installed_normalizes_names(
+        self, tmp_path, dummy_xbuildenv_url, monkeypatch_subprocess_run_pip
+    ):
+        pip_calls = monkeypatch_subprocess_run_pip
+        manager = CrossBuildEnvManager(tmp_path)
+        manager.install(version=None, url=dummy_xbuildenv_url)
+
+        [(_, version)] = _pins(manager, "numpy")
+
+        manager.ensure_cross_build_packages_installed([("NumPy", version)])
+        assert len(pip_calls) == 2
+        assert pip_calls[0][-1] == f"NumPy=={version}"
+
+        # The already-installed check normalizes names, so this is a no-op even
+        # though the dist-info directory was written as `NumPy-<version>`.
+        manager.ensure_cross_build_packages_installed([("NUMPY", version)])
+        assert len(pip_calls) == 2
+
+    def test_use_version_dangling_symlink(self, tmp_path):
+        # Regression test: a dangling xbuildenv symlink (target removed) must be
+        # cleaned up so that use_version() does not raise FileExistsError.
+        manager = CrossBuildEnvManager(tmp_path)
+
+        (tmp_path / "0.25.0").mkdir()
+        (tmp_path / "0.26.0").mkdir()
+
+        # Point the symlink at a directory and then delete that directory,
+        # leaving a dangling symlink behind.
+        manager.use_version("0.25.0")
+        shutil.rmtree(tmp_path / "0.25.0")
+
+        assert manager.symlink_dir.is_symlink()
+        assert not manager.symlink_dir.exists()  # dangling
+
+        # This previously raised FileExistsError.
+        manager.use_version("0.26.0")
+
+        assert manager.symlink_dir.is_symlink()
+        assert manager.symlink_dir.resolve() == tmp_path / "0.26.0"
+
+    def test_install_preexisting_not_deleted_on_failure(
+        self,
+        tmp_path,
+        dummy_xbuildenv_url,
+        monkeypatch,
+        monkeypatch_subprocess_run_pip,
+    ):
+        # Regression test: if a valid xbuildenv is already installed and a later
+        # step (e.g. use_version) of a subsequent install() fails, the existing
+        # installation must NOT be deleted.
+        manager = CrossBuildEnvManager(tmp_path)
+
+        manager.install(version=None, url=dummy_xbuildenv_url)
+        version = _url_to_version(dummy_xbuildenv_url)
+        download_path = tmp_path / version
+        assert download_path.exists()
+
+        # Make a later step fail on the second install() call.
+        def boom(_version):
+            raise OSError("simulated symlink failure (e.g. Windows privilege)")
+
+        monkeypatch.setattr(manager, "use_version", boom)
+
+        with pytest.raises(OSError, match="simulated symlink failure"):
+            manager.install(version=None, url=dummy_xbuildenv_url)
+
+        # The pre-existing installation must still be present.
+        assert download_path.exists()
+        assert (download_path / ".installed").exists()
+
+    def test_install_new_deleted_on_failure(
+        self,
+        tmp_path,
+        dummy_xbuildenv_url,
+        monkeypatch,
+        monkeypatch_subprocess_run_pip,
+    ):
+        # Complement: when THIS call created the directory and a later step
+        # fails, the freshly downloaded directory should be removed.
+        manager = CrossBuildEnvManager(tmp_path)
+        version = _url_to_version(dummy_xbuildenv_url)
+        download_path = tmp_path / version
+
+        def boom(_version):
+            raise OSError("simulated symlink failure")
+
+        monkeypatch.setattr(manager, "use_version", boom)
+
+        with pytest.raises(OSError, match="simulated symlink failure"):
+            manager.install(version=None, url=dummy_xbuildenv_url)
+
+        assert not download_path.exists()
+
+    def test_install_url_default_no_mangled_package_index(
+        self,
+        tmp_path,
+        dummy_xbuildenv_url,
+        monkeypatch,
+        monkeypatch_subprocess_run_pip,
+        reset_cache,
+        reset_env_vars,
+    ):
+        # Regression test: installing via DEFAULT_CROSS_BUILD_ENV_URL must be
+        # treated like an explicit-url install and NOT create a package index
+        # baked with a mangled (URL-derived) version string.
+        manager = CrossBuildEnvManager(tmp_path)
+
+        os.environ["DEFAULT_CROSS_BUILD_ENV_URL"] = dummy_xbuildenv_url
+        manager.install(version=None)
+
+        assert not (
+            manager.symlink_dir / "xbuildenv" / "pyodide-root" / "package_index"
+        ).exists()
+
+    def test_install_version_marker_mismatch_triggers_reinstall(
+        self,
+        tmp_path,
+        dummy_xbuildenv_url,
+        monkeypatch,
+        monkeypatch_subprocess_run_pip,
+    ):
+        # Regression test: when an already-installed xbuildenv has a Python
+        # version marker that does not match the current Python, a subsequent
+        # install() must rewrite the marker (and refresh host packages) rather
+        # than skipping work and leaving the stale marker / silently passing.
+        manager = CrossBuildEnvManager(tmp_path)
+
+        manager.install(version=None, url=dummy_xbuildenv_url)
+        version = _url_to_version(dummy_xbuildenv_url)
+        download_path = tmp_path / version
+
+        # Cross-build packages installed under the old Python version.
+        manager.ensure_cross_build_packages_installed(_pins(manager, "numpy"))
+        hostsitepackages = manager._host_site_packages_dir()
+        numpy_dist_info = hostsitepackages / (
+            _pinned(manager, "numpy").replace("==", "-") + ".dist-info"
+        )
+        assert numpy_dist_info.exists()
+
+        # Simulate the env having been installed under a different Python.
+        marker_file = download_path / ".build-python-version"
+        marker_file.write_text("2.7.10")
+
+        matches, _ = manager.version_marker_matches()
+        assert not matches
+
+        # Reinstall should rewrite the marker to the current Python version.
+        manager.install(version=None, url=dummy_xbuildenv_url)
+
+        matches, err = manager.version_marker_matches()
+        assert matches, err
+        assert (
+            marker_file.read_text()
+            == f"{sys.version_info.major}.{sys.version_info.minor}"
+        )
+        # Host packages from the old Python version dropped, so they get
+        # reinstalled by the next build that needs them.
+        assert not numpy_dist_info.exists()
+
+    def test_install_version_marker_match_no_marker_rewrite(
+        self,
+        tmp_path,
+        dummy_xbuildenv_url,
+        monkeypatch,
+        monkeypatch_subprocess_run_pip,
+    ):
+        # When the marker already matches, a repeat install() should be a no-op
+        # and must not discard already-installed cross-build packages.
+        manager = CrossBuildEnvManager(tmp_path)
+
+        manager.install(version=None, url=dummy_xbuildenv_url)
+        manager.ensure_cross_build_packages_installed(_pins(manager, "numpy"))
+        hostsitepackages = manager._host_site_packages_dir()
+        numpy_dist_info = hostsitepackages / (
+            _pinned(manager, "numpy").replace("==", "-") + ".dist-info"
+        )
+        assert numpy_dist_info.exists()
+
+        manager.install(version=None, url=dummy_xbuildenv_url)
+
+        # Host packages preserved (install did no work).
+        assert numpy_dist_info.exists()
+
+    def test_find_latest_version_empty_releases(self, tmp_path):
+        # Regression test: empty releases metadata must produce a clear error,
+        # not an IndexError.
+        import json
+
+        metadata_path = tmp_path / "empty-metadata.json"
+        metadata_path.write_text(json.dumps({"releases": {}}))
+
+        manager = CrossBuildEnvManager(tmp_path, str(metadata_path))
+
+        with pytest.raises(
+            ValueError, match="No cross-build environment releases are available"
+        ):
+            manager._find_latest_version()
+
+
+@pytest.mark.parametrize(
+    "url, version",
+    [
+        (
+            "https://example.com/xbuildenv-0.25.0.tar.bz2",
+            "https_example_com_xbuildenv-0_25_0_tar_bz2",
+        ),
+        (
+            "http://example.com/subdir/subsubdir/xbuildenv-0.25.0dev0.tar.gz2",
+            "http_example_com_subdir_subsubdir_xbuildenv-0_25_0dev0_tar_gz2",
+        ),
+    ],
+)
+def test_url_to_version(url: str, version: str) -> None:
+    assert _url_to_version(url) == version
+
+
+@pytest.mark.parametrize(
+    "installed, pinned, expected",
+    [
+        ("1.2.3", "1.2.3", True),
+        ("1.2.3", "1.2.4", False),
+        (None, "1.2.3", False),
+        # pip and uv normalize the version in the .dist-info directory name,
+        # the pin in requirements.txt is not necessarily normalized.
+        ("2024.2.2", "2024.02.02", True),
+        ("1.0", "1.0.0", True),
+        ("1.0rc1", "1.0-rc1", True),
+        # Unparsable versions fall back to a string comparison.
+        ("not+a+version", "not+a+version", True),
+        ("not+a+version", "1.0", False),
+    ],
+)
+def test_same_version(installed: str | None, pinned: str, expected: bool) -> None:
+    assert _same_version(installed, pinned) == expected

@@ -1,0 +1,119 @@
+import os
+import zipfile
+from pathlib import Path
+from textwrap import dedent
+
+from build import ConfigSettingsType
+
+from pyodide_build import build_env, common, pypabuild
+from pyodide_build.build_env import get_pyodide_root, wheel_platform
+from pyodide_build.logger import logger
+from pyodide_build.spec import _BuildSpecExports
+
+
+def _create_ignore_files(directory: Path) -> None:
+    directory.joinpath(".gitignore").write_text(
+        dedent("""\
+        # Created by pyodide-build
+        *
+    """),
+        encoding="utf-8",
+    )
+
+    directory.joinpath(".hgignore").write_text(
+        dedent("""\
+        # Created by pyodide-build
+        syntax: glob
+        **/*
+    """),
+        encoding="utf-8",
+    )
+
+
+def _prepare_build_dir(build_dir: Path) -> None:
+    # create a persistent build dir in the source dir
+    build_dir.mkdir(exist_ok=True)
+    # don't track the build dir in version control,
+    # helps if building in a git/mercurial repo
+    _create_ignore_files(build_dir)
+
+
+def run(
+    srcdir: Path,
+    outdir: Path,
+    exports: _BuildSpecExports,
+    config_settings: ConfigSettingsType,
+    isolation: bool = True,
+    skip_dependency_check: bool = False,
+    verbosity: int = 0,
+) -> Path:
+    outdir = outdir.resolve()
+    cflags = build_env.get_build_flag("SIDE_MODULE_CFLAGS")
+    cflags += f" {os.environ.get('CFLAGS', '')}"
+    cxxflags = build_env.get_build_flag("SIDE_MODULE_CXXFLAGS")
+    cxxflags += f" {os.environ.get('CXXFLAGS', '')}"
+    ldflags = build_env.get_build_flag("SIDE_MODULE_LDFLAGS")
+    ldflags += f" {os.environ.get('LDFLAGS', '')}"
+    target_install_dir = os.environ.get(
+        "TARGETINSTALLDIR", build_env.get_build_flag("TARGETINSTALLDIR")
+    )
+    build_env._create_constraints_file()
+    env = os.environ.copy()
+    env.update(build_env.get_build_environment_vars(get_pyodide_root()))
+
+    build_dir = srcdir / ".pyodide_build"
+    _prepare_build_dir(build_dir)
+
+    build_env_ctx = pypabuild.get_build_env(
+        env=env,
+        pkgname="",
+        cflags=cflags,
+        cxxflags=cxxflags,
+        ldflags=ldflags,
+        target_install_dir=target_install_dir,
+        exports=exports,
+        build_dir=build_dir,
+    )
+
+    with build_env_ctx as env:
+        built_wheel = pypabuild.build(
+            srcdir,
+            outdir,
+            env,
+            config_settings,
+            isolation=isolation,
+            skip_dependency_check=skip_dependency_check,
+            verbosity=verbosity,
+        )
+
+    wheel_path = Path(built_wheel)
+    if "emscripten" in wheel_path.name:
+        # Retag platformed wheels to pyodide
+        wheel_path = common.retag_wheel(wheel_path, wheel_platform())
+
+    _check_and_maybe_modify_wheel(wheel_path)
+
+    return wheel_path
+
+
+def _check_and_maybe_modify_wheel(wheel_path: Path) -> None:
+    """Rewrite .so ABI tags inside *wheel_path*, but only when necessary.
+
+    For pure-Python wheels there are no native extensions, so the unpack/repack
+    round-trip performed by :func:`common.modify_wheel` would be a no-op.
+    We detect that case up-front and skip the two ``python -m wheel`` subprocess
+    calls entirely.
+    """
+    # Only unpack/repack the wheel if it contains native extension files that
+    # need their ABI tags rewritten.  For pure-Python wheels this is always a
+    # no-op, so we skip the two subprocess round-trips entirely.
+    with zipfile.ZipFile(wheel_path) as zf:
+        has_so = any(name.endswith(".so") for name in zf.namelist())
+
+    if has_so:
+        with common.modify_wheel(wheel_path) as wheel_dir:
+            build_env.replace_so_abi_tags(wheel_dir)
+    else:
+        logger.debug(
+            "Skipping ABI-tag rewrite for pure-Python wheel %s", wheel_path.name
+        )

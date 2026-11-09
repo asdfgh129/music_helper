@@ -1,0 +1,228 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pyodide-build"
+authors = [{name = "Pyodide developers"}]
+description = '"Tools for building Pyodide"'
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+license = "MPL-2.0"
+license-files = ["LICENSE", "pyodide_build/vendor/LICENSE"]
+requires-python = ">=3.12"
+dependencies = [
+    "build>=1.4,<1.7,!=1.4.4", # keep in sync with uv extra
+    "pyodide-cli>=0.4.1",
+    "pyodide-lock~=0.2.0",
+    "auditwheel-emscripten~=0.3.0",
+    "attrs",
+    "cattrs",
+    "wheel",
+    "ruamel.yaml",
+    "packaging",
+    "virtualenv",
+    "requests",
+    # guard ourselves against the compromised intermediate
+    # CA keys of the eMudhra emSign ECC Root CA - G3 root
+    "certifi>=2026.10.19",
+    "click",
+    "rich",
+    "platformdirs",
+]
+dynamic = ["version"]
+
+[project.readme]
+file = "README.md"
+content-type = "text/markdown"
+
+[project.urls]
+Homepage = "https://github.com/pyodide/pyodide-build"
+"Bug Tracker" = "https://github.com/pyodide/pyodide-build/issues"
+Documentation = "https://pyodide-build.readthedocs.io"
+
+[project.entry-points."pipx.run"]
+pyodide = "pyodide_cli.__main__:main"
+
+[project.entry-points."pyodide.cli"]
+build = "pyodide_build.cli.build:main"
+clean = "pyodide_build.cli.clean:app"
+build-recipes = "pyodide_build.cli.build_recipes:build_recipes"
+build-recipes-no-deps = "pyodide_build.cli.build_recipes:build_recipes_no_deps"
+venv = "pyodide_build.cli.venv:main"
+skeleton = "pyodide_build.cli.skeleton:app"
+py-compile = "pyodide_build.cli.py_compile:main"
+config = "pyodide_build.cli.config:app"
+xbuildenv = "pyodide_build.cli.xbuildenv:app"
+
+[project.optional-dependencies]
+resolve = [
+    "resolvelib",
+    "unearth~=0.6",
+]
+uv = [
+  "build[uv]>=1.4,<1.7,!=1.4.4",
+]
+
+[dependency-groups]
+test = [
+    "pytest",
+    "pytest-httpserver",
+    "pytest-cov",
+    "types-requests",
+    # click 8.3.3 has a regression where
+    # pytest giving OSError: [Errno 29] Illegal seek error
+    "click>=8.0,<8.3.3",
+]
+docs = [
+    # sphinx-click 6.2.0 is broken with Sphinx 9 due to a mock resolution issue.
+    # see https://github.com/click-contrib/sphinx-click/pull/160. We can remove
+    # this when merged and released.
+    "sphinx>=5.3.0,<9",
+    "sphinx_book_theme>=0.4.0rc1",
+    "myst-parser",
+    "sphinx-autodoc-typehints>=1.21.7",
+    "sphinx-design",
+    "sphinx-click",
+]
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/pyodide_build/tests",
+]
+
+[tool.pytest.ini_options]
+addopts = "-vra --strict-markers"
+markers = [
+  "integration: mark a test as an integration test",
+  "windows: mark a test to run on Windows"
+]
+
+[tool.mypy]
+python_version = "3.12"
+show_error_codes = true
+warn_unreachable = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+
+# Strict checks
+warn_unused_configs = true
+check_untyped_defs = true
+disallow_any_generics = true
+disallow_subclassing_any = false
+disallow_untyped_calls = false
+disallow_untyped_defs = false
+disallow_incomplete_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = false
+no_implicit_reexport = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+  "_f2c_fixes",
+  "pip",
+  "pip.*",
+  "resolvelib",
+  "ruamel.yaml",
+  "tomllib",
+  "unearth",
+  "unearth.*",
+  "uv",
+  "virtualenv",
+  "virtualenv.*",
+  "auditwheel_emscripten.*"
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["pyodide_build.vendor.*"]
+ignore_errors = true
+
+# This module monkeypatches pip internals whose stubs differ between the local
+# and CI mypy environments, so the required "type: ignore" comments look unused
+# locally. Don't warn about that here.
+[[tool.mypy.overrides]]
+module = ["pyodide_build.out_of_tree.pip_wrapper"]
+warn_unused_ignores = false
+
+
+[tool.ruff]
+lint.exclude = ["pyodide_build/vendor/*"]
+lint.select = [
+  "ASYNC",  # flake8-async
+  "B0",     # bugbear (all B0* checks enabled by default)
+  "B904",   # bugbear (Within an except clause, raise exceptions with raise ... from err)
+  "B905",   # bugbear (zip() without an explicit strict= parameter set.)
+  "C4",     # flake8-comprehensions
+  "C9",     # mccabe complexity
+  "E",      # pycodestyles
+  "F",      # pyflakes
+  "G004",   # f-string logging should be avoided
+  "I",      # isort
+  "PERF",   # Perflint
+  "PGH",    # pygrep-hooks
+  "PL",     # Pylint
+  "UP",     # pyupgrade
+  "W",      # pycodestyles
+]
+
+lint.logger-objects = ["pyodide_build.logger.logger"]
+
+lint.ignore = [
+  "E402",    # Module level import not at top of file
+  "E501",    # Line too long
+  "E731",    # Do not assign a lambda expression, use a def
+  "E741",    # Ambiguous variable name (l, O, I)
+  "C408",    # Unnecessary `dict()` call
+  "PERF401", # Replace for loops that build lists with list comprehension
+  "PLW2901", # Redefined loop variable
+  "PLR0911", # Too many returns in function
+  "PLR0912", # Too many branches in function
+  "PLC0415"  # Import inside function or class
+]
+# line-length = 219  # E501: Recommended goal is 88 to match black
+target-version = "py312"
+
+[tool.ruff.lint.per-file-ignores]
+"src/py/_pyodide/_base.py" = [
+  "PGH001",  # No builtin `eval()` allowed
+]
+"src/tests/test_jsproxy.py" = [
+  "PGH001",  # No builtin `eval()` allowed
+]
+"src/tests/test_typeconversions.py" = [
+  "PGH001",  # No builtin `eval()` allowed
+]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = []
+
+[tool.ruff.lint.isort]
+known-first-party = [
+  "pyodide_build",
+]
+known-third-party = [
+  "build",
+  "pyodide_lock",
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 31  # C901: Recommended goal is 10
+
+[tool.ruff.lint.pylint]
+allow-magic-value-types = ["bytes", "int", "str"]
+max-args = 20        # Default is 5
+max-branches = 27    # Default is 12
+max-returns = 12     # Default is 6
+max-statements = 67  # Default is 50
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"

@@ -1,0 +1,7 @@
+[submodule "chromaprint"]
+	path = chromaprint
+	url = git@github.com:acoustid/chromaprint.git
+	branch = update-kissfft-paths
+[submodule "kissfft"]
+	path = kissfft
+	url = https://github.com/mborgerding/kissfft

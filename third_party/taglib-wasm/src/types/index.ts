@@ -1,0 +1,30 @@
+/**
+ * @fileoverview Main export barrel for types module
+ */
+
+// Re-export TagLibModule from wasm.ts
+export type { TagLibModule } from "../wasm.ts";
+
+// Audio format types and properties
+export * from "./audio-formats.ts";
+
+// Tag interfaces and PropertyMap
+export * from "./tags.ts";
+
+// Format-specific metadata mappings
+export * from "./metadata-mappings.ts";
+
+// Picture types and bitrate control modes
+export * from "./pictures.ts";
+
+// Chapter / cue-marker types
+export * from "./chapters.ts";
+
+// BWF (Broadcast Wave) types — bext / iXML
+export * from "./bwf.ts";
+
+// Configuration types
+export * from "./config.ts";
+
+// Format-specific property key narrowing
+export * from "./format-property-keys.ts";

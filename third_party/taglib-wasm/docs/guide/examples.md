@@ -1,0 +1,177 @@
+# Examples
+
+This guide lists every TagLib-Wasm example and shows how to run it in each
+JavaScript runtime.
+
+## Example Categories
+
+### Common Examples
+
+The `examples/common/` directory contains runtime-agnostic examples that
+demonstrate core functionality:
+
+- **[basic-usage.ts](https://github.com/CharlesWiltgen/TagLib-Wasm/blob/main/examples/common/basic-usage.ts)** -
+  Basic tag reading and writing operations
+- **[simple-api.ts](https://github.com/CharlesWiltgen/TagLib-Wasm/blob/main/examples/common/simple-api.ts)** -
+  Using the simplified high-level API
+- **[automatic-tag-mapping.ts](https://github.com/CharlesWiltgen/TagLib-Wasm/blob/main/examples/common/automatic-tag-mapping.ts)** -
+  Format-agnostic metadata handling
+- **[replaygain-soundcheck.ts](https://github.com/CharlesWiltgen/TagLib-Wasm/blob/main/examples/common/replaygain-soundcheck.ts)** -
+  Volume normalization metadata
+- **[tag-constants.ts](https://github.com/CharlesWiltgen/TagLib-Wasm/blob/main/examples/common/tag-constants.ts)** -
+  Using type-safe property constants
+
+### Runtime-Specific Examples
+
+- **[browser/](https://github.com/CharlesWiltgen/TagLib-Wasm/tree/main/examples/browser)** -
+  Browser-specific implementations
+- **[embind-example.ts](https://github.com/CharlesWiltgen/TagLib-Wasm/blob/main/examples/browser/embind-example.ts)** -
+  Direct usage of the Embind-based low-level API. Browser-only: it fetches its
+  fixture with a relative URL, so serve the repository rather than opening the
+  script from the filesystem
+- **[top-level scripts](https://github.com/CharlesWiltgen/TagLib-Wasm/tree/main/examples)** -
+  Standalone scripts over the repository source (`batch-performance.ts`,
+  `folder-operations.ts`, `partial-loading.ts`), run with `deno run`
+- **[bun/](https://github.com/CharlesWiltgen/TagLib-Wasm/tree/main/examples/bun)** -
+  Bun runtime examples
+- **[deno/](https://github.com/CharlesWiltgen/TagLib-Wasm/tree/main/examples/deno)** -
+  Deno runtime examples
+
+## Running Examples
+
+### Prerequisites
+
+First, ensure you have TagLib-Wasm installed:
+
+```bash
+# NPM/Node.js/Bun
+npm install taglib-wasm
+
+# Deno
+deno add npm:taglib-wasm
+```
+
+### Running Common Examples
+
+The examples in `common/` can be run in any runtime. When running locally, you
+may need to build the project first:
+
+```bash
+# Build the project (if running from source)
+pnpm run build
+```
+
+#### Deno
+
+```bash
+deno run --allow-read examples/common/basic-usage.ts
+```
+
+#### Node.js
+
+```bash
+# Run a TypeScript example directly with tsx
+pnpm exec tsx examples/common/basic-usage.ts
+```
+
+#### Bun
+
+```bash
+bun examples/common/basic-usage.ts
+```
+
+### Platform-Specific Examples
+
+See the [Platform Examples](./platform-examples.md) guide for detailed
+instructions on running examples in specific environments.
+
+## Example Highlights
+
+### Basic Tag Operations
+
+The `basic-usage.ts` example shows fundamental operations:
+
+```typescript
+import { TagLib } from "taglib-wasm";
+
+// Initialize the library
+const taglib = await TagLib.initialize();
+
+// Read an audio file
+using file = await taglib.open(audioBuffer);
+
+// Read tags
+const tag = file.tag();
+console.log(`Title: ${tag.title}`);
+console.log(`Artist: ${tag.artist}`);
+
+// Modify tags
+tag.setTitle("New Title");
+tag.setArtist("New Artist");
+
+// Save changes
+file.save();
+const modifiedBuffer = file.getFileBuffer();
+```
+
+### Simple API
+
+The `simple-api.ts` example demonstrates the high-level API:
+
+```typescript
+import { applyTags, readTags } from "taglib-wasm/simple";
+
+// Read tags
+const metadata = await readTags(audioBuffer);
+console.log(metadata);
+
+// Write tags
+const modifiedBuffer = await applyTags(audioBuffer, {
+  title: "New Title",
+  artist: "New Artist",
+  album: "New Album",
+});
+```
+
+### Format-Agnostic Metadata
+
+The `automatic-tag-mapping.ts` example shows how TagLib-Wasm handles metadata
+across different formats:
+
+```typescript
+// Works the same for MP3, FLAC, M4A, etc.
+const tags = {
+  MUSICBRAINZ_TRACKID: "550e8400-e29b-41d4-a716-446655440000",
+  REPLAYGAIN_TRACK_GAIN: "-6.5 dB",
+  ACOUSTID_ID: "12345678-1234-1234-1234-123456789012",
+};
+
+// TagLib automatically maps to the correct format-specific fields
+const modifiedBuffer = await applyTags(audioBuffer, tags);
+```
+
+## Import Paths
+
+When using TagLib-Wasm in your own project, replace the example import paths:
+
+```typescript
+// Development: relative import into this repo's source
+import { TagLib } from "../../src/taglib.ts";
+```
+
+```typescript
+// NPM (Node.js / Bun)
+import { TagLib } from "taglib-wasm";
+```
+
+```typescript
+// Deno (npm specifier)
+import { TagLib } from "npm:taglib-wasm";
+```
+
+## Next Steps
+
+- Check out the [Platform Examples](./platform-examples.md) for runtime-specific
+  patterns
+- Read the [API Reference](/api/) for detailed documentation
+- Explore [Cover Art handling](./cover-art.md) for working with embedded images

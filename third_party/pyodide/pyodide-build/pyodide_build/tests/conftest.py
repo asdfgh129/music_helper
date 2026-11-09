@@ -1,0 +1,233 @@
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+from pyodide_build import build_env, common
+from pyodide_build.common import default_xbuildenv_path, xbuildenv_dirname
+from pyodide_build.xbuildenv import CrossBuildEnvManager
+
+
+@pytest.fixture(scope="function")
+def reset_env_vars():
+    # Will reset the environment variables to their original values after each test.
+
+    os.environ.pop("PYODIDE_ROOT", None)
+    old_environ = dict(os.environ)
+
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(old_environ)
+
+
+@pytest.fixture(scope="function")
+def reset_cache():
+    # Will remove all caches before and after each test.
+
+    def _reset():
+        build_env.get_pyodide_root.cache_clear()
+        build_env.get_host_build_environment_vars.cache_clear()
+        build_env.get_build_environment_vars.cache_clear()
+        build_env.get_unisolated_packages.cache_clear()
+        build_env.pyodide_tags.cache_clear()
+        common.default_xbuildenv_path.cache_clear()
+
+    _reset()
+
+    yield _reset
+
+    _reset()
+
+
+def dummy_xbuildenv_sha256() -> str:
+    """Returns the sha256 hex digest of the dummy xbuildenv archive"""
+    return hashlib.sha256(test_xbuildenv_path().read_bytes()).hexdigest()
+
+
+def test_xbuildenv_path() -> Path:
+    """Returns the dummy xbuildenv archive built per the Python version we are running on"""
+    python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    path = (
+        Path(__file__).parent
+        / "_test_xbuildenv"
+        / f"xbuildenv-test-{python_version}.tar.gz"
+    )
+    if not path.exists():
+        raise FileNotFoundError(
+            f"There is no test xbuildenv for Python {python_version}. "
+            f"Build one with {path.parent / 'make_fixture.py'}."
+        )
+
+    return path
+
+
+@pytest.fixture(scope="function")
+def dummy_xbuildenv_url(httpserver):
+    """
+    Returns the URL of a dummy xbuildenv archive.
+    This archive contains a minimal files that are required to install a xbuildenv.
+    """
+    test_xbuildenv_archive_path = test_xbuildenv_path()
+    test_xbuildenv_archive = test_xbuildenv_archive_path.read_bytes()
+
+    httpserver.expect_request(f"/{test_xbuildenv_archive_path.name}").respond_with_data(
+        test_xbuildenv_archive
+    )
+    yield httpserver.url_for(f"/{test_xbuildenv_archive_path.name}")
+
+
+@pytest.fixture(scope="function")
+def dummy_xbuildenv(
+    dummy_xbuildenv_url, tmp_path, reset_env_vars, reset_cache, monkeypatch
+):
+    """
+    Downloads the dummy xbuildenv archive and installs it in the temporary directory.
+
+    This fixture can be used to run any functions that require a xbuildenv to be installed before running.
+    """
+    assert "PYODIDE_ROOT" not in os.environ
+
+    xbuildenv_dir = tmp_path / xbuildenv_dirname()
+
+    from pyodide_build.build_env import get_host_build_flag
+
+    original_get_host_build_flag = get_host_build_flag
+
+    def mock_get_host_build_flag(flag_name):
+        if flag_name == "PYODIDE_XBUILDENV_PATH":
+            return str(xbuildenv_dir)
+        return original_get_host_build_flag(flag_name)
+
+    monkeypatch.setattr(
+        "pyodide_build.build_env.get_host_build_flag", mock_get_host_build_flag
+    )
+
+    manager = CrossBuildEnvManager(default_xbuildenv_path())
+    manager.install(
+        version=None,
+        url=dummy_xbuildenv_url,
+    )
+
+    cur_dir = os.getcwd()
+
+    os.chdir(tmp_path)
+
+    try:
+        yield tmp_path
+    finally:
+        os.chdir(cur_dir)
+
+
+class MockEmscripten:
+    def __init__(self, log_file: Path):
+        self.log_file = log_file
+
+    def capture_output(self) -> list[str]:
+        return self.log_file.read_text().splitlines()
+
+
+MOCK_EMSCRIPTEN_TEMPLATE = (
+    Path(__file__).parent / "utils" / "mock_emscripten.sh.tmpl"
+).read_text()
+
+
+@pytest.fixture(scope="function")
+def mock_emscripten(tmp_path, dummy_xbuildenv, reset_env_vars, reset_cache):
+    """
+    This fixture makes a fake emscripten compilers in the PATH.
+    TODO: make this fixture more smart and flexible.
+    """
+    emscripten_version = build_env.get_build_flag("PYODIDE_EMSCRIPTEN_VERSION")
+
+    mock_dir = Path(tmp_path).resolve()
+    mock_dir.mkdir(exist_ok=True, parents=True)
+
+    emcc_log_file = mock_dir / "emcc.log"
+    emcc_binary = mock_dir / "emcc"
+    emcc_binary.write_text(
+        MOCK_EMSCRIPTEN_TEMPLATE.format(
+            output_file=emcc_log_file, version=emscripten_version
+        )
+    )
+    emcc_binary.chmod(0o755)
+
+    llvm_readobj_log_file = mock_dir / "llvm-readobj.log"
+    llvm_readobj_binary = mock_dir / "llvm-readobj"
+    llvm_readobj_binary.write_text(
+        MOCK_EMSCRIPTEN_TEMPLATE.format(
+            output_file=llvm_readobj_log_file, version=emscripten_version
+        )
+    )
+    llvm_readobj_binary.chmod(0o755)
+
+    original_path = os.environ["PATH"]
+
+    os.environ["PATH"] = f"{mock_dir}:{original_path}"
+    reset_cache()
+
+    yield {
+        "emcc": MockEmscripten(emcc_log_file),
+        "llvm-readobj": MockEmscripten(llvm_readobj_log_file),
+    }
+
+    os.environ["PATH"] = original_path
+
+
+@pytest.fixture(scope="function")
+def fake_xbuildenv_releases_compatible(tmp_path, dummy_xbuildenv_url):
+    """
+    Create a fake metadata file with a single release that is compatible with the local environment.
+    """
+    local = build_env.local_versions()
+    sha256 = dummy_xbuildenv_sha256()
+    fake_releases = {
+        "releases": {
+            "0.1.0": {
+                "version": "0.1.0",
+                "url": dummy_xbuildenv_url,
+                "sha256": sha256,
+                "python_version": f"{local['python']}.0",
+                "emscripten_version": "1.39.8",
+            },
+            "0.2.0": {
+                "version": "0.2.0",
+                "url": dummy_xbuildenv_url,
+                "sha256": sha256,
+                "python_version": f"{local['python']}.0",
+                "emscripten_version": "2.39.8",
+            },
+        },
+    }
+
+    metadata_path = Path(tmp_path) / "metadata-compat.json"
+    metadata_path.write_text(json.dumps(fake_releases))
+
+    yield metadata_path
+
+
+@pytest.fixture(scope="function")
+def fake_xbuildenv_releases_incompatible(tmp_path, dummy_xbuildenv_url):
+    """
+    Create a fake metadata file with a single release that is incompatible with the local environment.
+    """
+    fake_releases = {
+        "releases": {
+            "0.1.0": {
+                "version": "0.1.0",
+                "url": dummy_xbuildenv_url,
+                "sha256": dummy_xbuildenv_sha256(),
+                "python_version": "4.5.6",
+                "emscripten_version": "1.39.8",
+            },
+        },
+    }
+
+    metadata_path = Path(tmp_path) / "metadata-incompat.json"
+    metadata_path.write_text(json.dumps(fake_releases))
+
+    yield metadata_path

@@ -1,0 +1,1688 @@
+/**
+ * Cross-backend parity for RAW property strings (taglib-qpl).
+ *
+ * The WASI backend used to coerce the five `FIELD_NUMERIC` property keys
+ * through `toInt()` at the msgpack wire boundary, so `properties()` answered
+ * "3" for an on-disk `TRACKNUMBER` of "03" — and, worse, "3" for "3/12",
+ * destroying the total on any read-modify-write. Emscripten passes the
+ * `StringList` through verbatim and was always correct, so these tests pin
+ * WASI to Emscripten's answer.
+ *
+ * The `PropertyMap` surface is the RAW text surface; the numeric narrowing
+ * belongs to the typed surfaces (`tag().track`, `readTags()`), which are
+ * asserted here too so the fix can't over-correct and break them.
+ */
+
+import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
+import { readFile, rm, writeFile } from "node:fs/promises";
+import { cleanupTempFiles, createTempFile } from "./test-utils.ts";
+import { TagLib } from "../src/taglib.ts";
+import {
+  applyTags,
+  clearTags,
+  readTags,
+} from "../src/simple/tag-operations.ts";
+import { FIXTURE_PATH } from "./shared-fixtures.ts";
+import { mergeTagUpdates } from "../src/utils/tag-mapping.ts";
+import type { AudioFile } from "../src/taglib/audio-file-interface.ts";
+
+const BACKENDS = ["wasi", "emscripten"] as const;
+type Backend = (typeof BACKENDS)[number];
+
+afterAll(cleanupTempFiles);
+
+/**
+ * Formats grouped by how the shim treats their track field. The distinction is
+ * NOT "text versus binary on disk" — ID3v2 TRCK is a text frame — but whether
+ * `split_intpair_properties` / `merge_intpair_properties` reinterpret an
+ * "n/total" value, which is what decides the expected `properties()` shape.
+ */
+
+/** Zero-padding survives verbatim, and so does "n/total": no int-pair handling. */
+const PLAIN_TRACK_FORMATS = ["flac", "ogg", "wav"] as const;
+
+/**
+ * The shim splits "n/total" into trackNumber + totalTracks on read and merges it
+ * back on write. Zero-padding without a "/" is untouched, so these formats
+ * appear in both the padded cases and the split cases below.
+ */
+const INT_PAIR_FORMATS = ["mp3", "m4a"] as const;
+
+/** Every format whose track field is a string on disk, so padding can survive. */
+const PADDABLE_TRACK_FORMATS = ["mp3", "flac", "ogg", "wav"] as const;
+
+/**
+ * MP4 `trkn` is a pair of binary integers, so even "03" is unrepresentable —
+ * both backends must normalize it, and that is correct rather than a defect.
+ */
+const INT_PAIR_FORMAT = "m4a";
+
+/**
+ * Zero-padded values carrying no "/", so no format's int-pair handling
+ * reinterprets them and every paddable format must round-trip them verbatim.
+ */
+const RAW_TRACK_VALUES = ["03", "003"] as const;
+
+const taglibs = {} as Record<Backend, TagLib>;
+
+beforeAll(async () => {
+  for (const backend of BACKENDS) {
+    taglibs[backend] = await TagLib.initialize({ forceWasmType: backend });
+  }
+});
+
+/** Copy a fixture to a temp path so each case mutates an isolated file. */
+async function tempCopy(format: string): Promise<string> {
+  const src = new Uint8Array(
+    await readFile(FIXTURE_PATH[format as keyof typeof FIXTURE_PATH]),
+  );
+  const tmp = await createTempFile(`.${format}`);
+  await writeFile(tmp, src);
+  return tmp;
+}
+
+/** Write `props` through `backend` and persist the result to `path`. */
+async function seedProperties(
+  backend: Backend,
+  path: string,
+  props: Record<string, string[]>,
+): Promise<void> {
+  const file = await taglibs[backend].open(path);
+  try {
+    file.setProperties(props);
+    file.save();
+    const buf = file.getFileBuffer();
+    await writeFile(path, buf);
+  } finally {
+    file.dispose();
+  }
+}
+
+async function readProperty(
+  backend: Backend,
+  path: string,
+  key: string,
+): Promise<string[] | undefined> {
+  const file = await taglibs[backend].open(path);
+  try {
+    return (file.properties() as Record<string, string[]>)[key];
+  } finally {
+    file.dispose();
+  }
+}
+
+describe("properties() raw-string fidelity (taglib-qpl)", () => {
+  // "3/12" has no int-pair reinterpretation on these formats, so the raw
+  // string must survive verbatim — this is the data-loss case from taglib-qpl.
+  for (const format of PLAIN_TRACK_FORMATS) {
+    it(`round-trips trackNumber "3/12" verbatim on both backends [${format}]`, async () => {
+      for (const backend of BACKENDS) {
+        const path = await tempCopy(format);
+        try {
+          await seedProperties(backend, path, { trackNumber: ["3/12"] });
+          for (const reader of BACKENDS) {
+            expect(
+              await readProperty(reader, path, "trackNumber"),
+              `${reader} disagrees about a file written by ${backend}`,
+            ).toStrictEqual(["3/12"]);
+          }
+        } finally {
+          await rm(path).catch(() => {});
+        }
+      }
+    });
+  }
+
+  for (const value of RAW_TRACK_VALUES) {
+    for (const format of PADDABLE_TRACK_FORMATS) {
+      it(`round-trips trackNumber ${JSON.stringify(
+        value,
+      )} identically on both backends [${format}]`, async () => {
+        // Seed once per backend so the WRITE path is exercised on each, then
+        // assert both backends read back the value they were given.
+        for (const backend of BACKENDS) {
+          const path = await tempCopy(format);
+          try {
+            await seedProperties(backend, path, { trackNumber: [value] });
+            const readByWriter = await readProperty(
+              backend,
+              path,
+              "trackNumber",
+            );
+            expect(
+              readByWriter,
+              `${backend} lost the raw string it wrote`,
+            ).toStrictEqual([value]);
+
+            // And the OTHER backend must agree about the same bytes.
+            for (const reader of BACKENDS) {
+              expect(
+                await readProperty(reader, path, "trackNumber"),
+                `${reader} disagrees about a file written by ${backend}`,
+              ).toStrictEqual([value]);
+            }
+          } finally {
+            await rm(path).catch(() => {});
+          }
+        }
+      });
+    }
+  }
+
+  // Formerly a PINNED DIVERGENCE: the shim split "3/12" into
+  // trackNumber + totalTracks for MPEG/MP4 while Emscripten reported the raw
+  // string, so the same file read differently per backend — and once the raw
+  // string became a public typed field, the same input produced different FILES.
+  // The shim no longer transforms the PropertyMap at all, so the raw string is
+  // canonical everywhere and the backends agree by construction (taglib-asg).
+  for (const format of INT_PAIR_FORMATS) {
+    it(`reports "3/12" raw and identically on both backends [${format}]`, async () => {
+      for (const backend of BACKENDS) {
+        const path = await tempCopy(format);
+        try {
+          await seedProperties(backend, path, { trackNumber: ["3/12"] });
+          for (const reader of BACKENDS) {
+            const file = await taglibs[reader].open(path);
+            try {
+              const props = file.properties() as Record<string, string[]>;
+              expect(
+                props.trackNumber,
+                `${reader} did not report the raw pair`,
+              ).toStrictEqual(["3/12"]);
+              expect(
+                props.totalTracks,
+                `${reader} still splits the pair into a separate total`,
+              ).toStrictEqual(undefined);
+            } finally {
+              file.dispose();
+            }
+          }
+          // The total stays reachable on the TYPED surface, where narrowing is
+          // additive and cannot destroy the raw value.
+          const tags = await readTags(path);
+          expect(tags.trackNumber).toStrictEqual("3/12");
+          expect(tags.track).toStrictEqual(3);
+          expect(tags.totalTracks).toStrictEqual(12);
+        } finally {
+          await rm(path).catch(() => {});
+        }
+      }
+    });
+  }
+
+  it(`normalizes to a bare integer on both backends [${INT_PAIR_FORMAT}]`, async () => {
+    // Documented format constraint, not a defect: MP4 trkn is a binary int
+    // pair, so "03" cannot survive. Both backends must agree it becomes "3".
+    for (const backend of BACKENDS) {
+      const path = await tempCopy(INT_PAIR_FORMAT);
+      try {
+        await seedProperties(backend, path, { trackNumber: ["03"] });
+        expect(await readProperty(backend, path, "trackNumber")).toStrictEqual([
+          "3",
+        ]);
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    }
+  });
+
+  // The other four FIELD_NUMERIC keys are the same defect class. BPM is the
+  // one that loses PRECISION rather than padding, so it is the sharpest case.
+  const OTHER_NUMERIC_CASES: Array<[string, string]> = [
+    ["bpm", "120.5"],
+    ["discNumber", "01"],
+    ["totalDiscs", "02"],
+    ["totalTracks", "012"],
+  ];
+
+  for (const [key, value] of OTHER_NUMERIC_CASES) {
+    it(`round-trips ${key} ${JSON.stringify(
+      value,
+    )} identically on both backends [flac]`, async () => {
+      for (const backend of BACKENDS) {
+        const path = await tempCopy("flac");
+        try {
+          await seedProperties(backend, path, { [key]: [value] });
+          expect(await readProperty(backend, path, key)).toStrictEqual([value]);
+        } finally {
+          await rm(path).catch(() => {});
+        }
+      }
+    });
+  }
+});
+
+describe("read-modify-write preserves an untouched raw track total", () => {
+  // The data-loss case: TRACKNUMBER="3/12" on a format with no int-pair split.
+  // Editing ONLY the title must not rewrite the track field at all.
+  for (const format of PLAIN_TRACK_FORMATS) {
+    it(`keeps "3/12" across a title-only applyTags [${format}]`, async () => {
+      const path = await tempCopy(format);
+      try {
+        await seedProperties("emscripten", path, { trackNumber: ["3/12"] });
+
+        const out = await applyTags(path, { title: "Unrelated edit" });
+        await writeFile(path, out);
+
+        for (const reader of BACKENDS) {
+          expect(
+            await readProperty(reader, path, "trackNumber"),
+            `${reader} sees a truncated total after a title-only edit`,
+          ).toStrictEqual(["3/12"]);
+        }
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    });
+  }
+});
+
+describe("readTags() preserves the raw track string", () => {
+  // Fixing only the wire boundary left this path lossy: readTags() kept just
+  // the numeric `track`, so applyTags(readTags()) — the copy-tags-between-
+  // formats flow in AGENTS.md — wrote back a bare "3" and destroyed the total.
+  it("survives a readTags() -> applyTags() round-trip [flac]", async () => {
+    const path = await tempCopy("flac");
+    try {
+      await seedProperties("emscripten", path, { trackNumber: ["3/12"] });
+
+      const tags = await readTags(path);
+      expect(tags.trackNumber, "raw string must be exposed").toStrictEqual(
+        "3/12",
+      );
+      expect(tags.track, "numeric mirror still narrows").toStrictEqual(3);
+
+      await writeFile(path, await applyTags(path, tags));
+
+      for (const reader of BACKENDS) {
+        expect(
+          await readProperty(reader, path, "trackNumber"),
+          `${reader} sees a truncated total after a readTags round-trip`,
+        ).toStrictEqual(["3/12"]);
+      }
+    } finally {
+      await rm(path).catch(() => {});
+    }
+  });
+
+  it("prefers an explicit raw trackNumber over a numeric track [flac]", async () => {
+    const path = await tempCopy("flac");
+    try {
+      await writeFile(
+        path,
+        await applyTags(path, { track: 9, trackNumber: "3/12" }),
+      );
+      expect(
+        await readProperty("emscripten", path, "trackNumber"),
+      ).toStrictEqual(["3/12"]);
+    } finally {
+      await rm(path).catch(() => {});
+    }
+  });
+});
+
+describe("the numeric track mirror never outlives its raw string", () => {
+  // Both cases used to leave a stale `track` behind on WASI only.
+  it("clearing via setProperty removes the value on both backends [flac]", async () => {
+    for (const backend of BACKENDS) {
+      const path = await tempCopy("flac");
+      try {
+        await seedProperties("emscripten", path, { trackNumber: ["9"] });
+        const file = await taglibs[backend].open(path);
+        try {
+          file.setProperty("trackNumber", "");
+          expect(
+            file.properties().trackNumber,
+            `${backend} still reports a cleared track in-handle`,
+          ).toStrictEqual(undefined);
+          file.save();
+          await writeFile(path, file.getFileBuffer());
+        } finally {
+          file.dispose();
+        }
+        expect(
+          await readProperty("emscripten", path, "trackNumber"),
+          `${backend} wrote the stale number back to disk`,
+        ).toStrictEqual(undefined);
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    }
+  });
+
+  it("an unparseable setProperty value drops the mirror on both backends [flac]", async () => {
+    for (const backend of BACKENDS) {
+      const path = await tempCopy("flac");
+      try {
+        await seedProperties("emscripten", path, { trackNumber: ["5"] });
+        const file = await taglibs[backend].open(path);
+        try {
+          file.setProperty("trackNumber", "unknown");
+          expect(
+            file.tag().track,
+            `${backend} reports a stale numeric track`,
+          ).toStrictEqual(0);
+        } finally {
+          file.dispose();
+        }
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    }
+  });
+});
+
+describe("typed surfaces still narrow to numbers", () => {
+  // Guard against over-correcting: the RAW string belongs to properties(),
+  // but tag().track and readTags() promise numbers and must keep delivering
+  // them — including from a value the PropertyMap reports as "3/12".
+  for (const backend of BACKENDS) {
+    it(`tag().track is the leading integer of "3/12" [${backend}]`, async () => {
+      const path = await tempCopy("flac");
+      try {
+        await seedProperties(backend, path, { trackNumber: ["3/12"] });
+        const file = await taglibs[backend].open(path);
+        try {
+          expect(file.properties().trackNumber).toStrictEqual(["3/12"]);
+          expect(file.tag().track).toStrictEqual(3);
+        } finally {
+          file.dispose();
+        }
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    });
+  }
+
+  it("readTags() reports track and bpm as numbers", async () => {
+    const path = await tempCopy("flac");
+    try {
+      await seedProperties("emscripten", path, {
+        trackNumber: ["03"],
+        bpm: ["120.5"],
+      });
+      const tags = await readTags(path);
+      expect(tags.track).toStrictEqual(3);
+      expect(tags.bpm).toStrictEqual(120);
+    } finally {
+      await rm(path).catch(() => {});
+    }
+  });
+
+  it("setTrack() is visible on the raw properties() surface", async () => {
+    // The numeric mirror and the raw string must not drift apart in-handle.
+    for (const backend of BACKENDS) {
+      const path = await tempCopy("flac");
+      try {
+        const file = await taglibs[backend].open(path);
+        try {
+          file.tag().setTrack(7);
+          expect(file.properties().trackNumber).toStrictEqual(["7"]);
+          expect(file.tag().track).toStrictEqual(7);
+        } finally {
+          file.dispose();
+        }
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    }
+  });
+});
+
+describe("setTrack() preserves an existing track total (taglib-eq3)", () => {
+  // ID3v2::Tag::setTrack replaces the whole TRCK frame, so Emscripten wrote a
+  // bare "7" over a "3/12" and destroyed the total, while WASI preserved it via
+  // its separate totalTracks field. Asserted on the RAW TRCK frame bytes so the
+  // check is identical on both backends despite their different PropertyMap
+  // presentation of an int pair.
+  for (const backend of BACKENDS) {
+    it(`keeps the total when setting only the number [${backend}]`, async () => {
+      const path = await tempCopy("mp3");
+      try {
+        await seedProperties("emscripten", path, { trackNumber: ["3/12"] });
+
+        const file = await taglibs[backend].open(path);
+        try {
+          file.tag().setTrack(7);
+          file.save();
+          await writeFile(path, file.getFileBuffer());
+        } finally {
+          file.dispose();
+        }
+
+        const reopened = await taglibs[backend].open(path);
+        try {
+          const frames = reopened.getId3v2Frames("TRCK");
+          expect(
+            frames.length,
+            "expected exactly one TRCK frame",
+          ).toStrictEqual(1);
+          // Text frame body: 1 encoding byte, then the value.
+          const raw = new TextDecoder()
+            .decode(frames[0]!.data.slice(1))
+            .replace(/\0+$/, "");
+          expect(raw, `${backend} dropped the track total`).toStrictEqual(
+            "7/12",
+          );
+          expect(reopened.tag().track).toStrictEqual(7);
+        } finally {
+          reopened.dispose();
+        }
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    });
+  }
+
+  // setTrack(0) is a CLEAR, not a renumbering: it must not stage "0/12". Asserts
+  // the in-handle state AND the saved file, because a first version of the fix
+  // staged "0/12" while the save path happened to drop it — the file looked right
+  // and properties() did not, so either half alone misses a direction.
+  for (const backend of BACKENDS) {
+    it(`setTrack(0) clears the field rather than zeroing the pair [${backend}]`, async () => {
+      const path = await tempCopy("mp3");
+      try {
+        await seedProperties("emscripten", path, { trackNumber: ["3/12"] });
+        const file = await taglibs[backend].open(path);
+        try {
+          file.tag().setTrack(0);
+          expect(
+            file.properties().trackNumber,
+            `${backend} staged a zeroed pair instead of clearing`,
+          ).toStrictEqual(undefined);
+          expect(file.tag().track).toStrictEqual(0);
+          file.save();
+          await writeFile(path, file.getFileBuffer());
+        } finally {
+          file.dispose();
+        }
+
+        // And the on-disk half: the WASI merge can resurrect "0/<total>" on an
+        // int-pair format, which the in-handle assertion above cannot see.
+        const reopened = await taglibs[backend].open(path);
+        try {
+          expect(
+            (reopened.properties() as Record<string, string[]>).trackNumber,
+            `${backend}: a cleared track came back from disk`,
+          ).toStrictEqual(undefined);
+        } finally {
+          reopened.dispose();
+        }
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    });
+  }
+});
+
+describe("the date/year mirror obeys the same rules as trackNumber/track", () => {
+  // taglib-iyfr: the raw/mirror rule was hand-written at seven sites, and the
+  // copies drifted — only the trackNumber/track copy had been fixed, so BOTH
+  // taglib-qpl defects were still live for date/year on WASI. Generalizing the
+  // rule fixed them; these pin the two pairs to one behaviour.
+  const PAIRS: Array<
+    [raw: string, numericOf: (f: AudioFile) => number | undefined]
+  > = [
+    ["date", (f) => f.tag().year],
+    ["trackNumber", (f) => f.tag().track],
+  ];
+
+  for (const backend of BACKENDS) {
+    for (const [raw, readNumeric] of PAIRS) {
+      it(`drops the numeric mirror when ${raw} becomes unparseable [${backend}]`, async () => {
+        const path = await tempCopy("flac");
+        try {
+          await seedProperties("emscripten", path, { [raw]: ["1975"] });
+          const file = await taglibs[backend].open(path);
+          try {
+            file.setProperty(raw, "unknown");
+            expect(
+              readNumeric(file),
+              `${backend}: stale numeric mirror for ${raw}`,
+            ).toStrictEqual(0);
+          } finally {
+            file.dispose();
+          }
+        } finally {
+          await rm(path).catch(() => {});
+        }
+      });
+
+      it(`clears both halves when ${raw} is set to "" [${backend}]`, async () => {
+        const path = await tempCopy("flac");
+        try {
+          await seedProperties("emscripten", path, { [raw]: ["1975"] });
+          const file = await taglibs[backend].open(path);
+          try {
+            file.setProperty(raw, "");
+            expect(
+              (file.properties() as Record<string, string[]>)[raw],
+              `${backend}: ${raw} not cleared`,
+            ).toStrictEqual(undefined);
+            expect(
+              readNumeric(file),
+              `${backend}: mirror not cleared`,
+            ).toStrictEqual(0);
+          } finally {
+            file.dispose();
+          }
+        } finally {
+          await rm(path).catch(() => {});
+        }
+      });
+    }
+  }
+});
+
+describe("an MPEG save keeps a TRCK/TDRC that narrows to 0 (taglib-9m0w)", () => {
+  // DATA LOSS, both backends. MPEG::File::read() ends with ID3v1Tag(true)
+  // (mpegfile.cpp:511-512), so ID3v1Tag() is never null and the v1 -> v2 half of
+  // MPEG::File::save()'s Duplicate pass (mpegfile.cpp:221-222) runs on EVERY
+  // save, even for a file carrying no ID3v1 tag at all. That pass is
+  // Tag::duplicate(v1, v2, overwrite=false), whose guard is
+  //
+  //     if(target->track() == 0) target->setTrack(source->track());
+  //
+  // and ID3v2::Tag::track() narrows the frame text with String::toInt(). A vinyl
+  // "A1" therefore reads 0 — indistinguishable from an ABSENT frame — so the
+  // empty ID3v1 source makes this setTrack(0), which id3v2tag.cpp:309-315
+  // defines as removeFrames("TRCK"). An ordinary open + save deleted the value
+  // with no error and no signal on read. year/TDRC dies by the same chain via
+  // setYear(0).
+  //
+  // The trigger is exactly "the frame is present but the typed getter reads 0",
+  // so these cases are the boundary. Values narrowing to a positive int were
+  // never affected and are pinned below so the fix cannot over-correct.
+  const NARROWS_TO_ZERO: Array<
+    [frameId: string, property: string, value: string]
+  > = [
+    // Vinyl side/track numbering, which rippers emit — the reported case.
+    ["TRCK", "trackNumber", "A1"],
+    ["TRCK", "trackNumber", "B2"],
+    ["TRCK", "trackNumber", "Side A"],
+    ["TRCK", "trackNumber", "0"],
+    ["TDRC", "date", "unknown"],
+    ["TDRC", "date", "n/a"],
+  ];
+
+  /** ID3v2 text-frame body: one encoding byte (UTF-8) then the value. */
+  function textFrameBody(value: string): Uint8Array {
+    const encoded = new TextEncoder().encode(value);
+    const body = new Uint8Array(encoded.length + 1);
+    body[0] = 0x03;
+    body.set(encoded, 1);
+    return body;
+  }
+
+  /**
+   * Seed a frame that the defect destroys, WITHOUT going through the property
+   * write path — a raw write to an ID3v1-mapped ID trips the taglib-b67
+   * DoNotDuplicate hatch, so it is the one route that survives the defect. That
+   * keeps the no-op-save assertions below independent of the write path, which
+   * this defect breaks too and which is asserted separately.
+   */
+  async function seedRawFrame(
+    path: string,
+    frameId: string,
+    value: string,
+  ): Promise<void> {
+    const file = await taglibs.emscripten.open(path);
+    try {
+      file.setId3v2Frames(frameId, [textFrameBody(value)]);
+      file.save();
+      await writeFile(path, file.getFileBuffer());
+    } finally {
+      file.dispose();
+    }
+  }
+
+  for (const backend of BACKENDS) {
+    for (const [frameId, property, value] of NARROWS_TO_ZERO) {
+      it(`keeps ${frameId} ${JSON.stringify(
+        value,
+      )} across a no-op open+save [${backend}]`, async () => {
+        const path = await tempCopy("mp3");
+        try {
+          await seedRawFrame(path, frameId, value);
+          expect(
+            await readProperty("emscripten", path, property),
+            "seed did not land — the rest of this test would be vacuous",
+          ).toStrictEqual([value]);
+
+          // The reported scenario: open and save, changing nothing at all.
+          const file = await taglibs[backend].open(path);
+          try {
+            file.save();
+            await writeFile(path, file.getFileBuffer());
+          } finally {
+            file.dispose();
+          }
+
+          for (const reader of BACKENDS) {
+            expect(
+              await readProperty(reader, path, property),
+              `${backend} deleted ${frameId} on a save that changed nothing`,
+            ).toStrictEqual([value]);
+          }
+        } finally {
+          await rm(path).catch(() => {});
+        }
+      });
+
+      it(`can write ${frameId} ${JSON.stringify(
+        value,
+      )} through setProperties [${backend}]`, async () => {
+        // The same duplication pass runs after a property write, so the value
+        // could not be written at all — not just not preserved.
+        const path = await tempCopy("mp3");
+        try {
+          await seedProperties(backend, path, { [property]: [value] });
+          expect(
+            await readProperty("emscripten", path, property),
+            `${backend} could not write ${frameId}=${value}`,
+          ).toStrictEqual([value]);
+        } finally {
+          await rm(path).catch(() => {});
+        }
+      });
+    }
+  }
+
+  // TCON dies by the same chain, and the first fix missed it. ID3v2::Tag::genre()
+  // maps a purely numeric field through ID3v1::genre(n) (id3v2tag.cpp:200-217),
+  // which answers "" for an index outside the ID3v1 list -- so a TCON of "255"
+  // reads back empty while the frame is plainly there. Tag::duplicate's
+  // `if(target->genre().isEmpty()) target->setGenre(source->genre())` then calls
+  // setGenre(""), which is defined as removeFrames("TCON").
+  //
+  // Asserted on the raw frame rather than properties().genre, because the two
+  // backends disagree about how to present a numeric genre -- Emscripten reports
+  // [""], WASI reports nothing -- and the loss under test is the frame itself.
+  //
+  // Both backends now. WASI used to lose this frame by a second route
+  // (taglib-yc1x): an empty-valued property was dropped at the msgpack boundary,
+  // so GENRE never reached the snapshot and setProperties() removed the frame.
+  //
+  // The [emscripten] instance is a BASELINE — it passed before the yc1x fix and
+  // asserts cross-backend agreement. The [wasi] instance is the guard: it fails
+  // against the defect.
+  for (const backend of BACKENDS) {
+    it(`keeps a numeric TCON across a no-op open+save [${backend}]`, async () => {
+      const path = await tempCopy("mp3");
+      try {
+        await seedRawFrame(path, "TCON", "255");
+        const seeded = await taglibs[backend].open(path);
+        try {
+          expect(
+            seeded.getId3v2Frames("TCON").length,
+            "seed did not land — the rest of this test would be vacuous",
+          ).toStrictEqual(1);
+        } finally {
+          seeded.dispose();
+        }
+
+        const file = await taglibs[backend].open(path);
+        try {
+          file.save();
+          await writeFile(path, file.getFileBuffer());
+        } finally {
+          file.dispose();
+        }
+
+        const reopened = await taglibs.emscripten.open(path);
+        try {
+          expect(
+            reopened.getId3v2Frames("TCON").length,
+            `${backend} deleted TCON on a save that changed nothing`,
+          ).toStrictEqual(1);
+        } finally {
+          reopened.dispose();
+        }
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    });
+  }
+
+  // Guards against over-correcting. The fix replaces the destructive Duplicate
+  // pass with an equivalent one, so BOTH directions of the ID3v1 <-> ID3v2 sync
+  // must still happen.
+  for (const backend of BACKENDS) {
+    it(`still writes the ID3v1 tag alongside a preserved TRCK [${backend}]`, async () => {
+      const path = await tempCopy("mp3");
+      try {
+        await seedRawFrame(path, "TRCK", "A1");
+        const file = await taglibs[backend].open(path);
+        try {
+          file.save();
+          await writeFile(path, file.getFileBuffer());
+        } finally {
+          file.dispose();
+        }
+
+        // v2 -> v1: MPEG::File::save() creates and populates an ID3v1 tag on
+        // every save, and skipping duplication outright would silently stop it.
+        const bytes = new Uint8Array(await readFile(path));
+        expect(
+          new TextDecoder().decode(
+            bytes.slice(bytes.length - 128, bytes.length - 125),
+          ),
+          `${backend} stopped writing the ID3v1 tag`,
+        ).toStrictEqual("TAG");
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    });
+
+    it(`still fills an absent TRCK from the ID3v1 tag [${backend}]`, async () => {
+      // v1 -> v2: the half that carries the defect still has a legitimate job,
+      // and protecting a hidden TDRC on the same file must not cost it. A frame
+      // that is genuinely ABSENT still has to be filled in from ID3v1.
+      //
+      // Both backends now agree here. They did not before taglib-nft5: WASI's
+      // declarative save writes the JS snapshot through
+      // MPEG::File::setProperties(), which rewrites the ID3v1 tag too
+      // (mpegfile.cpp:191-192), and the generic Tag::setProperties() zeroes every
+      // field the map omits. The map only ever describes ID3v2, so ID3v1's track
+      // was ERASED — and the fill-in then had nothing left to copy. Preserving
+      // the ID3v1-only value across that write restores both halves at once.
+      const path = await tempCopy("mp3");
+      try {
+        // Clear every frame, then seed only the hidden TDRC — no TRCK.
+        await seedProperties("emscripten", path, { title: ["Kiss"] });
+        await seedRawFrame(path, "TDRC", "unknown");
+        expect(
+          await readProperty("emscripten", path, "trackNumber"),
+          "fixture still carries a TRCK, so the fill-in cannot be observed",
+        ).toStrictEqual(undefined);
+
+        // Patch the ID3v1.1 track byte in place (offset 125 is 0, 126 is track).
+        const seeded = new Uint8Array(await readFile(path));
+        expect(
+          new TextDecoder().decode(
+            seeded.slice(seeded.length - 128, seeded.length - 125),
+          ),
+          "expected an ID3v1 tag to patch",
+        ).toStrictEqual("TAG");
+        seeded[seeded.length - 3] = 0x00;
+        seeded[seeded.length - 2] = 5;
+        await writeFile(path, seeded);
+
+        const file = await taglibs[backend].open(path);
+        try {
+          file.save();
+          await writeFile(path, file.getFileBuffer());
+        } finally {
+          file.dispose();
+        }
+
+        expect(
+          await readProperty("emscripten", path, "trackNumber"),
+          `${backend} dropped the ID3v1 -> ID3v2 track fill-in`,
+        ).toStrictEqual(["5"]);
+
+        // And the ID3v1 tag still holds its own copy: the write must PRESERVE
+        // the value, not move it. Reading it back by hand because properties()
+        // never surfaces ID3v1 (TagUnion returns ID3v2's map wholesale).
+        const saved = new Uint8Array(await readFile(path));
+        expect(
+          saved[saved.length - 2],
+          `${backend} erased the ID3v1 track byte`,
+        ).toStrictEqual(5);
+        expect(
+          await readProperty("emscripten", path, "date"),
+          `${backend} destroyed the hidden TDRC`,
+        ).toStrictEqual(["unknown"]);
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    });
+
+    it(`still narrows a normal date and track [${backend}]`, async () => {
+      const path = await tempCopy("mp3");
+      try {
+        await seedProperties(backend, path, {
+          date: ["1986-03-25"],
+          trackNumber: ["3/12"],
+        });
+        const file = await taglibs[backend].open(path);
+        try {
+          expect(file.properties().date).toStrictEqual(["1986-03-25"]);
+          expect(file.properties().trackNumber).toStrictEqual(["3/12"]);
+          expect(file.tag().year).toStrictEqual(1986);
+          expect(file.tag().track).toStrictEqual(3);
+        } finally {
+          file.dispose();
+        }
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    });
+  }
+});
+
+describe("an empty value survives a save and is visible on both backends (taglib-yc1x)", () => {
+  // taglib-yc1x generalises past TCON: ANY ID3v2 frame whose PropertyMap
+  // projection is empty was destroyed by a WASI save that changed nothing.
+  // Measured on the reference library, the empty-valued keys that actually
+  // occur are barcode / label / replayGainTrackGain — once claimed to be
+  // "unaffected because dropped consistently", which was wrong: the frame is
+  // deleted from disk. The non-empty case is the control, so a blanket
+  // "TXXX survives" regression cannot make this pass vacuously.
+  for (const backend of BACKENDS) {
+    // Both rows must survive. The non-empty row is the CONTROL: without it a
+    // blanket "TXXX survives" regression would make the empty row vacuous.
+    for (const [label, seeded] of [
+      ["empty", ""],
+      ["non-empty", "0123456789"],
+    ] as const) {
+      it(`keeps an ${label} TXXX:BARCODE across a no-op open+save [${backend}]`, async () => {
+        const path = await tempCopy("mp3");
+        try {
+          await seedProperties(backend, path, { barcode: [seeded] });
+
+          // Count the BARCODE frame specifically. The fixture already carries a
+          // Copyright TXXX, so any assertion on TXXX *count* passes whether or
+          // not BARCODE survives — a check that cannot fail.
+          const barcodeFrames = async () => {
+            const f = await taglibs.emscripten.open(path);
+            try {
+              return f
+                .getId3v2Frames("TXXX")
+                .filter((fr) =>
+                  new TextDecoder().decode(fr.data).includes("BARCODE"),
+                ).length;
+            } finally {
+              f.dispose();
+            }
+          };
+
+          expect(
+            await barcodeFrames(),
+            "seed did not land — the rest of this test would be vacuous",
+          ).toStrictEqual(1);
+
+          const file = await taglibs[backend].open(path);
+          try {
+            file.save();
+            await writeFile(path, file.getFileBuffer());
+          } finally {
+            file.dispose();
+          }
+
+          expect(
+            await barcodeFrames(),
+            `${backend} destroyed the ${label} TXXX:BARCODE on a save that changed nothing`,
+          ).toStrictEqual(1);
+        } finally {
+          await rm(path).catch(() => {});
+        }
+      });
+    }
+  }
+
+  // The documented copy-tags flow feeds a value read FROM a file back in AS a
+  // caller's input. Attempt B's fix destroyed the very frame it existed to save
+  // this way — TCON went 1 -> 0 — because the empty value it taught the boundary
+  // to carry then read back as "delete this". The fix compares against the FILE
+  // instead of guessing intent, so an unchanged empty value is a no-op.
+  //
+  // NOTE the loop varies the SEED backend only: readTags/applyTags are the
+  // simple API, which always uses the default backend (WASI on Node). Neither
+  // instance is an Emscripten baseline — both exercise the WASI round trip, one
+  // on a file Emscripten wrote. Both fail against the defect.
+  for (const backend of BACKENDS) {
+    it(`readTags -> applyTags keeps a numeric TCON [seeded by ${backend}]`, async () => {
+      const path = await tempCopy("mp3");
+      try {
+        await seedProperties(backend, path, { genre: ["255"] });
+        const tconCount = async () => {
+          const f = await taglibs.emscripten.open(path);
+          try {
+            return f.getId3v2Frames("TCON").length;
+          } finally {
+            f.dispose();
+          }
+        };
+        expect(
+          await tconCount(),
+          "seed did not land — the rest of this test would be vacuous",
+        ).toStrictEqual(1);
+
+        await writeFile(path, await applyTags(path, await readTags(path)));
+
+        expect(
+          await tconCount(),
+          `${backend}: the round trip destroyed the frame it exists to preserve`,
+        ).toStrictEqual(1);
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    });
+  }
+
+  // Whether an empty value can be stored AT ALL is a property of the container,
+  // not of the backend: a Xiph comment has no representation for an empty field,
+  // so FLAC and Ogg drop it while MP3/MP4/RIFF keep it. Both backends must agree
+  // per format — the fix is format-agnostic, and the previous attempt at it is
+  // recorded as having broken clearing on exactly MP4 and WAV.
+  for (const [format, retained] of [
+    ["mp3", true],
+    ["m4a", true],
+    ["wav", true],
+    ["flac", false],
+    ["ogg", false],
+  ] as const) {
+    it(`agrees across backends on whether an empty value is storable [${format}]`, async () => {
+      const seen: Record<string, string[] | undefined> = {};
+      for (const backend of BACKENDS) {
+        const path = await tempCopy(format);
+        try {
+          await seedProperties(backend, path, { barcode: [""] });
+          seen[backend] = await readProperty(backend, path, "barcode");
+        } finally {
+          await rm(path).catch(() => {});
+        }
+      }
+      expect(seen).toStrictEqual({
+        wasi: retained ? [""] : undefined,
+        emscripten: retained ? [""] : undefined,
+      });
+    });
+  }
+
+  // An empty value and an absent value are different states, and properties()
+  // must say so identically on both backends. This is the read-side half of
+  // taglib-yc1x: WASI collapsed "frame present, value empty" into undefined,
+  // which is also why clearTags() could not name the field to remove it.
+  it("reports an empty-valued property identically on both backends (taglib-yc1x)", async () => {
+    const path = await tempCopy("mp3");
+    try {
+      await seedProperties("emscripten", path, { barcode: [""] });
+      const seen: Record<string, unknown> = {};
+      for (const backend of BACKENDS) {
+        const file = await taglibs[backend].open(path);
+        try {
+          seen[backend] = (
+            file.properties() as Record<string, string[]>
+          ).barcode;
+        } finally {
+          file.dispose();
+        }
+      }
+      expect(seen).toStrictEqual({ wasi: [""], emscripten: [""] });
+    } finally {
+      await rm(path).catch(() => {});
+    }
+  });
+});
+
+describe("ID3v1-only values are visible, writable and clearable (taglib-nft5)", () => {
+  // properties() used to report ID3v2's map alone (TagUnion::properties(),
+  // tagunion.cpp:108-114), so a value living only in ID3v1 was INVISIBLE. Every
+  // problem in this area came from that: the declarative save could not carry
+  // what it could not see, so it erased it; preserving it in C++ instead then
+  // made a deliberate clear inexpressible, because clearTags() builds its map
+  // from properties() and so could never name the field it needed to remove.
+  //
+  // Surfacing the value on READ settles both: a round-trip carries it, and a
+  // clear can finally address it.
+
+  /** An MP3 whose ID3v2 lacks `frameId` while ID3v1 carries `value`. */
+  async function id3v1Only(
+    field: "title" | "track",
+    value: string,
+  ): Promise<string> {
+    const path = await tempCopy("mp3");
+    // A non-empty ID3v2 that deliberately omits the field under test, and a
+    // save so TagLib writes the ID3v1 tag this then patches.
+    await seedProperties("emscripten", path, { artist: ["KeepArtist"] });
+    const bytes = new Uint8Array(await readFile(path));
+    const tag = bytes.length - 128;
+    expect(
+      new TextDecoder().decode(bytes.slice(tag, tag + 3)),
+      "expected an ID3v1 tag to patch",
+    ).toStrictEqual("TAG");
+    if (field === "title") {
+      bytes.set(new Uint8Array(30), tag + 3);
+      bytes.set(new TextEncoder().encode(value), tag + 3);
+    } else {
+      bytes[bytes.length - 3] = 0x00; // ID3v1.1 marker
+      bytes[bytes.length - 2] = Number(value);
+    }
+    await writeFile(path, bytes);
+    return path;
+  }
+
+  for (const backend of BACKENDS) {
+    it(`reports an ID3v1-only value from properties() [${backend}]`, async () => {
+      const path = await id3v1Only("title", "GhostTitle");
+      try {
+        expect(
+          await readProperty(backend, path, "title"),
+          `${backend} cannot see a value held only in ID3v1`,
+        ).toStrictEqual(["GhostTitle"]);
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    });
+
+    it(`clearTags() removes an ID3v1-only value [${backend}]`, async () => {
+      // The regression this redesign exists to kill: the value came back as a
+      // ghost in ID3v2 after a clear, because the clear could not name it.
+      const path = await id3v1Only("title", "GhostTitle");
+      try {
+        await writeFile(path, await clearTags(path));
+        expect(
+          await readProperty(backend, path, "title"),
+          `${backend}: a cleared ID3v1 value came back`,
+        ).toStrictEqual(undefined);
+        const file = await taglibs[backend].open(path);
+        try {
+          expect(
+            file.tag().title,
+            `${backend}: stale typed title`,
+          ).toStrictEqual("");
+        } finally {
+          file.dispose();
+        }
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    });
+
+    it(`carries an ID3v1-only track through an unrelated edit [${backend}]`, async () => {
+      // And the original defect: an ordinary save must not lose it.
+      const path = await id3v1Only("track", "5");
+      try {
+        const file = await taglibs[backend].open(path);
+        try {
+          file.setProperty("title", "Unrelated edit");
+          file.save();
+          await writeFile(path, file.getFileBuffer());
+        } finally {
+          file.dispose();
+        }
+        expect(
+          await readProperty(backend, path, "trackNumber"),
+          `${backend} lost an ID3v1-only track across an unrelated edit`,
+        ).toStrictEqual(["5"]);
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    });
+  }
+});
+
+describe("a described COMM does not attract a duplicate (taglib-o3sl)", () => {
+  // CommentsFrame keys a DESCRIBED frame as "COMMENT:<DESC>", so a file whose
+  // only comment carries a description (the usual iTunes shape) has no bare
+  // COMMENT key, and merge_id3v1_only_properties fills it from ID3v1. The map
+  // MUST carry that value — ID3v1's own comment is written from the same map and
+  // withholding it CLEARS ID3v1, which is why suppressing the merge was tried
+  // and reverted — so the spurious frame is withdrawn after the write instead.
+  function commFrame(description: string, text: string): Uint8Array {
+    return Uint8Array.from([
+      0x03,
+      ...new TextEncoder().encode("eng"),
+      ...new TextEncoder().encode(description),
+      0x00,
+      ...new TextEncoder().encode(text),
+    ]);
+  }
+
+  /** ID3v1's comment field begins 31 bytes before the end of the file. */
+  async function seedDescribedComment(backend: Backend): Promise<string> {
+    const path = await tempCopy("mp3");
+    const file = await taglibs[backend].open(path);
+    try {
+      file.setProperties({ title: ["Song"], artist: ["Band"] });
+      file.setId3v2Frames("COMM", [commFrame("iTunNORM", " 00000A1B")]);
+      file.save();
+      await writeFile(path, file.getFileBuffer());
+    } finally {
+      file.dispose();
+    }
+    const bytes = new Uint8Array(await readFile(path));
+    const tag = bytes.length - 128;
+    expect(
+      new TextDecoder().decode(bytes.slice(tag, tag + 3)),
+      "expected an ID3v1 tag to patch",
+    ).toStrictEqual("TAG");
+    bytes.set(new Uint8Array(30), tag + 97);
+    bytes.set(new TextEncoder().encode("V1RealComment"), tag + 97);
+    await writeFile(path, bytes);
+    return path;
+  }
+
+  const id3v1Comment = (bytes: Uint8Array) =>
+    new TextDecoder()
+      .decode(bytes.slice(bytes.length - 31, bytes.length - 1))
+      .replace(/\0/g, "")
+      .trim();
+
+  for (const backend of BACKENDS) {
+    it(`keeps one COMM and the ID3v1 comment across a no-op save [${backend}]`, async () => {
+      const path = await seedDescribedComment(backend);
+      try {
+        const file = await taglibs[backend].open(path);
+        try {
+          file.save();
+          await writeFile(path, file.getFileBuffer());
+        } finally {
+          file.dispose();
+        }
+
+        expect(
+          id3v1Comment(new Uint8Array(await readFile(path))),
+          `${backend} destroyed the ID3v1 comment`,
+        ).toStrictEqual("V1RealComment");
+        const reopened = await taglibs[backend].open(path);
+        try {
+          const frames = reopened.getId3v2Frames("COMM");
+          expect(
+            frames.length,
+            `${backend} added a duplicate COMM frame`,
+          ).toStrictEqual(1);
+          // The COUNT alone blessed silent data loss: withdrawing the bare frame
+          // before the typed COMMENT mirror ran left setComment() with no bare
+          // frame to write to, so it fell through to the DESCRIBED frame and
+          // overwrote the Sound Check value — still exactly one frame. Assert
+          // what the defect actually destroys.
+          const text = new TextDecoder("latin1").decode(frames[0]!.data);
+          expect(
+            text.includes(" 00000A1B"),
+            `${backend} overwrote the described frame's payload: ${JSON.stringify(
+              text,
+            )}`,
+          ).toStrictEqual(true);
+        } finally {
+          reopened.dispose();
+        }
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    });
+
+    it(`keeps one COMM across an unrelated property write [${backend}]`, async () => {
+      // The reopened half of taglib-o3sl. A bare Emscripten save never calls
+      // setProperties, so the no-op case above cannot fail there; it is
+      // setProperty/setProperties round-tripping the merged map through
+      // file->setProperties() that materialises the spurious bare frame.
+      const path = await seedDescribedComment(backend);
+      try {
+        const file = await taglibs[backend].open(path);
+        try {
+          file.setProperty("album", "NewAlbum");
+          file.save();
+          await writeFile(path, file.getFileBuffer());
+        } finally {
+          file.dispose();
+        }
+
+        expect(
+          id3v1Comment(new Uint8Array(await readFile(path))),
+          `${backend} destroyed the ID3v1 comment`,
+        ).toStrictEqual("V1RealComment");
+        expect(
+          await readProperty(backend, path, "album"),
+          `${backend} lost the property write itself`,
+        ).toStrictEqual(["NewAlbum"]);
+        const reopened = await taglibs[backend].open(path);
+        try {
+          const frames = reopened.getId3v2Frames("COMM");
+          expect(
+            frames.length,
+            `${backend} added a duplicate COMM frame`,
+          ).toStrictEqual(1);
+          const text = new TextDecoder("latin1").decode(frames[0]!.data);
+          expect(
+            text.includes(" 00000A1B"),
+            `${backend} overwrote the described frame's payload: ${JSON.stringify(
+              text,
+            )}`,
+          ).toStrictEqual(true);
+        } finally {
+          reopened.dispose();
+        }
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    });
+
+    it(`still writes a comment the caller actually set [${backend}]`, async () => {
+      // The withdrawal must take back only the value that came from ID3v1.
+      const path = await seedDescribedComment(backend);
+      try {
+        const file = await taglibs[backend].open(path);
+        try {
+          file.setProperty("comment", "CallerSet");
+          file.save();
+          await writeFile(path, file.getFileBuffer());
+        } finally {
+          file.dispose();
+        }
+        expect(
+          await readProperty(backend, path, "comment"),
+          `${backend} withdrew a comment the caller set`,
+        ).toStrictEqual(["CallerSet"]);
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    });
+  }
+});
+
+describe("track and disc totals land in the standard on-disk field", () => {
+  // Every totals test in the suite used FLAC, which stores TRACKTOTAL as its own
+  // Vorbis field — so nothing covered the formats where the total belongs INSIDE
+  // the number field (ID3v2 TRCK/TPOS, MP4 trkn/disk). A caller supplying
+  // separate track + totalTracks must still end up with the combined form there,
+  // or ordinary players show no total.
+  for (const format of ["mp3", "m4a"] as const) {
+    it(`stores a separate track/disc total in the combined field [${format}]`, async () => {
+      for (const writer of BACKENDS) {
+        const path = await tempCopy(format);
+        try {
+          const file = await taglibs[writer].open(path);
+          try {
+            mergeTagUpdates(file, {
+              track: 3,
+              totalTracks: 12,
+              discNumber: 1,
+              totalDiscs: 2,
+            });
+            file.save();
+            await writeFile(path, file.getFileBuffer());
+          } finally {
+            file.dispose();
+          }
+
+          for (const reader of BACKENDS) {
+            const reopened = await taglibs[reader].open(path);
+            try {
+              const props = reopened.properties() as Record<string, string[]>;
+              expect(
+                props.trackNumber,
+                `${reader} reading a file written by ${writer}: the track total is not in the combined field`,
+              ).toStrictEqual(["3/12"]);
+              expect(
+                props.discNumber,
+                `${reader} reading a file written by ${writer}: the disc total is not in the combined field`,
+              ).toStrictEqual(["1/2"]);
+              // And not ALSO stashed in a separate tag.
+              expect(props.totalTracks).toStrictEqual(undefined);
+              expect(props.totalDiscs).toStrictEqual(undefined);
+            } finally {
+              reopened.dispose();
+            }
+          }
+        } finally {
+          await rm(path).catch(() => {});
+        }
+      }
+    });
+
+    it(`folds a separate setProperty total write [${format}]`, async () => {
+      for (const writer of BACKENDS) {
+        const path = await tempCopy(format);
+        try {
+          const file = await taglibs[writer].open(path);
+          try {
+            file.setProperty("TRACKNUMBER", "3");
+            file.setProperty("TRACKTOTAL", "12");
+            file.setProperty("DISCNUMBER", "1");
+            file.setProperty("DISCTOTAL", "2");
+            file.save();
+            await writeFile(path, file.getFileBuffer());
+          } finally {
+            file.dispose();
+          }
+
+          for (const reader of BACKENDS) {
+            expect(
+              await readProperty(reader, path, "trackNumber"),
+              `${reader} reading a file written by ${writer}`,
+            ).toStrictEqual(["3/12"]);
+            expect(
+              await readProperty(reader, path, "discNumber"),
+              `${reader} reading a file written by ${writer}`,
+            ).toStrictEqual(["1/2"]);
+            expect(
+              await readProperty(reader, path, "totalTracks"),
+            ).toStrictEqual(undefined);
+            expect(
+              await readProperty(reader, path, "totalDiscs"),
+            ).toStrictEqual(undefined);
+          }
+        } finally {
+          await rm(path).catch(() => {});
+        }
+      }
+    });
+
+    it(`treats an empty total write as a clear [${format}]`, async () => {
+      for (const writer of BACKENDS) {
+        const path = await tempCopy(format);
+        try {
+          const seed = await taglibs[writer].open(path);
+          try {
+            seed.setProperty("TRACKNUMBER", "3");
+            seed.save();
+            await writeFile(path, seed.getFileBuffer());
+          } finally {
+            seed.dispose();
+          }
+
+          const file = await taglibs[writer].open(path);
+          try {
+            file.removeProperty("TRACKTOTAL");
+            file.save();
+            await writeFile(path, file.getFileBuffer());
+          } finally {
+            file.dispose();
+          }
+          for (const reader of BACKENDS) {
+            expect(
+              await readProperty(reader, path, "trackNumber"),
+              `${reader} reading a file written by ${writer}: empty total must not become "3/"`,
+            ).toStrictEqual(["3"]);
+            expect(
+              await readProperty(reader, path, "totalTracks"),
+            ).toStrictEqual(undefined);
+          }
+
+          // The same clear expressed as an empty string list.
+          const file2 = await taglibs[writer].open(path);
+          try {
+            file2.setProperties({ TRACKNUMBER: ["4"], TRACKTOTAL: [""] });
+            file2.save();
+            await writeFile(path, file2.getFileBuffer());
+          } finally {
+            file2.dispose();
+          }
+          for (const reader of BACKENDS) {
+            expect(
+              await readProperty(reader, path, "trackNumber"),
+              `${reader} reading a file written by ${writer}: empty total list`,
+            ).toStrictEqual(["4"]);
+          }
+        } finally {
+          await rm(path).catch(() => {});
+        }
+      }
+    });
+
+    it(`keeps an existing total when only the number is set [${format}]`, async () => {
+      for (const writer of BACKENDS) {
+        const path = await tempCopy(format);
+        try {
+          const seed = await taglibs[writer].open(path);
+          try {
+            seed.setProperty("TRACKNUMBER", "3/12");
+            seed.setProperty("DISCNUMBER", "1/2");
+            seed.save();
+            await writeFile(path, seed.getFileBuffer());
+          } finally {
+            seed.dispose();
+          }
+
+          const file = await taglibs[writer].open(path);
+          try {
+            file.setProperty("TRACKNUMBER", "5");
+            file.setProperty("DISCNUMBER", "2");
+            file.save();
+            await writeFile(path, file.getFileBuffer());
+          } finally {
+            file.dispose();
+          }
+          for (const reader of BACKENDS) {
+            expect(
+              await readProperty(reader, path, "trackNumber"),
+              `${reader} reading a file written by ${writer}: track total lost`,
+            ).toStrictEqual(["5/12"]);
+            expect(
+              await readProperty(reader, path, "discNumber"),
+              `${reader} reading a file written by ${writer}: disc total lost`,
+            ).toStrictEqual(["2/2"]);
+          }
+
+          // Reverse order: a total written before its number must survive too.
+          const fresh = await tempCopy(format);
+          try {
+            const f = await taglibs[writer].open(fresh);
+            try {
+              f.setProperty("TRACKTOTAL", "12");
+              f.setProperty("TRACKNUMBER", "3");
+              f.setProperty("DISCTOTAL", "2");
+              f.setProperty("DISCNUMBER", "1");
+              f.save();
+              await writeFile(fresh, f.getFileBuffer());
+            } finally {
+              f.dispose();
+            }
+            for (const reader of BACKENDS) {
+              expect(
+                await readProperty(reader, fresh, "trackNumber"),
+                `${reader} reading a file written by ${writer}: total-before-number`,
+              ).toStrictEqual(["3/12"]);
+              expect(
+                await readProperty(reader, fresh, "discNumber"),
+                `${reader} reading a file written by ${writer}: disc total-before-number`,
+              ).toStrictEqual(["1/2"]);
+            }
+          } finally {
+            await rm(fresh).catch(() => {});
+          }
+        } finally {
+          await rm(path).catch(() => {});
+        }
+      }
+    });
+
+    it(`keeps a raw pair over a separate total [${format}]`, async () => {
+      for (const writer of BACKENDS) {
+        const path = await tempCopy(format);
+        try {
+          const file = await taglibs[writer].open(path);
+          try {
+            file.setProperty("TRACKNUMBER", "3/12");
+            file.setProperty("TRACKTOTAL", "20");
+            file.save();
+            await writeFile(path, file.getFileBuffer());
+          } finally {
+            file.dispose();
+          }
+          for (const reader of BACKENDS) {
+            expect(
+              await readProperty(reader, path, "trackNumber"),
+              `${reader} reading a file written by ${writer}: raw pair lost`,
+            ).toStrictEqual(["3/12"]);
+            expect(
+              await readProperty(reader, path, "totalTracks"),
+              `${reader} reading a file written by ${writer}: separate total survived`,
+            ).toStrictEqual(undefined);
+          }
+        } finally {
+          await rm(path).catch(() => {});
+        }
+      }
+    });
+  }
+
+  it("does not fold totals where the number and total are separate fields [flac]", async () => {
+    for (const writer of BACKENDS) {
+      const path = await tempCopy("flac");
+      try {
+        const file = await taglibs[writer].open(path);
+        try {
+          mergeTagUpdates(file, {
+            track: 3,
+            totalTracks: 12,
+            discNumber: 1,
+            totalDiscs: 2,
+          });
+          file.save();
+          await writeFile(path, file.getFileBuffer());
+        } finally {
+          file.dispose();
+        }
+
+        for (const reader of BACKENDS) {
+          expect(
+            await readProperty(reader, path, "trackNumber"),
+            `${reader} reading a file written by ${writer}: FLAC track`,
+          ).toStrictEqual(["3"]);
+          expect(
+            await readProperty(reader, path, "totalTracks"),
+            `${reader} reading a file written by ${writer}: FLAC track total`,
+          ).toStrictEqual(["12"]);
+          expect(
+            await readProperty(reader, path, "discNumber"),
+            `${reader} reading a file written by ${writer}: FLAC disc`,
+          ).toStrictEqual(["1"]);
+          expect(
+            await readProperty(reader, path, "totalDiscs"),
+            `${reader} reading a file written by ${writer}: FLAC disc total`,
+          ).toStrictEqual(["2"]);
+        }
+      } finally {
+        await rm(path).catch(() => {});
+      }
+    }
+  });
+
+  it("applyTags({track}) preserves an existing total, like tag().setTrack() [mp3]", async () => {
+    // The two write surfaces expressed the same intent and produced different
+    // files: setTrack(5) kept "5/12" while applyTags({track:5}) wrote "5".
+    const path = await tempCopy("mp3");
+    try {
+      await seedProperties("emscripten", path, { trackNumber: ["3/12"] });
+      await writeFile(path, await applyTags(path, { track: 5 }));
+      expect(
+        await readProperty("emscripten", path, "trackNumber"),
+        "applyTags dropped the total that setTrack preserves",
+      ).toStrictEqual(["5/12"]);
+    } finally {
+      await rm(path).catch(() => {});
+    }
+  });
+
+  it("a new raw pair does not leave a contradicting stale total [flac]", async () => {
+    // mergeTagUpdates spreads the file's current properties first, so a total
+    // that the incoming pair supersedes could survive and disagree with it.
+    const path = await tempCopy("flac");
+    try {
+      await seedProperties("wasi", path, {
+        trackNumber: ["1"],
+        totalTracks: ["5"],
+      });
+      await writeFile(
+        path,
+        await applyTags(path, { trackNumber: "3/12", totalTracks: 12 }),
+      );
+      const props = await readProperty("wasi", path, "trackNumber");
+      expect(props).toStrictEqual(["3/12"]);
+      expect(
+        await readProperty("wasi", path, "totalTracks"),
+        "a stale total survived alongside the new pair",
+      ).toStrictEqual(undefined);
+      const tags = await readTags(path);
+      expect(
+        tags.totalTracks,
+        "readTags reported the stale total",
+      ).toStrictEqual(12);
+    } finally {
+      await rm(path).catch(() => {});
+    }
+  });
+});
+
+describe("removeProperty (taglib-qyw2)", () => {
+  for (const backend of BACKENDS) {
+    it(`[${backend}] removes a property through save`, async () => {
+      const taglib = taglibs[backend];
+      const src = new Uint8Array(await readFile(FIXTURE_PATH.mp3));
+
+      const seed = await taglib.open(src);
+      seed.setProperty("album", "to-remove");
+      seed.save();
+      const seeded = seed.getFileBuffer();
+      seed.dispose();
+
+      const reopened = await taglib.open(seeded);
+      expect(
+        reopened.getProperty("album")?.[0],
+        `${backend}: seed did not write the property`,
+      ).toStrictEqual("to-remove");
+      reopened.removeProperty("album");
+      reopened.save();
+      const removed = reopened.getFileBuffer();
+      reopened.dispose();
+
+      const final = await taglib.open(removed);
+      expect(
+        final.getProperty("album")?.[0],
+        `${backend}: removeProperty did not persist through save`,
+      ).toStrictEqual(undefined);
+      final.dispose();
+    });
+
+    it(`[${backend}] removeProperty clears an MP4 freeform-backed property from the raw file`, async () => {
+      // The read surface masks an empty-valued freeform atom ("" reads as
+      // absent), so only the raw-bytes assertion can fail on the residue
+      // defect: before the fix, [""] wrote an empty iTunNORM atom that
+      // survived the save (taglib-qyw2 review).
+      const taglib = taglibs[backend];
+      const src = new Uint8Array(await readFile(FIXTURE_PATH.m4a));
+
+      const seed = await taglib.open(src);
+      seed.setProperty("appleSoundCheck", "to-remove");
+      seed.save();
+      const seeded = seed.getFileBuffer();
+      seed.dispose();
+      expect(
+        new TextDecoder().decode(seeded).includes("iTunNORM"),
+        `${backend}: seed did not write the freeform atom`,
+      ).toStrictEqual(true);
+
+      const file = await taglib.open(seeded);
+      file.removeProperty("appleSoundCheck");
+      file.save();
+      const removed = file.getFileBuffer();
+      file.dispose();
+      expect(
+        new TextDecoder().decode(removed).includes("iTunNORM"),
+        `${backend}: empty freeform atom survives removeProperty`,
+      ).toStrictEqual(false);
+    });
+  }
+});
+
+describe("getProperty array shape (taglib-sip2)", () => {
+  for (const backend of BACKENDS) {
+    it(`[${backend}] returns ALL values for a multi-value property`, async () => {
+      const taglib = taglibs[backend];
+      const src = new Uint8Array(await readFile(FIXTURE_PATH.mp3));
+
+      const file = await taglib.open(src);
+      file.setProperties({ genre: ["Rock", "Alternative"] });
+      file.save();
+      const buf = file.getFileBuffer();
+      file.dispose();
+
+      const reopened = await taglib.open(buf);
+      const values = reopened.getProperty("genre");
+      expect(
+        values,
+        `${backend}: getProperty must return every value, not just the first`,
+      ).toStrictEqual(["Rock", "Alternative"]);
+      // Scalar access is the documented `?.[0]` idiom.
+      expect(values?.[0]).toStrictEqual("Rock");
+      expect(reopened.getProperty("genre")?.[0]).toStrictEqual("Rock");
+      // Absent keys read as undefined, not [].
+      expect(reopened.getProperty("totallyAbsentKey")).toStrictEqual(undefined);
+      reopened.dispose();
+    });
+  }
+});

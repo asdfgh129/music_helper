@@ -338,6 +338,7 @@ CSP/SRI/COOP/COEP 生效；认证与 CSRF 用例；依赖（WASM 产物）完整
 | 指纹 WASM | [unimusic-chromaprint](https://github.com/UniMusic-app/unimusic-chromaprint)（chromaprint + kissfft 编 WASM）、`chromaprint-fixed` |
 | 浏览器解密 | Unlock Music Web Edition（um-react）及其 WASM 加速内核；本仓库 `third_party/um-cli` 的 Go 算法包 |
 | 音频解码 | MDN Web Audio `decodeAudioData()`；ffmpeg.wasm |
+| 上游源码备份 | [third_party/README.md](../third_party/README.md) §4：本节 WASM / 解密 / MMKV 依赖已按 commit 快照入库，含 submodule 映射、裁剪口径与复现命令；分支开工前先看这一份 |
 
 > 外部链接不参与仓库文档校验；引入任何第三方产物前，先按 §10「许可证合规」逐项确认。
 

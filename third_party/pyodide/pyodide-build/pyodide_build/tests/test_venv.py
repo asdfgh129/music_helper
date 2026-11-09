@@ -1,0 +1,852 @@
+import json
+import os
+import platform
+import shutil
+import subprocess
+import sys
+from hashlib import sha256
+from pathlib import Path
+from textwrap import dedent
+
+import pytest
+from click.testing import CliRunner
+
+from pyodide_build.cli import venv as venv_cli
+from pyodide_build.out_of_tree import app_data, venv
+from pyodide_build.out_of_tree.venv import _pip_script_name
+from pyodide_build.xbuildenv import CrossBuildEnvManager
+
+
+@pytest.fixture(scope="session")
+def base_test_dir(tmp_path_factory):
+    """Create a session-wide directory that persists for all tests."""
+    base_dir = tmp_path_factory.getbasetemp() / "pyodide_test_base"
+    base_dir.mkdir(exist_ok=True)
+
+    venv_path = base_dir / "test_venv"
+    venv_path.mkdir(exist_ok=True)
+
+    cwd = os.getcwd()
+    os.chdir(str(base_dir))
+
+    xbuildenv_test_name = ".pyodide-xbuildenv-for-testing"
+
+    manager = CrossBuildEnvManager(xbuildenv_test_name)
+    manager.install(
+        url="https://github.com/pyodide/pyodide/releases/download/0.27.3/xbuildenv-0.27.3.tar.bz2"
+    )
+
+    os.chdir(cwd)
+
+    # Clean the venv before yielding, but preserve the xbuildenv
+    # as we can reuse it between the tests
+    if venv_path.exists():
+        for item in venv_path.iterdir():
+            if not str(item.name).startswith(xbuildenv_test_name):
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+    yield base_dir
+    shutil.rmtree(base_dir)
+
+
+@pytest.mark.parametrize(
+    "options,expected_calls",
+    [
+        ([], []),
+        (["--clear"], ["--clear"]),
+        (["--no-vcs-ignore"], ["--no-vcs-ignore"]),
+        (["--pip", "23.0.1"], ["--pip", "23.0.1"]),
+        (["--no-setuptools"], ["--no-setuptools"]),
+        (["--no-periodic-update"], ["--no-periodic-update"]),
+        # TODO: enable when they are supported
+        # (["--symlink-app-data"], ["--symlink-app-data"]),
+        # (["--copies"], ["--copies"]),
+    ],
+)
+def test_venv_cli_args(monkeypatch, options, expected_calls, tmp_path):
+    """Test that CLI options are correctly passed to virtualenv."""
+    captured_args = None
+    temp_venv_path = tmp_path / "test_venv"
+
+    def mock_session_via_cli(args):
+        nonlocal captured_args
+        captured_args = args
+
+        class MockSession:
+            def __init__(self):
+                self.creator = type("MockCreator", (), {"dest": str(temp_venv_path)})
+
+            def run(self):
+                # create the directory to avoid cleanup issues
+                temp_venv_path.mkdir(exist_ok=True)
+
+        return MockSession()
+
+    temp_venv_path.mkdir(exist_ok=True)
+
+    # Mock most of the functions/methods called by create_pyodide_venv
+    # as we just need to check the arguments passed to it
+    monkeypatch.setattr("virtualenv.session_via_cli", mock_session_via_cli)
+    monkeypatch.setattr(
+        "pyodide_build.out_of_tree.venv.check_host_python_version", lambda session: None
+    )
+    monkeypatch.setattr(
+        "pyodide_build.out_of_tree.venv.PyodideVenv._create_pip_conf", lambda self: None
+    )
+    monkeypatch.setattr(
+        "pyodide_build.out_of_tree.venv.UnixPyodideVenv._create_pip_script",
+        lambda self: None,
+    )
+    monkeypatch.setattr(
+        "pyodide_build.out_of_tree.venv.UnixPyodideVenv._create_pyodide_script",
+        lambda self: None,
+    )
+    monkeypatch.setattr(
+        "pyodide_build.out_of_tree.venv.PyodideVenv._install_stdlib", lambda self: None
+    )
+    monkeypatch.setattr(
+        "pyodide_build.out_of_tree.venv.pyodide_dist_dir",
+        lambda: temp_venv_path / "dist",
+    )
+
+    # necessary directories for valid venv
+    (temp_venv_path / "dist").mkdir(exist_ok=True)
+    (temp_venv_path / "dist" / "python").touch()
+    (temp_venv_path / "bin").mkdir(exist_ok=True)
+
+    venv.create_pyodide_venv(temp_venv_path, options)
+
+    for expected_arg in expected_calls:
+        assert expected_arg in captured_args, (
+            f"Expected {expected_arg} in call args: {captured_args}"
+        )
+
+
+def test_supported_virtualenv_options():
+    """Test that all (currently) supported options are in SUPPORTED_VIRTUALENV_OPTIONS"""
+    supported_options = venv.SUPPORTED_VIRTUALENV_OPTIONS
+    expected_options = [
+        "--clear",
+        "--no-clear",
+        "--no-vcs-ignore",
+        # "--copies",
+        # "--always-copy",
+        # "--symlink-app-data",
+        "--no-download",
+        "--never-download",
+        "--download",
+        "--extra-search-dir",
+        "--pip",
+        "--setuptools",
+        "--no-setuptools",
+        "--no-periodic-update",
+    ]
+
+    assert set(supported_options) == set(expected_options)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "options,check_function",
+    [
+        (
+            [],
+            lambda path: (
+                (path / "bin" / "python").exists() and (path / "bin" / "pip").exists()
+            ),
+        ),
+        (["--clear"], lambda path: (path / "bin" / "python").exists()),
+        (["--no-vcs-ignore"], lambda path: (path / "bin" / "python").exists()),
+        (
+            ["--no-setuptools"],
+            lambda path: not list(path.glob("**/setuptools-*.dist-info")),
+        ),
+    ],
+    ids=["default", "clear", "no-vcs-ignore", "no-setuptools"],
+)
+def test_venv_creation(base_test_dir, options, check_function):
+    venv_path = base_test_dir / "test_venv"
+    venv.create_pyodide_venv(venv_path, options)
+    assert (venv_path / "pyvenv.cfg").exists()
+    assert (venv_path / "bin" / "python").exists()
+    assert (venv_path / "bin" / "pyodide").exists()
+    assert (venv_path / "pip.conf").exists()
+    assert check_function(venv_path)
+
+
+@pytest.mark.integration
+def test_pi_aliases(base_test_dir):
+    """pythonπ-style easter egg aliases only show up for Python 3.14 venvs."""
+    venv_path = base_test_dir / "test_venv_pi"
+    venv.create_pyodide_venv(venv_path)
+
+    bin_dir = venv_path / "bin"
+    python_path = (bin_dir / "python").resolve()
+
+    for name in venv.PI_ALIASES:
+        alias_path = bin_dir / name
+        if sys.version_info[:2] == (3, 14):
+            assert alias_path.is_symlink(), f"{name} alias missing"
+            assert alias_path.resolve() == python_path
+        else:
+            assert not alias_path.exists(), f"{name} alias should not exist"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "package,version",
+    [
+        ("pip", "23.0.1"),
+        ("setuptools", "67.6.0"),
+    ],
+)
+def test_installation_of_seed_package_versions(base_test_dir, package, version):
+    """Test installing specific seed package versions."""
+    venv_path = base_test_dir / "test_venv"
+    venv.create_pyodide_venv(venv_path, [f"--{package}", version])
+    dist_info_dirs = list(venv_path.glob(f"**/{package}-{version}*.dist-info"))
+    assert len(dist_info_dirs) > 0, f"{package} {version} not found in the venv"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "packages",
+    [
+        ["six"],  # pure
+        ["numpy"],  # compiled
+        ["six", "numpy"],  # mixed
+    ],
+    ids=["pure", "compiled", "both-pure-and-compiled"],
+)
+def test_pip_install(base_test_dir, packages):
+    """Test that our monkeypatched pip can install packages into the venv"""
+    venv_path = base_test_dir / "test_venv"
+
+    venv.create_pyodide_venv(venv_path, [])
+    venv_pip_path = venv_path / "bin" / "pip"
+    assert venv_pip_path.exists(), "pip wasn't found in the virtual environment"
+
+    for package in packages:
+        result = subprocess.run(
+            [
+                str(venv_pip_path),
+                "install",
+                package,
+                "-v",
+                "--disable-pip-version-check",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, f"Failed to install {package}: {result.stderr}"
+
+        # Verify package is installed by checking dist-info directory
+        dist_info_dirs = list(
+            venv_path.glob(f"**/{package.replace('-', '_')}-*.dist-info")
+        )
+        assert len(dist_info_dirs) > 0, f"{package} not found in the venv"
+
+
+@pytest.mark.integration
+def test_pip_downgrade(base_test_dir):
+    """Test that our monkeypatched pip can upgrade/downgrade itself"""
+    venv_path = base_test_dir / "test_venv"
+
+    venv.create_pyodide_venv(venv_path, [])
+    venv_pip_path = venv_path / "bin" / "pip"
+    assert venv_pip_path.exists(), "pip wasn't found in the virtual environment"
+
+    result = subprocess.run(
+        [
+            str(venv_pip_path),
+            "install",
+            "--upgrade",
+            "pip==24.0",
+            "-v",
+            "--disable-pip-version-check",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, f"Failed to downgrade pip: {result.stderr}"
+
+    result = subprocess.run(
+        [str(venv_pip_path), "--version"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("pip 24.0")
+    assert venv_pip_path.readlink() == venv_pip_path.with_name("pip_patched")
+
+
+@pytest.mark.integration
+def test_pytest_invoke(base_test_dir):
+    if platform.system() == "Darwin":
+        pytest.skip("TODO: Why doesn't this work on Mac OS?")
+    venv_path = base_test_dir / "test_venv"
+    builder = venv.create_pyodide_venv(venv_path, [])
+    pip = venv_path / "bin" / "pip"
+    subprocess.run(
+        [
+            pip,
+            "install",
+            "pytest",
+        ],
+        check=True,
+    )
+    venv_pytest = builder.venv_bin / "pytest"
+
+    (base_test_dir / "test_a.py").write_text(
+        dedent(
+            """\
+            from pyodide.code import run_js
+
+            def test_run_js():
+                assert run_js("(x) => x + 1")(7) == 8
+            """
+        )
+    )
+    subprocess.run(
+        [venv_pytest, base_test_dir / "test_a.py"],
+        check=True,
+        env=os.environ | {"_PYODIDE_EXTRA_MOUNTS": str(base_test_dir)},
+    )
+
+
+@pytest.fixture
+def clear_app_data_cache():
+    """
+    virtualenv stores the cache of the app data in memory for the duration of the process,
+    so we need to clear it between tests to avoid interference.
+    """
+    from virtualenv.app_data.via_disk_folder import AppDataDiskFolder
+    from virtualenv.discovery.cached_py_info import clear
+
+    yield lambda app_data_dir: clear(AppDataDiskFolder(app_data_dir))
+
+
+def test_build_host_app_data(tmp_path, clear_app_data_cache):
+    app_data_dir = tmp_path / "app_data"
+    clear_app_data_cache(app_data_dir)
+
+    try:
+        app_data_json = app_data.build_host_app_data(app_data_dir)
+        assert isinstance(app_data_json, dict)
+        assert "content" in app_data_json
+        assert "executable" in app_data_json["content"]
+        assert "st_mtime" in app_data_json
+    finally:
+        clear_app_data_cache(app_data_dir)
+
+
+def test_overwrite_host_app_data(tmp_path, clear_app_data_cache):
+    app_data_dir = tmp_path / "app_data"
+    clear_app_data_cache(app_data_dir)
+
+    try:
+        host_app_data = app_data.build_host_app_data(app_data_dir)
+
+        target_python_executable = tmp_path / "fake_python"
+        target_python_executable.touch()
+
+        patched_app_data = app_data.overwrite_host_app_data(
+            host_app_data,
+            target_python_executable,
+        )
+
+        assert patched_app_data["path"] == target_python_executable
+        assert patched_app_data["content"]["executable"] == target_python_executable
+        assert (
+            patched_app_data["content"]["original_executable"]
+            == target_python_executable
+        )
+    finally:
+        clear_app_data_cache(app_data_dir)
+
+
+def test_create_app_data_dir(tmp_path, clear_app_data_cache):
+    target_python_executable = tmp_path / "fake_python"
+    target_python_executable.touch()
+
+    with app_data.create_app_data_dir(
+        str(target_python_executable),
+    ) as app_data_dir:
+        # virtualenv creates the app data file named by the sha256 hash of the target python executable path
+        # not the best way to test, but can't think of a better one right now
+        # The version subdirectory (e.g. "2", "3") may change across virtualenv releases, so scan dynamically.
+        py_info_base = Path(app_data_dir) / "py_info"
+        filename = (
+            sha256(str(target_python_executable).encode("utf-8")).hexdigest() + ".json"
+        )
+        assert any(
+            (version_dir / filename).exists()
+            for version_dir in py_info_base.iterdir()
+            if version_dir.is_dir()
+        ), f"{filename} not found in any subdirectory of {py_info_base}"
+        clear_app_data_cache(app_data_dir)
+
+
+def _make_mock_venv_create(tmp_path):
+    """Return a mock for create_pyodide_venv that records passed virtualenv_args."""
+    captured = {}
+
+    def mock_create(dest, virtualenv_args=None):
+        captured["args"] = virtualenv_args or []
+
+    return mock_create, captured
+
+
+@pytest.mark.parametrize(
+    "cli_args,expected_in_args,not_expected_in_args",
+    [
+        # --no-download must propagate (was silently ignored before the fix)
+        (["--no-download"], ["--no-download"], ["--download"]),
+        # --never-download is an alias for --no-download
+        (["--never-download"], ["--no-download"], ["--download"]),
+        # --download must still work
+        (["--download"], ["--download"], ["--no-download"]),
+        # Without either flag nothing is forwarded
+        ([], [], ["--no-download", "--download"]),
+    ],
+)
+def test_venv_cli_download_flags(
+    monkeypatch, tmp_path, cli_args, expected_in_args, not_expected_in_args
+):
+    """The download flags must be forwarded to virtualenv."""
+    mock_create, captured = _make_mock_venv_create(tmp_path)
+    monkeypatch.setattr("pyodide_build.cli.venv.venv.create_pyodide_venv", mock_create)
+    monkeypatch.setattr("pyodide_build.cli.venv.init_environment", lambda: None)
+
+    runner = CliRunner()
+    result = runner.invoke(venv_cli.main, [str(tmp_path / "venv")] + cli_args)
+    assert result.exit_code == 0, result.output
+
+    forwarded = captured.get("args", [])
+    for expected in expected_in_args:
+        assert expected in forwarded, (
+            f"Expected {expected!r} in forwarded args {forwarded!r} (cli: {cli_args!r})"
+        )
+    for not_expected in not_expected_in_args:
+        assert not_expected not in forwarded, (
+            f"Did not expect {not_expected!r} in forwarded args {forwarded!r} (cli: {cli_args!r})"
+        )
+
+
+@pytest.mark.parametrize(
+    "script_name,exe_suffix,expected_name",
+    [
+        # Unix: no suffix — versioned name must be preserved as-is
+        ("pip3.12", "", "pip3.12"),
+        ("pip3", "", "pip3"),
+        ("pip", "", "pip"),
+        # Windows: .exe executables are replaced with .bat
+        ("pip3.12.exe", ".bat", "pip3.12.bat"),
+        ("pip3.exe", ".bat", "pip3.bat"),
+        ("pip.exe", ".bat", "pip.bat"),
+        # Windows: already-.bat input is idempotent
+        ("pip3.12.bat", ".bat", "pip3.12.bat"),
+        ("pip3.bat", ".bat", "pip3.bat"),
+        ("pip.bat", ".bat", "pip.bat"),
+    ],
+)
+def test_pip_script_name_helper(tmp_path, script_name, exe_suffix, expected_name):
+    """``_pip_script_name`` must preserve versioned pip names like ``pip3.12``."""
+    result = _pip_script_name(tmp_path / script_name, exe_suffix)
+    assert result.name == expected_name
+
+
+def _unix_venv_with_spaces(tmp_path):
+    """Build a ``UnixPyodideVenv`` whose paths all contain spaces"""
+    dest = tmp_path / "my venv"
+    bin_dir = dest / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    pyodide_venv = venv.UnixPyodideVenv(dest)
+    pyodide_venv._venv_root = dest
+    pyodide_venv._venv_bin = bin_dir
+    return pyodide_venv
+
+
+def _run_shell_wrapper(script: Path, *args: str) -> subprocess.CompletedProcess:
+    """Run a wrapper script through bash and capture what it printed.
+
+    The wrapper's shebang is not always on the first line, which is fine for a
+    shell but not for ``execve``, so the interpreter is named explicitly here.
+    """
+    return subprocess.run(
+        ["bash", str(script), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only shell wrappers")
+def test_host_python_wrapper_runs_with_spaces_in_paths(tmp_path, monkeypatch):
+    """A host Python under a path with spaces must not be split by the shell.
+
+    Regression test for https://github.com/pyodide/pyodide-build/issues/399:
+    a uv-managed Python on macOS lives under ``Library/Application Support``,
+    and the unquoted ``PYTHONHOME=`` assignment made ``env`` treat everything
+    after the space as a command name.
+    """
+    fake_python = tmp_path / "Application Support" / "uv" / "bin" / "python3"
+    fake_python.parent.mkdir(parents=True)
+    monkeypatch.setattr(sys, "executable", str(fake_python), raising=False)
+    monkeypatch.setattr(sys, "_base_executable", str(fake_python), raising=False)
+
+    pyodide_venv = _unix_venv_with_spaces(tmp_path)
+    # Stand in for the real interpreter. Echo back PYTHONHOME and the arguments.
+    pyodide_venv.host_python_symlink_path.write_text(
+        '#!/bin/sh\necho "$PYTHONHOME"\necho "$@"\n'
+    )
+    pyodide_venv.host_python_symlink_path.chmod(0o755)
+
+    pyodide_venv.host_python_path.write_text(pyodide_venv.host_python_wrapper)
+    pyodide_venv.host_python_path.chmod(0o755)
+
+    result = _run_shell_wrapper(pyodide_venv.host_python_path, "-c", "pass")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        str(tmp_path / "Application Support" / "uv"),
+        "-c pass",
+    ]
+
+
+def _run_pip_wrapper(tmp_path: Path, env: dict[str, str]) -> list[str]:
+    """Import ``pip_wrapper.py`` in a subprocess and return the CA settings it made.
+
+    The wrapper patches ``sys`` and ``platform`` at import time, so it cannot be
+    imported into the test process. It is run with the host's own platform data
+    so that the sysconfigdata lookup resolves to the real host module. Returns
+    the values of SSL_CERT_FILE, SSL_CERT_DIR, and PIP_CERT seen after the
+    import, with an empty string for a variable that is not set.
+    """
+    import sysconfig
+
+    venv_bin = tmp_path / "bin"
+    venv_bin.mkdir()
+    wrapper = venv_bin / "pip_wrapper.py"
+    shutil.copy(Path(venv.__file__).parent / "pip_wrapper.py", wrapper)
+    config = {
+        "executable_symlink_suffix": "-host",
+        "exe_suffix": "",
+        "pip_patched_name": "pip_patched",
+        "pip_wrapper_name": "pip_wrapper.py",
+        "platform_data": [
+            os.name,
+            sys.platform,
+            platform.system(),
+            sys.implementation._multiarch,
+            sysconfig.get_platform(),
+        ],
+        "pyodide_platform": "pyemscripten_2026_0_wasm32",
+        "sysconfigdata_dir": str(tmp_path),
+    }
+    (venv_bin / "pyodide_pip_config.json").write_text(json.dumps(config))
+    # The wrapper checks at exit that ``pip`` links to ``pip_patched``.
+    (venv_bin / "pip_patched").write_text("")
+    (venv_bin / "pip").symlink_to(venv_bin / "pip_patched")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            dedent(
+                f"""
+                import os, runpy
+                runpy.run_path({str(wrapper)!r}, run_name="not_main")
+                print(os.environ.get("SSL_CERT_FILE", ""))
+                print(os.environ.get("SSL_CERT_DIR", ""))
+                print(os.environ.get("PIP_CERT", ""))
+                """
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.splitlines()[-3:]
+
+
+_CA_ENV_VARS = ("SSL_CERT_FILE", "SSL_CERT_DIR", "PIP_CERT")
+
+
+def _env_without_ca_bundle() -> dict[str, str]:
+    return {k: v for k, v in os.environ.items() if k not in _CA_ENV_VARS}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only symlinks")
+def test_pip_wrapper_defaults_ca_bundle_to_certifi(tmp_path):
+    """The venv pip must verify TLS against certifi, not the host OpenSSL store.
+
+    truststore picks its backend from ``platform.system()``, which the wrapper
+    patches to "Emscripten", so it ends up on the OpenSSL backend on every host
+    OS. That backend loads SSL_CERT_FILE and SSL_CERT_DIR, so the wrapper
+    points the file at the host certifi bundle and the directory at an empty
+    one, otherwise the distro directory would be loaded next to certifi.
+    """
+    pytest.importorskip("pip")
+    from certifi import where
+
+    ssl_cert_file, ssl_cert_dir, pip_cert = _run_pip_wrapper(
+        tmp_path, _env_without_ca_bundle()
+    )
+
+    assert ssl_cert_file == where()
+    assert pip_cert == where()
+    assert Path(ssl_cert_file).is_file()
+    assert Path(ssl_cert_dir) == tmp_path / "bin" / "pyodide_empty_ca_dir"
+    assert Path(ssl_cert_dir).is_dir()
+    assert list(Path(ssl_cert_dir).iterdir()) == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only symlinks")
+def test_pip_wrapper_keeps_user_ca_bundle(tmp_path):
+    """A bundle the user configured wins over the certifi default.
+
+    When the user set SSL_CERT_FILE, their CA directory is left alone too.
+    """
+    pytest.importorskip("pip")
+    custom = tmp_path / "my-bundle.pem"
+    custom.write_text("")
+    env = _env_without_ca_bundle() | {
+        "SSL_CERT_FILE": str(custom),
+        "PIP_CERT": str(custom),
+    }
+
+    assert _run_pip_wrapper(tmp_path, env) == [str(custom), "", str(custom)]
+    assert not (tmp_path / "bin" / "pyodide_empty_ca_dir").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only symlinks")
+def test_pip_wrapper_keeps_user_ca_dir(tmp_path):
+    """A CA directory the user configured is not replaced by the empty one."""
+    pytest.importorskip("pip")
+    from certifi import where
+
+    custom_dir = tmp_path / "my-certs"
+    custom_dir.mkdir()
+    env = _env_without_ca_bundle() | {"SSL_CERT_DIR": str(custom_dir)}
+
+    assert _run_pip_wrapper(tmp_path, env) == [where(), str(custom_dir), where()]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only shell wrappers")
+def test_host_pip_wrapper_runs_with_spaces_in_paths(tmp_path):
+    """``pip_patched`` must reach the host Python across a path with spaces."""
+    pyodide_venv = _unix_venv_with_spaces(tmp_path)
+
+    # Stand in for the real interpreter. Echo back the arguments.
+    pyodide_venv.host_python_path.write_text('#!/bin/sh\necho "$@"\n')
+    pyodide_venv.host_python_path.chmod(0o755)
+
+    pip = pyodide_venv.pip_patched_path
+    pip.write_text(pyodide_venv.host_pip_wrapper)
+    pip.chmod(0o755)
+
+    result = _run_shell_wrapper(pip, "install", "six")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"-s {pyodide_venv.pip_wrapper_path} install six"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only shell wrappers")
+def test_pyodide_cli_script_runs_with_spaces_in_paths(tmp_path, monkeypatch):
+    """PATH/PYODIDE_ROOT entries with spaces must not break the pyodide shim."""
+    pyodide_root = tmp_path / "Application Support" / "pyodide-build"
+    pyodide_root.mkdir(parents=True)
+    cli = tmp_path / "some dir" / "pyodide"
+    cli.parent.mkdir()
+    # Stand in for the real CLI. Echo back PYODIDE_ROOT and the arguments.
+    cli.write_text('#!/bin/sh\necho "$PYODIDE_ROOT"\necho "$@"\n')
+    cli.chmod(0o755)
+
+    monkeypatch.setenv("PATH", f"{cli.parent}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("PYODIDE_ROOT", str(pyodide_root))
+    monkeypatch.setattr(venv, "find_pyodide_cli", lambda: cli)
+
+    pyodide_venv = _unix_venv_with_spaces(tmp_path)
+    pyodide_venv._create_pyodide_script()
+
+    result = _run_shell_wrapper(pyodide_venv.pyodide_cli_path, "build", ".")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [str(pyodide_root), "build ."]
+
+
+def _windows_venv_with_spaces(tmp_path):
+    """Build a ``WindowsPyodideVenv`` rooted somewhere like ``C:\\Program Files``"""
+    dest = tmp_path / "Program Files" / "my venv"
+    scripts_dir = dest / "Scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+
+    pyodide_venv = venv.WindowsPyodideVenv(dest)
+    pyodide_venv._venv_root = dest
+    pyodide_venv._venv_bin = scripts_dir
+    return pyodide_venv
+
+
+@pytest.mark.windows
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only batch wrappers")
+def test_windows_host_pip_wrapper_runs_with_spaces_in_paths(tmp_path):
+    """``pip_patched`` must reach the host Python across a path with spaces."""
+    pyodide_venv = _windows_venv_with_spaces(tmp_path)
+
+    # Stand in for the real interpreter. Echo back the arguments.
+    pyodide_venv.host_python_path.write_text("@echo off\r\necho %*\r\n")
+    # In a real venv ``pip.bat`` is a symlink to ``pip_patched``. Here the
+    # ``.bat`` extension is what makes the file executable by cmd.
+    pip = pyodide_venv.venv_bin / "pip.bat"
+    pip.write_text(pyodide_venv.host_pip_wrapper)
+
+    result = subprocess.run(
+        [str(pip), "install", "six"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f'-s "{pyodide_venv.pip_wrapper_path}" install six'
+
+
+@pytest.mark.windows
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only batch wrappers")
+def test_windows_pyodide_cli_script_runs_with_spaces_in_paths(tmp_path, monkeypatch):
+    """PATH/PYODIDE_ROOT with spaces must round-trip through ``pyodide.bat``.
+
+    ``set`` needs its quoted form here. Without the quotes cmd takes the rest
+    of the line verbatim, so a trailing space ends up in the value and an
+    ``&`` in a directory name is read as a command separator.
+    """
+    pyodide_root = tmp_path / "Program Files" / "pyodide-build"
+    pyodide_root.mkdir(parents=True)
+    cli = tmp_path / "Program Files (x86)" / "pyodide.bat"
+    cli.parent.mkdir(parents=True)
+    # Stand in for the real CLI. Echo back PYODIDE_ROOT and the arguments.
+    cli.write_text("@echo off\r\necho %PYODIDE_ROOT%\r\necho %*\r\n")
+
+    monkeypatch.setenv("PATH", f"{cli.parent}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("PYODIDE_ROOT", str(pyodide_root))
+    monkeypatch.setattr(venv, "find_pyodide_cli", lambda: cli)
+
+    pyodide_venv = _windows_venv_with_spaces(tmp_path)
+    pyodide_venv._create_pyodide_script()
+
+    result = subprocess.run(
+        [str(pyodide_venv.pyodide_cli_path), "build", "."],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [str(pyodide_root), "build ."]
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows resolves executables via PATHEXT"
+)
+def test_find_pyodide_cli_from_argv(monkeypatch, tmp_path):
+    """The CLI must be found when invoked by path with its dir not on PATH."""
+    bin_dir = tmp_path / "somevenv" / "bin"
+    bin_dir.mkdir(parents=True)
+    cli = bin_dir / "pyodide"
+    cli.touch()
+
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(sys, "argv", [str(cli), "venv"])
+    assert shutil.which("pyodide") is None
+
+    assert venv.find_pyodide_cli() == cli.resolve()
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows resolves executables via PATHEXT"
+)
+def test_find_pyodide_cli_from_interpreter_dir(monkeypatch, tmp_path):
+    """Fall back to the scripts dir of the running interpreter."""
+    bin_dir = tmp_path / "somevenv" / "bin"
+    bin_dir.mkdir(parents=True)
+    cli = bin_dir / "pyodide"
+    cli.touch()
+    cli.chmod(0o755)
+
+    monkeypatch.setenv("PATH", "")
+    # argv[0] is a bare name, so it cannot be used to locate the CLI
+    monkeypatch.setattr(sys, "argv", ["pyodide", "venv"])
+    monkeypatch.setattr(sys, "executable", str(bin_dir / "python"))
+    monkeypatch.setattr(venv.sysconfig, "get_path", lambda name: str(tmp_path / "nope"))
+
+    assert venv.find_pyodide_cli() == cli.resolve()
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows resolves executables via PATHEXT"
+)
+def test_find_pyodide_cli_not_found(monkeypatch, tmp_path):
+    """A helpful error is raised when the CLI really cannot be found."""
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(sys, "argv", ["pyodide", "venv"])
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "empty" / "python"))
+    monkeypatch.setattr(venv.sysconfig, "get_path", lambda name: str(tmp_path / "nope"))
+
+    with pytest.raises(RuntimeError, match="pyodide cli not found"):
+        venv.find_pyodide_cli()
+
+
+def test_cleanup_skips_preexisting_directory(monkeypatch, tmp_path):
+    """A failed venv creation must not delete a pre-existing destination."""
+    dest = tmp_path / "existing-venv"
+    dest.mkdir()
+    sentinel = dest / "important-file.txt"
+    sentinel.write_text("do not delete me")
+
+    class FakeCreator:
+        def __init__(self):
+            self.dest = str(dest)
+
+    class FakeSession:
+        def __init__(self):
+            self.creator = FakeCreator()
+            self.interpreter = type(
+                "FakeInterpreter", (), {"version": "3.12.0 (fake)"}
+            )()
+
+        def run(self):
+            (dest / "bin").mkdir(exist_ok=True)
+
+    def fake_create_session(self):
+        return FakeSession()
+
+    monkeypatch.setattr(
+        "pyodide_build.out_of_tree.venv.UnixPyodideVenv._create_session",
+        fake_create_session,
+    )
+    monkeypatch.setattr(
+        "pyodide_build.out_of_tree.venv.check_host_python_version",
+        lambda session: None,
+    )
+    monkeypatch.setattr(
+        "pyodide_build.out_of_tree.venv.pyodide_dist_dir",
+        lambda: dest / "dist",
+    )
+    (dest / "dist").mkdir(exist_ok=True)
+    (dest / "dist" / "python").touch()
+
+    monkeypatch.setattr(
+        "pyodide_build.out_of_tree.venv.PyodideVenv.configure_virtualenv",
+        lambda self: (_ for _ in ()).throw(RuntimeError("simulated failure")),
+    )
+
+    pyodide_venv = venv.UnixPyodideVenv(dest)
+    with pytest.raises(RuntimeError, match="simulated failure"):
+        pyodide_venv.create()
+
+    assert dest.exists()
+    assert sentinel.exists()

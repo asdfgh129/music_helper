@@ -1,0 +1,346 @@
+/**
+ * @fileoverview Type-level and runtime tests for format-specific property key narrowing.
+ *
+ * Type-level tests use @ts-expect-error to verify that invalid property keys
+ * are rejected at compile time. Runtime tests verify isFormat() behavior.
+ */
+
+import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
+import { readFile } from "node:fs/promises";
+import { expectDefined } from "./_assert-helpers.ts";
+import type { TypedAudioFile } from "../src/taglib/audio-file-interface.ts";
+import type { FormatPropertyKey } from "../src/types/format-property-keys.ts";
+import type { TypedAudioProperties } from "../src/types/audio-formats.ts";
+import { TagLib } from "../src/taglib.ts";
+import { fileExists, FIXTURE_PATH } from "./shared-fixtures.ts";
+
+describe("FormatPropertyKey type narrowing", () => {
+  describe("MP3 (ID3v2)", () => {
+    it("accepts basic and ID3v2-supported properties", () => {
+      void ((_f: TypedAudioFile<"MP3">) => {
+        _f.getProperty("title")?.[0];
+        _f.getProperty("artist")?.[0];
+        _f.getProperty("albumArtist")?.[0];
+        _f.getProperty("composer")?.[0];
+        _f.getProperty("bpm")?.[0];
+        _f.getProperty("musicbrainzTrackId")?.[0];
+        _f.getProperty("replayGainTrackGain")?.[0];
+      });
+    });
+
+    it("rejects Vorbis-only properties", () => {
+      void ((_f: TypedAudioFile<"MP3">) => {
+        // @ts-expect-error: lyricist is Vorbis-only
+        _f.getProperty("lyricist")?.[0];
+        // @ts-expect-error: mood is Vorbis-only
+        _f.getProperty("mood")?.[0];
+        // @ts-expect-error: publisher is Vorbis-only
+        _f.getProperty("publisher")?.[0];
+      });
+    });
+  });
+
+  describe("WAV", () => {
+    it("accepts only basic 7 properties", () => {
+      void ((_f: TypedAudioFile<"WAV">) => {
+        _f.getProperty("title")?.[0];
+        _f.getProperty("artist")?.[0];
+        _f.getProperty("album")?.[0];
+        _f.getProperty("date")?.[0];
+        _f.getProperty("trackNumber")?.[0];
+        _f.getProperty("genre")?.[0];
+        _f.getProperty("comment")?.[0];
+      });
+    });
+
+    it("rejects extended properties", () => {
+      void ((_f: TypedAudioFile<"WAV">) => {
+        // @ts-expect-error: albumArtist not supported on WAV
+        _f.getProperty("albumArtist")?.[0];
+        // @ts-expect-error: bpm not supported on WAV
+        _f.getProperty("bpm")?.[0];
+        // @ts-expect-error: discNumber not supported on WAV
+        _f.getProperty("discNumber")?.[0];
+      });
+    });
+  });
+
+  describe("FLAC (Vorbis)", () => {
+    it("accepts all properties including Vorbis-exclusive", () => {
+      void ((_f: TypedAudioFile<"FLAC">) => {
+        _f.getProperty("title")?.[0];
+        _f.getProperty("albumArtist")?.[0];
+        _f.getProperty("lyricist")?.[0];
+        _f.getProperty("mood")?.[0];
+        _f.getProperty("publisher")?.[0];
+        _f.getProperty("musicbrainzTrackId")?.[0];
+      });
+    });
+  });
+
+  describe("MP4", () => {
+    it("accepts MP4-supported properties", () => {
+      void ((_f: TypedAudioFile<"MP4">) => {
+        _f.getProperty("title")?.[0];
+        _f.getProperty("albumArtist")?.[0];
+        _f.getProperty("bpm")?.[0];
+        _f.getProperty("musicbrainzTrackId")?.[0];
+      });
+    });
+
+    it("rejects Vorbis-only properties", () => {
+      void ((_f: TypedAudioFile<"MP4">) => {
+        // @ts-expect-error: lyricist is Vorbis-only
+        _f.getProperty("lyricist")?.[0];
+        // @ts-expect-error: mood is Vorbis-only
+        _f.getProperty("mood")?.[0];
+      });
+    });
+  });
+
+  describe("AIFF (shares ID3v2 with MP3)", () => {
+    it("accepts same keys as MP3", () => {
+      void ((_f: TypedAudioFile<"AIFF">) => {
+        _f.getProperty("title")?.[0];
+        _f.getProperty("albumArtist")?.[0];
+        _f.getProperty("replayGainTrackGain")?.[0];
+      });
+    });
+
+    it("rejects Vorbis-only properties", () => {
+      void ((_f: TypedAudioFile<"AIFF">) => {
+        // @ts-expect-error: lyricist is Vorbis-only
+        _f.getProperty("lyricist")?.[0];
+      });
+    });
+  });
+
+  describe("setProperty narrowing", () => {
+    it("rejects invalid keys for setProperty on WAV", () => {
+      void ((_f: TypedAudioFile<"WAV">) => {
+        _f.setProperty("title", "test");
+        // @ts-expect-error: albumArtist not supported on WAV
+        _f.setProperty("albumArtist", "test");
+      });
+    });
+  });
+
+  describe("FormatPropertyKey utility type", () => {
+    it("maps FileType to correct key sets", () => {
+      const _mp3Key: FormatPropertyKey<"MP3"> = "albumArtist";
+      const _wavKey: FormatPropertyKey<"WAV"> = "title";
+      const _flacKey: FormatPropertyKey<"FLAC"> = "lyricist";
+      void [_mp3Key, _wavKey, _flacKey];
+    });
+
+    it("rejects invalid keys at type level", () => {
+      // @ts-expect-error: lyricist not valid for MP3
+      const _bad1: FormatPropertyKey<"MP3"> = "lyricist";
+      // @ts-expect-error: albumArtist not valid for WAV
+      const _bad2: FormatPropertyKey<"WAV"> = "albumArtist";
+      void [_bad1, _bad2];
+    });
+  });
+});
+
+describe("isFormat runtime behavior", () => {
+  let taglib: TagLib;
+
+  beforeAll(async () => {
+    taglib = await TagLib.initialize({ forceWasmType: "emscripten" });
+  });
+
+  afterAll(() => {
+    // TagLib instances don't need explicit disposal
+  });
+
+  it("returns true for matching format", async () => {
+    if (!fileExists(FIXTURE_PATH.mp3)) return;
+    const buffer = new Uint8Array(await readFile(FIXTURE_PATH.mp3));
+    using file = await taglib.open(buffer);
+    expect(file.isFormat("MP3")).toStrictEqual(true);
+  });
+
+  it("returns false for non-matching format", async () => {
+    if (!fileExists(FIXTURE_PATH.mp3)) return;
+    const buffer = new Uint8Array(await readFile(FIXTURE_PATH.mp3));
+    using file = await taglib.open(buffer);
+    expect(file.isFormat("FLAC")).toStrictEqual(false);
+  });
+
+  it("narrows type for property access after isFormat check", async () => {
+    if (!fileExists(FIXTURE_PATH.mp3)) return;
+    const buffer = new Uint8Array(await readFile(FIXTURE_PATH.mp3));
+    using file = await taglib.open(buffer);
+    if (file.isFormat("MP3")) {
+      const title = file.getProperty("title")?.[0];
+      expect(title === undefined || typeof title === "string").toBeTruthy();
+    }
+  });
+
+  it("returns true for FLAC format", async () => {
+    if (!fileExists(FIXTURE_PATH.flac)) return;
+    const buffer = new Uint8Array(await readFile(FIXTURE_PATH.flac));
+    using file = await taglib.open(buffer);
+    expect(file.isFormat("FLAC")).toStrictEqual(true);
+    expect(file.isFormat("MP3")).toStrictEqual(false);
+  });
+});
+
+describe("TypedAudioProperties narrowing", () => {
+  describe("type-level tests", () => {
+    it("MP3 requires mpegVersion and mpegLayer", () => {
+      void ((_p: TypedAudioProperties<"MP3">) => {
+        const _version: number = _p.mpegVersion;
+        const _layer: number = _p.mpegLayer;
+        void [_version, _layer];
+      });
+    });
+
+    it("AIFF has no extra required fields", () => {
+      void ((_p: TypedAudioProperties<"AIFF">) => {
+        const _mpegVersion: number | undefined = _p.mpegVersion;
+        void _mpegVersion;
+      });
+    });
+
+    it("MP4 requires isEncrypted", () => {
+      void ((_p: TypedAudioProperties<"MP4">) => {
+        const _encrypted: boolean = _p.isEncrypted;
+        void _encrypted;
+      });
+    });
+
+    it("ASF requires isEncrypted", () => {
+      void ((_p: TypedAudioProperties<"ASF">) => {
+        const _encrypted: boolean = _p.isEncrypted;
+        void _encrypted;
+      });
+    });
+
+    it("APE requires formatVersion", () => {
+      void ((_p: TypedAudioProperties<"APE">) => {
+        const _version: number = _p.formatVersion;
+        void _version;
+      });
+    });
+
+    it("MPC requires formatVersion", () => {
+      void ((_p: TypedAudioProperties<"MPC">) => {
+        const _version: number = _p.formatVersion;
+        void _version;
+      });
+    });
+
+    it("SHN requires formatVersion", () => {
+      void ((_p: TypedAudioProperties<"SHN">) => {
+        const _version: number = _p.formatVersion;
+        void _version;
+      });
+    });
+
+    it("WAV has no extra required fields", () => {
+      void ((_p: TypedAudioProperties<"WAV">) => {
+        // @ts-expect-error: mpegVersion is optional on WAV, not assignable to number
+        const _mpegVersion: number = _p.mpegVersion;
+        // @ts-expect-error: isEncrypted is optional on WAV, not assignable to boolean
+        const _isEncrypted: boolean = _p.isEncrypted;
+        // @ts-expect-error: formatVersion is optional on WAV, not assignable to number
+        const _formatVersion: number = _p.formatVersion;
+        void [_mpegVersion, _isEncrypted, _formatVersion];
+      });
+    });
+
+    it("FLAC has no extra required fields", () => {
+      void ((_p: TypedAudioProperties<"FLAC">) => {
+        const _mpegVersion: number | undefined = _p.mpegVersion;
+        void _mpegVersion;
+      });
+    });
+
+    it("TypedAudioFile audioProperties returns narrowed type", () => {
+      void ((_f: TypedAudioFile<"MP3">) => {
+        const props = _f.audioProperties();
+        if (props) {
+          const _version: number = props.mpegVersion;
+          const _layer: number = props.mpegLayer;
+          void [_version, _layer];
+        }
+      });
+    });
+  });
+
+  for (const backend of ["wasi", "emscripten"] as const) {
+    describe(`runtime tests (${backend})`, () => {
+      let taglib: TagLib;
+
+      beforeAll(async () => {
+        taglib = await TagLib.initialize({ forceWasmType: backend });
+      });
+
+      it("MP3 audioProperties has mpegVersion=1 and mpegLayer=3", async () => {
+        if (!fileExists(FIXTURE_PATH.mp3)) return;
+        const buffer = new Uint8Array(await readFile(FIXTURE_PATH.mp3));
+        using file = await taglib.open(buffer);
+        if (file.isFormat("MP3")) {
+          const props = file.audioProperties();
+          expectDefined(props);
+          expect(props.mpegVersion).toStrictEqual(1);
+          expect(props.mpegLayer).toStrictEqual(3);
+        }
+      });
+
+      it("MP4 audioProperties has isEncrypted=false", async () => {
+        if (!fileExists(FIXTURE_PATH.m4a)) return;
+        const buffer = new Uint8Array(await readFile(FIXTURE_PATH.m4a));
+        using file = await taglib.open(buffer);
+        if (file.isFormat("MP4")) {
+          const props = file.audioProperties();
+          expectDefined(props);
+          expect(props.isEncrypted).toStrictEqual(false);
+        }
+      });
+
+      it("WV audioProperties has formatVersion", async () => {
+        if (!fileExists(FIXTURE_PATH.wv)) return;
+        const buffer = new Uint8Array(await readFile(FIXTURE_PATH.wv));
+        using file = await taglib.open(buffer);
+        const props = file.audioProperties();
+        expectDefined(props);
+        expect(typeof props.formatVersion).toStrictEqual("number");
+        expect(props.formatVersion! > 0).toBeTruthy();
+      });
+
+      it("TTA audioProperties has formatVersion=1", async () => {
+        if (!fileExists(FIXTURE_PATH.tta)) return;
+        const buffer = new Uint8Array(await readFile(FIXTURE_PATH.tta));
+        using file = await taglib.open(buffer);
+        const props = file.audioProperties();
+        expectDefined(props);
+        expect(props.formatVersion).toStrictEqual(1);
+      });
+
+      it("MPC audioProperties has formatVersion", async () => {
+        const mpcPath = "lib/taglib/tests/data/sv8_header.mpc";
+        if (!fileExists(mpcPath)) return;
+        const buffer = new Uint8Array(await readFile(mpcPath));
+        using file = await taglib.open(buffer);
+        const props = file.audioProperties();
+        expectDefined(props);
+        expect(typeof props.formatVersion).toStrictEqual("number");
+        expect(props.formatVersion! > 0).toBeTruthy();
+      });
+
+      it("SHN audioProperties has formatVersion", async () => {
+        const shnPath = "lib/taglib/tests/data/2sec-silence.shn";
+        if (!fileExists(shnPath)) return;
+        const buffer = new Uint8Array(await readFile(shnPath));
+        using file = await taglib.open(buffer);
+        const props = file.audioProperties();
+        expectDefined(props);
+        expect(typeof props.formatVersion).toStrictEqual("number");
+        expect(props.formatVersion! > 0).toBeTruthy();
+      });
+    });
+  }
+});

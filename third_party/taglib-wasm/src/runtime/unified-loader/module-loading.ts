@@ -1,0 +1,176 @@
+import type { RuntimeDetectionResult } from "../detector.ts";
+import { isDeno, supportsExnref } from "../detector.ts";
+import type { TagLibModule } from "../../wasm.ts";
+import type { LoadModuleResult, UnifiedLoaderOptions } from "./types.ts";
+import { ModuleLoadError } from "./types.ts";
+import { errorMessage } from "../../errors/classes.ts";
+import { fileUrlToPath } from "../../utils/path.ts";
+import { getNodeFsSync } from "../../utils/node-fs.ts";
+
+function isWindows(): boolean {
+  return isDeno()
+    ? Deno.build.os === "windows"
+    : (globalThis as Record<string, unknown>).process
+      ? (
+          (globalThis as Record<string, unknown>).process as Record<
+            string,
+            string
+          >
+        ).platform === "win32"
+      : false;
+}
+
+/** @internal Exported for unit tests (tests/node-fs-acquisition.test.ts). */
+export function getPreopens(): Record<string, string> {
+  if (!isWindows()) return { "/": "/" };
+  // Acquire fs ONCE, outside the loop: the per-drive catch must only swallow
+  // stat failures, or a broken fs acquisition silently skips every drive (GH #24)
+  const statSync = isDeno()
+    ? (p: string) => Deno.statSync(p)
+    : getNodeFsSync()?.statSync;
+  if (!statSync) {
+    console.warn(
+      "[taglib-wasm] Windows drive detection unavailable: node:fs could not " +
+        "be loaded. Only C:\\ is registered as a WASI preopen.",
+    );
+    return { "/C": "C:\\" };
+  }
+  // Map each drive letter to a virtual path so WASI can access any drive
+  const preopens: Record<string, string> = {};
+  for (const letter of "CDEFGHIJKLMNOPQRSTUVWXYZAB") {
+    const root = `${letter}:\\`;
+    try {
+      statSync(root);
+      preopens[`/${letter}`] = root;
+    } catch {
+      // Drive doesn't exist
+    }
+  }
+  return Object.keys(preopens).length > 0 ? preopens : { "/C": "C:\\" };
+}
+
+function resolveWasmPath(relativePath: string): string {
+  const url = new URL(relativePath, import.meta.url);
+  return url.protocol === "file:" ? fileUrlToPath(url) : url.href;
+}
+
+export async function loadModule(
+  wasmType: "wasi" | "emscripten",
+  runtime: RuntimeDetectionResult,
+  options: UnifiedLoaderOptions,
+): Promise<LoadModuleResult> {
+  if (wasmType === "wasi") {
+    return await loadWasiModuleWithFallback(runtime, options);
+  } else {
+    return {
+      module: await loadEmscriptenModule(options),
+      actualWasmType: "emscripten",
+    };
+  }
+}
+
+async function loadWasiModuleWithFallback(
+  runtime: RuntimeDetectionResult,
+  options: UnifiedLoaderOptions,
+): Promise<LoadModuleResult> {
+  const defaultWasmPath = resolveWasmPath("../../../build/taglib-wasi.wasm");
+
+  // Strategy 1: In-process WASI host (Deno, Node, Bun — no external deps)
+  try {
+    const { loadWasiHost } = await import("../wasi-host-loader.ts");
+    const wasiModule = await loadWasiHost({
+      wasmPath: options.wasmUrl || defaultWasmPath,
+      preopens: getPreopens(),
+    });
+    return { module: wasiModule, actualWasmType: "wasi" };
+  } catch (hostError) {
+    // An explicit WASI choice must fail loudly: silently serving Emscripten
+    // masks backend-specific bugs (taglib-3o4). Auto mode keeps the fallback.
+    if (options.forceWasmType === "wasi") {
+      throw new ModuleLoadError(
+        `WASI backend failed to load: ${errorMessage(hostError)}. ` +
+          `forceWasmType is "wasi", so the Emscripten fallback was not attempted`,
+        "wasi",
+        hostError,
+      );
+    }
+    if (runtime.environment === "node-wasi" && !supportsExnref()) {
+      const g = globalThis as { process?: { versions?: { node?: string } } };
+      const nodeVersion = g.process?.versions?.node ?? "";
+      console.warn(
+        `[taglib-wasm] WASI unavailable: Node.js ${nodeVersion} requires --experimental-wasm-exnref. ` +
+          `Falling back to Emscripten. Run with: node --experimental-wasm-exnref your-script.js`,
+      );
+    } else if (options.debug) {
+      console.warn(`[UnifiedLoader] WASI host failed:`, hostError);
+    }
+  }
+
+  // Strategy 2: Emscripten fallback
+  if (options.debug) {
+    console.warn(`[UnifiedLoader] WASI loader failed, using Emscripten`);
+  }
+  return {
+    module: await loadEmscriptenModule(options),
+    actualWasmType: "emscripten",
+  };
+}
+
+async function loadEmscriptenModule(
+  options: UnifiedLoaderOptions,
+): Promise<TagLibModule> {
+  try {
+    let createModule: (config?: unknown) => Promise<TagLibModule>;
+
+    try {
+      const module = await import("../../../build/taglib-wrapper.js");
+      createModule = module.default as (
+        config?: unknown,
+      ) => Promise<TagLibModule>;
+    } catch {
+      try {
+        // dist/ is gitignored (absent in CI), so this import is untyped there;
+        // the build/ twin above is typed by its committed .d.ts (taglib-c9b
+        // lint gate). The whole-result cast types the const and the member
+        // access in one step.
+        const module = (await import("../../../dist/taglib-wrapper.js")) as {
+          default: (config?: unknown) => Promise<TagLibModule>;
+        };
+        createModule = module.default;
+      } catch {
+        throw new ModuleLoadError(
+          "Could not load Emscripten module from build or dist",
+          "emscripten",
+        );
+      }
+    }
+
+    // Keys set on moduleConfig must also be listed in INCOMING_MODULE_JS_API
+    // (build/build-wasm.sh), or Emscripten 6.0.2+ silently ignores them (ASSERTIONS=0).
+    const moduleConfig: Record<string, unknown> = {};
+    if (options.wasmBinary) {
+      moduleConfig.wasmBinary = options.wasmBinary;
+    }
+    if (options.wasmUrl) {
+      moduleConfig.locateFile = (path: string) => {
+        return path.endsWith(".wasm") ? options.wasmUrl! : path;
+      };
+    } else if (!options.wasmBinary) {
+      const wasmUrl = new URL(
+        "../../../build/taglib-web.wasm",
+        import.meta.url,
+      );
+      moduleConfig.locateFile = (path: string) =>
+        path.endsWith(".wasm") ? wasmUrl.href : path;
+    }
+
+    const module = await createModule(moduleConfig);
+    return module;
+  } catch (error) {
+    throw new ModuleLoadError(
+      `Failed to load Emscripten module: ${errorMessage(error)}`,
+      "emscripten",
+      error,
+    );
+  }
+}

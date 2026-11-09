@@ -12,6 +12,7 @@
 
 豁免：
 - `docs/history/` 与 `CHANGELOG.md` 记录的是历史状态，按约定不校验；
+- `third_party/` 下第三方源码自带文档由上游维护、不校验，只校验本仓库写的两份说明；
 - 「别的仓库 / 运行期产物」路径（见 EXTERNAL_PREFIXES）不校验。
 """
 
@@ -26,6 +27,9 @@ IGNORE_PREFIXES = ('log/', 'music.db')
 
 # 记录历史状态的文档不参与存在性校验（CHANGELOG 里写的是当时有什么）
 SKIP_FILES = {'CHANGELOG.md'}
+# 第三方源码自带的文档由上游维护，链接与命令不参与校验；
+# 只校验本仓库自己写的两份说明。
+THIRDPARTY_OWNED = {'third_party/README.md', 'third_party/qqmusic/README.md'}
 # 引用的是别的仓库或运行期产物，本仓库里本来就没有
 EXTERNAL_PREFIXES = ('log/', 'nodes/', 'runtime/', '.workbuddy/', 'src/', '~/',
                      'available_', 'pool_', 'conversion_log.csv',
@@ -46,8 +50,13 @@ def iter_markdown(base):
     for root, dirs, files in os.walk(base):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith('.')]
         for name in files:
-            if name.lower().endswith('.md'):
-                yield os.path.join(root, name)
+            if not name.lower().endswith('.md'):
+                continue
+            full = os.path.join(root, name)
+            rel = os.path.relpath(full, ROOT).replace(os.sep, '/')
+            if rel.startswith('third_party/') and rel not in THIRDPARTY_OWNED:
+                continue
+            yield full
 
 
 def strip_fences(text):

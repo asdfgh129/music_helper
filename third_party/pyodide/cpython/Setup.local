@@ -1,0 +1,26 @@
+# This file gets copied into the Modules/ folder when building
+# newlib configurations which do not support dynamic library
+# loading.
+#
+# See build/Python-*/Modules/Setup for more details
+
+*static*
+
+CTYPES_FLAGS=-DHAVE_FFI_PREP_CIF_VAR=1 -DHAVE_FFI_PREP_CLOSURE_LOC=1 -DHAVE_FFI_CLOSURE_ALLOC=1 -I ../libffi/include
+_ctypes _ctypes/_ctypes.c _ctypes/callbacks.c _ctypes/callproc.c _ctypes/cfield.c _ctypes/stgdict.c $(CTYPES_FLAGS)
+
+_posixsubprocess _posixsubprocess.c
+
+_bz2 _bz2module.c -lbz2
+zlib zlibmodule.c
+
+_hmac hmacmodule.c _hacl/Hacl_Hash_MD5.c _hacl/Hacl_Hash_SHA1.c _hacl/Hacl_Hash_SHA2.c _hacl/Hacl_Hash_SHA3.c _hacl/Hacl_Hash_Blake2b.c _hacl/Hacl_Hash_Blake2s.c _hacl/Hacl_HMAC.c _hacl/Hacl_Streaming_HMAC.c _hacl/Lib_Memzero0.c -I$(srcdir)/Modules/_hacl -I$(srcdir)/Modules/_hacl/include -I$(srcdir)/Modules/_hacl/internal
+_sqlite3 _sqlite/blob.c _sqlite/connection.c _sqlite/cursor.c _sqlite/microprotocols.c _sqlite/module.c _sqlite/prepare_protocol.c _sqlite/row.c _sqlite/statement.c _sqlite/util.c -I../sqlite3/dist/include -L../sqlite3/dist/lib -lsqlite3
+_lzma _lzmamodule.c -I../lzma/dist/include -L../lzma/dist/lib -llzma
+_zstd _zstd/_zstdmodule.c _zstd/compressor.c _zstd/decompressor.c _zstd/zstddict.c -I../zstd/dist/include -L../zstd/dist/lib -lzstd
+
+*disabled*
+pwd
+_uuid
+_ssl
+_hashlib

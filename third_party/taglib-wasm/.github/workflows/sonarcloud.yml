@@ -1,0 +1,166 @@
+name: SonarCloud Analysis
+
+on:
+  # Fast feedback: a push to main re-analyses so the gate verdict tracks the
+  # merged tree within minutes instead of up to a week (the 2026-10-12 failure
+  # stayed red for nine days under the weekly-only schedule). The paths mirror
+  # what the analysis reads — sonar.sources is src, sonar.typescript.tsconfigPath
+  # points the TypeScript frontend at tsconfig.json, and the coverage feed comes
+  # from tests/, vite.config.ts, and the merge script. The weekly run stays as
+  # the safety net for changes that reach the analysis without touching an
+  # analyzed file (dependency bumps, toolchain moves).
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "scripts/merge-lcov.mjs"
+      - "vite.config.ts"
+      - "tsconfig.json"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "sonar-project.properties"
+      - ".github/workflows/sonarcloud.yml"
+  schedule:
+    - cron: "0 6 * * 1" # Weekly on Monday at 6am UTC
+  workflow_dispatch: # Manual trigger
+
+# A newer push supersedes an in-flight scan: the gate only needs to speak for
+# main's current tree. Cancellation is the trade — a superseded scan leaves no
+# verdict — which is why the weekly run does not depend on push volume.
+concurrency:
+  group: sonar-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sonarcloud:
+    name: SonarCloud Analysis
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Setup pnpm
+        # Version comes from packageManager in package.json — pnpm/action-setup
+        # reads it, so there is no version here to drift out of sync.
+        uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          # Cache the pnpm store (content-addressed), not node_modules:
+          # restoring a stale tree can mask what `pnpm install --frozen-lockfile`
+          # would install.
+          cache: pnpm
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          # Pinned like ci.yml's cross-runtime job. Deno is a supported
+          # consumer runtime, and the coverage leg below runs its test files.
+          deno-version: "2.9.6"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned: "latest" resolves via the oven-sh/bun refs/tags API on
+          # every run, which 503s intermittently from Actions runners.
+          bun-version: 1.4.2
+
+      - name: Install dependencies
+        # Vitest and its coverage provider are pnpm devDependencies. Deno and
+        # Bun are installed for the native-runtime coverage legs below.
+        run: pnpm install --frozen-lockfile
+
+      - name: Materialize committed WASM binaries for tests
+        # Tests run against the committed build/*.wasm (module-loader.ts
+        # resolves build/taglib-web.wasm for the Emscripten backend). The
+        # WASI half of every parity test additionally requires
+        # dist/wasi/taglib-wasi.wasm (tests/backend-adapter.ts HAS_WASI);
+        # without it those instances silently skip and the coverage feed
+        # measures only the Emscripten path. No build needed: the freshness
+        # gate in ci.yml keeps the committed binaries current.
+        run: |
+          mkdir -p dist/wasi
+          cp build/taglib-wasi.wasm dist/wasi/taglib-wasi.wasm
+
+      - name: Run tests with coverage
+        # tests/ and src/ both contain test files; the local gate runs both, so
+        # the coverage feed must too. Coverage should go UP (cheap, dense unit
+        # tests); verified on branch before merge. --expose-gc comes from
+        # vite.config.ts `test.execArgv`. `test:sonar` sets SONAR_REPORT=1,
+        # which adds vitest-sonar-reporter (the test-count feed) on top of the
+        # reporters every other run uses. Vitest's v8/lcov reporter writes
+        # coverage/lcov.info directly — no report conversion step is needed,
+        # and the paths in it are already repository-relative.
+        run: pnpm run test:sonar
+
+      - name: Run Deno tests with coverage
+        # tests/deno-*.test.ts are excluded from Vitest (vite.config.ts) but
+        # cover code that ships on Deno: deno-compile, the Deno filesystem
+        # provider, and createDenoIO. Without this leg SonarCloud counts those
+        # lines as uncovered new code because only the Node run feeds it.
+        run: |
+          deno test --allow-read --allow-write --allow-env \
+            --coverage=coverage-deno tests/deno-*.test.ts
+          deno coverage coverage-deno --lcov --output=coverage-deno.lcov
+
+      - name: Run Bun integration tests with coverage
+        # tests/bun-integration.test.ts registers with bun:test and is excluded
+        # from Vitest; its readPartial cases exercise createBunIO, which the
+        # Node run cannot reach.
+        run: |
+          bun test tests/bun-integration.test.ts \
+            --coverage --coverage-reporter=lcov \
+            --coverage-dir=coverage-bun
+
+      - name: Merge runtime coverage
+        # The Vitest report defines the measured scope. The native reports also
+        # list every module their runtime loaded with zero hits; passing those
+        # records to Sonar expands lines-to-cover from the measured set to the
+        # whole codebase (3,353 -> 9,009 lines), so they contribute hits only
+        # on lines the primary report already measures.
+        run: |
+          node scripts/merge-lcov.mjs coverage/lcov.info \
+            coverage-deno.lcov coverage-bun/lcov.info \
+            -o coverage/merged-lcov.info
+
+      - name: Resolve package version
+        id: pkg_version
+        # The analysis label must track the package version. Deriving it from
+        # package.json here — rather than storing another copy in
+        # sonar-project.properties — keeps it correct on every scan, including
+        # scheduled ones, with no release-time sync step to forget.
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          # Test-cost metrics come from vitest-sonar-reporter's Generic Test
+          # Data report (root <testExecutions>, one <file> per test file, one
+          # <testCase> per test). Vitest's own JUnit reporter emits
+          # <testsuites>, which this property rejects, which is why the report
+          # is produced by a separate reporter rather than by junit.xml.
+          # Coverage is the union of the three runtime legs: Vitest (Node),
+          # Deno, and Bun, merged by scripts/merge-lcov.mjs. The native legs
+          # cover the providers that the Node run cannot execute.
+          #
+          # qualitygate.wait makes the job fail when a gate condition fails.
+          # Without it a red gate left CI green — the 2026-10-12 failure was
+          # visible only on the SonarCloud dashboard — so "green CI" said
+          # nothing about the gate.
+          args: >
+            -Dsonar.projectVersion=${{ steps.pkg_version.outputs.version }}
+            -Dsonar.javascript.lcov.reportPaths=coverage/merged-lcov.info
+            -Dsonar.typescript.lcov.reportPaths=coverage/merged-lcov.info
+            -Dsonar.testExecutionReportPaths=sonar-report.xml
+            -Dsonar.qualitygate.wait=true

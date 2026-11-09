@@ -1,0 +1,413 @@
+# Folder Operations Guide
+
+The folder API scans directories, reads metadata in batches, and finds duplicate
+tracks — the pieces a music library manager, duplicate finder, or bulk metadata
+editor is built from.
+
+## Overview
+
+Import these functions from `taglib-wasm`, or from the Node-only
+`taglib-wasm/folder` entry that exists so a browser bundle cannot silently
+resolve a filesystem graph ([Import Paths](./installation.md#import-paths)
+compares every entry):
+
+```typescript
+import { findDuplicates, scanFolder } from "taglib-wasm/folder";
+import { writeTagsBatch } from "taglib-wasm/simple"; // batch writes
+```
+
+::: tip Runtime Support
+
+`scanFolder()`, `findDuplicates()`, and `exportFolderMetadata()` walk a
+filesystem, so they need a runtime that has one:
+
+- ✅ Deno
+- ✅ Node.js
+- ✅ Bun
+- ❌ Browsers (no filesystem access)
+- ❌ Cloudflare Workers (no filesystem access)
+
+`groupAlbums()` and `discFolderInfo()` are pure functions over a scan result and
+run anywhere, browsers included.
+
+:::
+
+## Scanning Folders
+
+The `scanFolder()` function recursively scans directories for audio files and
+reads their metadata:
+
+```typescript
+const result = await scanFolder("/path/to/music", {
+  recursive: true, // Scan subdirectories (default: true)
+  extensions: [".mp3", ".flac"], // File types to include (default: common audio formats)
+  maxFiles: 1000, // Limit number of files (default: unlimited)
+  includeProperties: true, // Include audio properties (default: true)
+  continueOnError: true, // Continue if files fail (default: true)
+  onProgress: (processed, total, file) => {
+    console.log(`Processing ${processed}/${total}: ${file}`);
+  },
+});
+
+// Access results
+const okItems = result.items.filter((i) => i.status === "ok");
+const errorItems = result.items.filter((i) => i.status === "error");
+console.log(`Found ${result.items.length} audio files`);
+console.log(`Processed ${okItems.length} successfully`);
+console.log(`Errors: ${errorItems.length}`);
+console.log(`Time taken: ${result.duration}ms`);
+
+// Process each file
+for (const file of result.items) {
+  console.log(`Path: ${file.path}`);
+  console.log(`Title: ${file.tags.title?.[0]}`);
+  console.log(`Artist: ${file.tags.artist?.[0]}`);
+  console.log(`Duration: ${file.properties?.duration}s`);
+  console.log(`Bitrate: ${file.properties?.bitrate} kbps`);
+}
+```
+
+### Result Structure
+
+```typescript
+type FolderScanItem =
+  | ({ status: "ok" } & AudioFileMetadata)
+  | { status: "error"; path: string; error: Error };
+
+interface FolderScanResult {
+  items: FolderScanItem[]; // All processed files (ok or error)
+  duration: number; // Time taken in milliseconds
+}
+
+interface AudioFileMetadata {
+  path: string; // File path
+  tags: ExtendedTag; // Metadata tags (including extended fields)
+  properties?: AudioProperties; // Audio properties (if requested)
+  hasCoverArt?: boolean; // Whether file has embedded cover art
+  dynamics?: AudioDynamics; // ReplayGain and Sound Check data
+}
+```
+
+## Batch Tag Updates
+
+Update metadata for multiple files efficiently:
+
+```typescript
+const updates = [
+  {
+    path: "/music/song1.mp3",
+    tags: { artist: "New Artist", album: "New Album" },
+  },
+  {
+    path: "/music/song2.mp3",
+    tags: { genre: "Electronic", year: 2024 },
+  },
+];
+
+const result = await writeTagsBatch(updates, {
+  continueOnError: true, // Continue if some files fail
+  concurrency: 4, // Process 4 files in parallel
+  onProgress: (processed, total, file) =>
+    console.log(`${processed}/${total}: ${file}`),
+});
+
+const updated = result.items.filter((i) => i.status === "ok").length;
+const failures = result.items.filter((i) => i.status === "error");
+console.log(`Updated ${updated} files`);
+console.log(`Failed: ${failures.length}`);
+console.log(`Time: ${result.duration}ms`);
+
+// Check failures
+for (const failure of failures) {
+  console.error(`Failed to update ${failure.path}: ${failure.error.message}`);
+}
+```
+
+## Finding Duplicates
+
+Find duplicate audio files based on metadata criteria:
+
+```typescript
+// Find duplicates by artist and title (default criteria)
+const duplicates = await findDuplicates("/path/to/music");
+
+console.log(`Found ${duplicates.length} groups of duplicates`);
+
+// Process each duplicate group
+for (const group of duplicates) {
+  console.log(`\nDuplicate group: ${JSON.stringify(group.criteria)}`);
+  for (const file of group.files) {
+    console.log(`  - ${file.path}`);
+    console.log(
+      `    Size: ${file.properties?.duration}s @ ${file.properties?.bitrate}kbps`,
+    );
+  }
+}
+
+// Find duplicates by different criteria
+const albumDuplicates = await findDuplicates("/music", {
+  criteria: ["album", "artist"],
+});
+const exactDuplicates = await findDuplicates("/music", {
+  criteria: ["artist", "album", "title", "track"],
+});
+```
+
+## Exporting Metadata
+
+Export your music library metadata to JSON for cataloging or analysis:
+
+```typescript
+await exportFolderMetadata("/path/to/music", "./music-catalog.json", {
+  recursive: true,
+  includeProperties: true
+});
+
+// The exported JSON contains:
+{
+  "folder": "/path/to/music",
+  "scanDate": "2024-01-20T10:30:00.000Z",
+  "summary": {
+    "totalFiles": 1234,
+    "processedFiles": 1230,
+    "errors": 4,
+    "duration": 5678
+  },
+  "files": [
+    {
+      "path": "/path/to/music/song.mp3",
+      "tags": {
+        "title": "Song Title",
+        "artist": "Artist Name",
+        // ... all tags
+      },
+      "properties": {
+        "duration": 180,
+        "bitrate": 320,
+        // ... all properties
+      }
+    }
+    // ... more files
+  ],
+  "errors": [
+    {
+      "path": "/path/to/music/corrupt.mp3",
+      "error": "Invalid audio file format"
+    }
+  ]
+}
+```
+
+## Performance Optimization
+
+### Concurrency
+
+`scanFolder` uses a fixed concurrency of 4 internally. For custom concurrency
+control, use batch APIs like `readTagsBatch` or `readMetadataBatch`.
+
+### Memory Management
+
+When processing large collections:
+
+```typescript
+// Process in smaller batches
+const result = await scanFolder("/huge-library", {
+  maxFiles: 100, // Process only 100 files at a time
+  includeProperties: false, // Skip audio properties to save memory
+});
+```
+
+### Progress Monitoring
+
+For long-running operations:
+
+```typescript
+let lastUpdate = Date.now();
+
+const result = await scanFolder("/music", {
+  onProgress: (processed, total, file) => {
+    const now = Date.now();
+    if (now - lastUpdate > 1000) {
+      // Update every second
+      const percent = ((processed / total) * 100).toFixed(1);
+      console.log(`Progress: ${percent}% (${processed}/${total})`);
+      console.log(`Current: ${file}`);
+
+      const elapsed = now - startTime;
+      const rate = processed / (elapsed / 1000);
+      const remaining = (total - processed) / rate;
+      console.log(`ETA: ${Math.round(remaining)}s`);
+
+      lastUpdate = now;
+    }
+  },
+});
+```
+
+## Common Use Cases
+
+### Music Library Organization
+
+```typescript
+// Organize music by artist/album structure
+const result = await scanFolder("/unsorted-music");
+
+for (const file of result.items) {
+  const artist = file.tags.artist?.[0] || "Unknown Artist";
+  const album = file.tags.album?.[0] || "Unknown Album";
+  const title = file.tags.title?.[0] || path.basename(file.path);
+
+  // Create organized structure
+  const newPath = path.join("/organized-music", artist, album, `${title}.mp3`);
+  // Move file to new location (using your preferred file operation method)
+}
+```
+
+### Metadata Cleanup
+
+```typescript
+// Find and fix missing metadata
+const result = await scanFolder("/music");
+
+const needsFixing = result.items.filter(
+  (file) =>
+    !file.tags.artist?.[0] || !file.tags.title?.[0] || !file.tags.album?.[0],
+);
+
+console.log(`Found ${needsFixing.length} files with missing metadata`);
+
+// Batch update missing fields
+const updates = needsFixing.map((file) => ({
+  path: file.path,
+  tags: {
+    artist: file.tags.artist?.[0] || "Unknown Artist",
+    album: file.tags.album?.[0] || "Unknown Album",
+    title:
+      file.tags.title?.[0] || path.basename(file.path, path.extname(file.path)),
+  },
+}));
+
+await writeTagsBatch(updates);
+```
+
+### Duplicate Cleanup
+
+```typescript
+// Find and handle duplicates
+const duplicates = await findDuplicates("/music");
+
+for (const group of duplicates) {
+  // Sort by quality (highest bitrate first)
+  const sorted = group.files.sort(
+    (a, b) => (b.properties?.bitrate || 0) - (a.properties?.bitrate || 0),
+  );
+
+  const [keep, ...remove] = sorted;
+  console.log(`Keeping: ${keep.path} (${keep.properties?.bitrate}kbps)`);
+
+  for (const file of remove) {
+    console.log(
+      `Consider removing: ${file.path} (${file.properties?.bitrate}kbps)`,
+    );
+  }
+}
+```
+
+## Error Handling
+
+The folder API provides detailed error information:
+
+```typescript
+const result = await scanFolder("/music", {
+  continueOnError: true, // Don't stop on errors
+});
+
+// Check for errors
+const errors = result.items.filter((i) => i.status === "error");
+if (errors.length > 0) {
+  console.error(`Failed to process ${errors.length} files:`);
+
+  for (const { path, error } of errors) {
+    if (error.message.includes("Invalid audio file format")) {
+      console.error(`Corrupted file: ${path}`);
+    } else if (error.message.includes("Permission denied")) {
+      console.error(`No access: ${path}`);
+    } else {
+      console.error(`Unknown error in ${path}: ${error.message}`);
+    }
+  }
+}
+```
+
+## Best Practices
+
+1. **Start with small directories** when testing to understand performance
+   characteristics
+2. **Use progress callbacks** for user feedback on long operations
+3. **Expect per-file failures** – A corrupted or unreadable file is reported as
+   an `error` item in the results array instead of thrown, so check
+   `result.items.filter((i) => i.status === "error")`
+4. **Consider memory usage** when processing large collections
+5. **Pick concurrency by storage**: around 12 for an SSD, 6 for an HDD, 4 for a
+   network drive (see [Album Processing](./album-processing.md)). `scanFolder()`
+   deliberately stays at 4 internally; reach for `readTagsBatch()` or
+   `readMetadataBatch()` when you need to tune it
+6. **Filter by extensions** to avoid processing non-audio files
+7. **Export metadata regularly** for backup and analysis
+
+## Album Grouping
+
+`scanForAlbums()` scans a folder and groups the result into albums with disc
+subdivisions. `groupAlbums()` is the pure, synchronous core over an existing
+`scanFolder()` result — runtime-agnostic, browsers included.
+
+```typescript
+import { scanForAlbums } from "taglib-wasm";
+
+const { albums, singles, unmatched, errors } = await scanForAlbums("/music", {
+  recursive: true,
+});
+
+for (const album of albums) {
+  console.log(
+    `${
+      album.albumArtist ?? ""
+    } — ${album.album} (${album.discs.length} disc(s))`,
+  );
+  for (const disc of album.discs) {
+    console.log(
+      `  Disc ${disc.discNumber ?? "?"}: ${disc.items.length} tracks`,
+    );
+  }
+}
+```
+
+Semantics:
+
+- **Tags are authority, folder names are evidence.** Disc folders are recognized
+  by name with confidence tiers (`CD1` high, `Album (Disc 1)` medium unless
+  corroborated by siblings, `Volume 1` medium, `Bonus Disc` and bare numbers
+  gated), with sibling corroboration; embedded `discNumber` wins over the
+  folder. Flat filename prefixes (`1-01`, `101`) subdivide a folder.
+- **Every file carries its own resolution**: `item.albumDir` (the album folder
+  the file was attributed to) and `item.discNumber` — the single authority for
+  UI cards and lint buckets. `album.directory` is the album folder for cover
+  lookup.
+- **Singles and unmatched**: an album of exactly one file is a `single`; ok
+  items with no album tag and no folder title evidence land in `unmatched`;
+  per-file scan errors land in `errors` (disjoint from everything else).
+- **Compilation**: `album.compilation` is `true`/`false` only when the embedded
+  compilation flags agree (COMPILATION/TCMP/cpil), `undefined` otherwise.
+
+Options (`scanForAlbums` takes `FolderScanOptions` plus
+`GroupAlbumsOptions`/`ScanForAlbumsOptions`): `minFolderConfidence` drops weak
+folder disc evidence, `flatDiscPrefixes` toggles filename-prefix parsing,
+`folderFallback` toggles folder-based grouping of untagged files, `scanRoot`
+pins the scanned directory (a bare `CD1/` directly under it is unmatched).
+
+## Next Steps
+
+- [Album Processing](./album-processing.md) — batch workflows that pair a folder
+  scan with metadata updates
+- [Folder API Reference](/api/folder-api) — every function signature for the
+  scans, duplicate groups, and album grouping above

@@ -1,0 +1,211 @@
+/**
+ * @fileoverview FLAC ID3 strip (taglib-y91).
+ *
+ * Some taggers prepend ID3v2 and/or append ID3v1 tags to FLAC files (FLAC's
+ * native metadata format is Vorbis Comments). Decoders skip these spurious
+ * tags but they confuse some library tools. These tests verify we can detect
+ * and remove them while preserving the file's Vorbis Comments and audio.
+ *
+ * Fixture is synthesized at runtime by prepending an ID3v2.4 header and
+ * appending an ID3v1 trailer to tests/test-files/flac/kiss-snippet.flac.
+ */
+
+import { expect, it } from "vite-plus/test";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { TagLib } from "../src/taglib.ts";
+
+const PLAIN_FLAC = join("tests", "test-files", "flac", "kiss-snippet.flac");
+const BACKENDS = ["wasi", "emscripten"] as const;
+
+function syncsafeSize(out: Uint8Array, offset: number, size: number): void {
+  out[offset] = (size >> 21) & 0x7f;
+  out[offset + 1] = (size >> 14) & 0x7f;
+  out[offset + 2] = (size >> 7) & 0x7f;
+  out[offset + 3] = size & 0x7f;
+}
+
+function makeId3v2(title: string, padding: number): Uint8Array {
+  // ID3v2.4 with a real TIT2 frame. A frame-less ID3v2 would get auto-removed
+  // by FLAC::File::save() (it strips empty tags), which would defeat partial-
+  // strip testing.
+  const enc = new TextEncoder().encode(title);
+  const frameBodyLen = 1 + enc.length; // 1 encoding byte + UTF-8 text
+  const frameLen = 10 + frameBodyLen; // 4 id + 4 size + 2 flags + body
+  const payloadLen = frameLen + padding;
+  const buf = new Uint8Array(10 + payloadLen);
+  // ID3v2.4 header
+  buf[0] = 0x49;
+  buf[1] = 0x44;
+  buf[2] = 0x33; // "ID3"
+  buf[3] = 0x04; // version major (2.4)
+  buf[4] = 0x00; // version revision
+  buf[5] = 0x00; // flags
+  syncsafeSize(buf, 6, payloadLen);
+  // TIT2 frame
+  let o = 10;
+  buf[o++] = 0x54;
+  buf[o++] = 0x49;
+  buf[o++] = 0x54;
+  buf[o++] = 0x32; // "TIT2"
+  syncsafeSize(buf, o, frameBodyLen);
+  o += 4;
+  buf[o++] = 0x00;
+  buf[o++] = 0x00; // frame flags
+  buf[o++] = 0x03; // text encoding: UTF-8
+  buf.set(enc, o);
+  // remaining bytes stay zero (padding)
+  return buf;
+}
+
+function makeId3v1(title: string): Uint8Array {
+  const buf = new Uint8Array(128);
+  buf[0] = 0x54;
+  buf[1] = 0x41;
+  buf[2] = 0x47; // "TAG"
+  const enc = new TextEncoder().encode(title);
+  buf.set(enc.subarray(0, Math.min(30, enc.length)), 3);
+  buf[127] = 0xff; // genre = none/unknown
+  return buf;
+}
+
+function concatBytes(...parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) {
+    out.set(p, off);
+    off += p.length;
+  }
+  return out;
+}
+
+async function loadPlainFlac(): Promise<Uint8Array> {
+  return new Uint8Array(await readFile(PLAIN_FLAC));
+}
+
+async function loadFlacWithId3(
+  opts: { v1?: boolean; v2?: boolean } = { v1: true, v2: true },
+): Promise<Uint8Array> {
+  const flac = await loadPlainFlac();
+  const parts: Uint8Array[] = [];
+  if (opts.v2) parts.push(makeId3v2("y91-id3v2", 32));
+  parts.push(flac);
+  if (opts.v1) parts.push(makeId3v1("y91-test"));
+  return concatBytes(...parts);
+}
+
+for (const backend of BACKENDS) {
+  it(`[${backend}] FLAC: hasId3Tags returns {v1:false,v2:false} on plain FLAC`, async () => {
+    const taglib = await TagLib.initialize({ forceWasmType: backend });
+    using f = await taglib.open(await loadPlainFlac());
+    expect(f.hasId3Tags()).toStrictEqual({ v1: false, v2: false });
+  });
+
+  it(`[${backend}] FLAC: hasId3Tags detects both v1 and v2`, async () => {
+    const taglib = await TagLib.initialize({ forceWasmType: backend });
+    using f = await taglib.open(await loadFlacWithId3());
+    expect(f.hasId3Tags()).toStrictEqual({ v1: true, v2: true });
+  });
+
+  it(`[${backend}] FLAC: hasId3Tags detects only v2 when v1 absent`, async () => {
+    const taglib = await TagLib.initialize({ forceWasmType: backend });
+    using f = await taglib.open(await loadFlacWithId3({ v2: true }));
+    expect(f.hasId3Tags()).toStrictEqual({ v1: false, v2: true });
+  });
+
+  it(`[${backend}] FLAC: stripId3Tags() removes both`, async () => {
+    const taglib = await TagLib.initialize({ forceWasmType: backend });
+    const f = await taglib.open(await loadFlacWithId3());
+    try {
+      f.tag().setTitle("kept");
+      f.stripId3Tags();
+      f.save();
+      const out = f.getFileBuffer();
+      using reopened = await taglib.open(out);
+      expect(reopened.hasId3Tags()).toStrictEqual({ v1: false, v2: false });
+      expect(reopened.tag().title).toStrictEqual("kept");
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it(`[${backend}] FLAC: stripId3Tags({v1:true,v2:false}) removes only v1`, async () => {
+    const taglib = await TagLib.initialize({ forceWasmType: backend });
+    const f = await taglib.open(await loadFlacWithId3());
+    try {
+      f.stripId3Tags({ v1: true, v2: false });
+      f.save();
+      const out = f.getFileBuffer();
+      using reopened = await taglib.open(out);
+      expect(reopened.hasId3Tags()).toStrictEqual({ v1: false, v2: true });
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it(`[${backend}] non-FLAC: hasId3Tags returns {v1:false,v2:false}`, async () => {
+    const taglib = await TagLib.initialize({ forceWasmType: backend });
+    const mp3Path = join("tests", "test-files", "mp3", "kiss-snippet.mp3");
+    using f = await taglib.open(new Uint8Array(await readFile(mp3Path)));
+    expect(f.hasId3Tags()).toStrictEqual({ v1: false, v2: false });
+  });
+
+  it(`[${backend}] FLAC: hasId3Tags reflects strip on the same handle (no reopen)`, async () => {
+    const taglib = await TagLib.initialize({ forceWasmType: backend });
+    using f = await taglib.open(await loadFlacWithId3());
+    expect(f.hasId3Tags()).toStrictEqual({ v1: true, v2: true });
+    f.stripId3Tags({ v1: true, v2: false });
+    expect(f.hasId3Tags()).toStrictEqual({ v1: false, v2: true });
+    f.stripId3Tags({ v1: false, v2: true });
+    expect(f.hasId3Tags()).toStrictEqual({ v1: false, v2: false });
+  });
+
+  it(`[${backend}] FLAC: two partial strips before save accumulate`, async () => {
+    const taglib = await TagLib.initialize({ forceWasmType: backend });
+    const f = await taglib.open(await loadFlacWithId3());
+    try {
+      f.stripId3Tags({ v1: true, v2: false });
+      f.stripId3Tags({ v1: false, v2: true });
+      f.save();
+      const out = f.getFileBuffer();
+      using reopened = await taglib.open(out);
+      expect(reopened.hasId3Tags()).toStrictEqual({ v1: false, v2: false });
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it(`[${backend}] non-FLAC: stripId3Tags is a no-op and does not throw`, async () => {
+    const taglib = await TagLib.initialize({ forceWasmType: backend });
+    const mp3Path = join("tests", "test-files", "mp3", "kiss-snippet.mp3");
+    const original = new Uint8Array(await readFile(mp3Path));
+    const f = await taglib.open(original);
+    try {
+      f.stripId3Tags();
+      f.save();
+      const out = f.getFileBuffer();
+      using reopened = await taglib.open(out);
+      // MP3's native ID3 tags must NOT be stripped by this API.
+      expect(reopened.getFormat()).toStrictEqual("MP3");
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it(`[${backend}] FLAC without ID3: stripId3Tags is a no-op and preserves Vorbis Comments`, async () => {
+    const taglib = await TagLib.initialize({ forceWasmType: backend });
+    const f = await taglib.open(await loadPlainFlac());
+    try {
+      f.tag().setTitle("kept-after-noop-strip");
+      f.stripId3Tags();
+      f.save();
+      const out = f.getFileBuffer();
+      using reopened = await taglib.open(out);
+      expect(reopened.hasId3Tags()).toStrictEqual({ v1: false, v2: false });
+      expect(reopened.tag().title).toStrictEqual("kept-after-noop-strip");
+    } finally {
+      f.dispose();
+    }
+  });
+}

@@ -1,0 +1,275 @@
+import { EnvironmentError } from "../errors/classes.ts";
+import { detectRuntime, type RuntimeEnvironment } from "./detector.ts";
+
+export type PlatformIO = {
+  readFile(path: string): Promise<Uint8Array>;
+  writeFile(path: string, data: Uint8Array): Promise<void>;
+  stat(path: string): Promise<{ size: number }>;
+  readDir(
+    path: string,
+  ): AsyncGenerator<{ name: string; isDirectory: boolean; isFile: boolean }>;
+  readPartial?: (
+    path: string,
+    headerSize: number,
+    footerSize: number,
+  ) => Promise<Uint8Array>;
+};
+
+let platformIO: PlatformIO | undefined;
+
+async function readFullFile(
+  readFile: (path: string) => Promise<Uint8Array>,
+  path: string,
+  headerSize: number,
+  footerSize: number,
+  fileSize: number,
+): Promise<Uint8Array | undefined> {
+  const actualHeader = Math.min(headerSize, fileSize);
+  const actualFooter = Math.min(footerSize, fileSize);
+  const footerStart = Math.max(0, fileSize - actualFooter);
+  if (footerStart > actualHeader) return undefined;
+  return (await readFile(path)).slice(0, fileSize);
+}
+
+function createDenoIO(): PlatformIO {
+  const D = (globalThis as Record<string, unknown>).Deno as typeof Deno;
+  return {
+    readFile: (path) => D.readFile(path),
+    writeFile: (path, data) => D.writeFile(path, data),
+    stat: async (path) => {
+      const s = await D.stat(path);
+      return { size: s.size };
+    },
+    async *readDir(path) {
+      for await (const entry of D.readDir(path)) {
+        yield {
+          name: entry.name,
+          isDirectory: entry.isDirectory,
+          isFile: entry.isFile,
+        };
+      }
+    },
+    readPartial: async (path, headerSize, footerSize) => {
+      const file = await D.open(path, { read: true });
+      try {
+        const fileSize = (await file.stat()).size;
+        const full = await readFullFile(
+          (p) => D.readFile(p),
+          path,
+          headerSize,
+          footerSize,
+          fileSize,
+        );
+        if (full) return full;
+
+        const actualHeader = Math.min(headerSize, fileSize);
+        const header = new Uint8Array(actualHeader);
+        await file.read(header);
+
+        const actualFooter = Math.min(footerSize, fileSize);
+        const footerStart = fileSize - actualFooter;
+        await file.seek(footerStart, D.SeekMode.Start);
+        const footer = new Uint8Array(actualFooter);
+        await file.read(footer);
+
+        const combined = new Uint8Array(actualHeader + actualFooter);
+        combined.set(header, 0);
+        combined.set(footer, actualHeader);
+        return combined;
+      } finally {
+        void file.close();
+      }
+    },
+  };
+}
+
+type NodeFs = typeof import("node:fs/promises");
+type NodeBuffer = typeof import("node:buffer");
+
+function createNodeIO(): PlatformIO {
+  let fsCache: NodeFs | undefined;
+  let bufCache: NodeBuffer | undefined;
+
+  async function getFs(): Promise<NodeFs> {
+    return (fsCache ??= await import("node:fs/promises"));
+  }
+  async function getBuf(): Promise<NodeBuffer> {
+    return (bufCache ??= await import("node:buffer"));
+  }
+
+  return {
+    readFile: async (path) => {
+      const fs = await getFs();
+      return new Uint8Array(await fs.readFile(path));
+    },
+    writeFile: async (path, data) => {
+      const fs = await getFs();
+      await fs.writeFile(path, data);
+    },
+    stat: async (path) => {
+      const fs = await getFs();
+      const s = await fs.stat(path);
+      return { size: s.size };
+    },
+    async *readDir(path) {
+      const fs = await getFs();
+      const entries = await fs.readdir(path, { withFileTypes: true });
+      for (const entry of entries) {
+        yield {
+          name: entry.name,
+          isDirectory: entry.isDirectory(),
+          isFile: entry.isFile(),
+        };
+      }
+    },
+    readPartial: async (path, headerSize, footerSize) => {
+      const fs = await getFs();
+      const { Buffer } = await getBuf();
+      const file = await fs.open(path, "r");
+      try {
+        const fileSize = (await file.stat()).size;
+        const full = await readFullFile(
+          async (p) => new Uint8Array(await fs.readFile(p)),
+          path,
+          headerSize,
+          footerSize,
+          fileSize,
+        );
+        if (full) return full;
+
+        const actualHeader = Math.min(headerSize, fileSize);
+        const header = Buffer.alloc(actualHeader);
+        await file.read(header, 0, actualHeader, 0);
+
+        const actualFooter = Math.min(footerSize, fileSize);
+        const footerStart = fileSize - actualFooter;
+        const footer = Buffer.alloc(actualFooter);
+        await file.read(footer, 0, actualFooter, footerStart);
+
+        const combined = new Uint8Array(actualHeader + actualFooter);
+        combined.set(
+          new Uint8Array(header.buffer, header.byteOffset, header.byteLength),
+          0,
+        );
+        combined.set(
+          new Uint8Array(footer.buffer, footer.byteOffset, footer.byteLength),
+          actualHeader,
+        );
+        return combined;
+      } finally {
+        await file.close();
+      }
+    },
+  };
+}
+
+type BunFile = {
+  arrayBuffer(): Promise<ArrayBuffer>;
+  size: number;
+  /// Bun exposes lazy seek-backed ranges: `slice` reads nothing until asked.
+  slice(start?: number, end?: number): { arrayBuffer(): Promise<ArrayBuffer> };
+};
+
+type BunGlobal = {
+  file(path: string): BunFile;
+  write(path: string, data: Uint8Array): Promise<number>;
+};
+
+function createBunIO(): PlatformIO {
+  const B = (globalThis as Record<string, unknown>).Bun as BunGlobal;
+  return {
+    readFile: async (path) => {
+      return new Uint8Array(await B.file(path).arrayBuffer());
+    },
+    writeFile: async (path, data) => {
+      await B.write(path, data);
+    },
+    stat: async (path) => {
+      return { size: B.file(path).size };
+    },
+    async *readDir(path) {
+      const fs = await import("node:fs/promises");
+      const entries = await fs.readdir(path, { withFileTypes: true });
+      for (const entry of entries) {
+        yield {
+          name: entry.name,
+          isDirectory: entry.isDirectory(),
+          isFile: entry.isFile(),
+        };
+      }
+    },
+    // Same contract as the Node and Deno providers (taglib-essc): files small
+    // enough to fit the two windows are read whole, larger ones are spliced
+    // from a header read and a footer read. Bun's Blob.slice is the seek —
+    // both ranges are lazy, so only the requested bytes cross from disk.
+    readPartial: async (path, headerSize, footerSize) => {
+      const file = B.file(path);
+      const fileSize = file.size;
+      const full = await readFullFile(
+        async (p) => new Uint8Array(await B.file(p).arrayBuffer()),
+        path,
+        headerSize,
+        footerSize,
+        fileSize,
+      );
+      if (full) return full;
+
+      const actualHeader = Math.min(headerSize, fileSize);
+      const header = new Uint8Array(
+        await file.slice(0, actualHeader).arrayBuffer(),
+      );
+      const actualFooter = Math.min(footerSize, fileSize);
+      const footerStart = fileSize - actualFooter;
+      const footer = new Uint8Array(
+        await file.slice(footerStart, fileSize).arrayBuffer(),
+      );
+
+      const combined = new Uint8Array(actualHeader + actualFooter);
+      combined.set(header, 0);
+      combined.set(footer, actualHeader);
+      return combined;
+    },
+  };
+}
+
+/**
+ * Pure environment -> PlatformIO selection (taglib-2b4): each environment's
+ * factory is chosen without sniffing, so the routing is testable with a
+ * synthetic environment. Factories are lazy — nothing touches the runtime
+ * until a method is called, so calling this under any runtime is safe.
+ */
+export function createPlatformIOFor(env: RuntimeEnvironment): PlatformIO {
+  switch (env) {
+    case "deno-wasi":
+      return createDenoIO();
+    case "bun-wasi":
+      return createBunIO();
+    case "node-wasi":
+    case "node-emscripten":
+      return createNodeIO();
+    default:
+      throw new EnvironmentError(
+        env,
+        "does not support filesystem operations",
+        "filesystem access",
+      );
+  }
+}
+
+export function getPlatformIO(): PlatformIO {
+  if (platformIO) return platformIO;
+
+  platformIO = createPlatformIOFor(detectRuntime().environment);
+
+  return platformIO;
+}
+
+/** @internal */
+export function _setPlatformIOForTesting(io: PlatformIO): void {
+  platformIO = io;
+}
+
+/** @internal */
+export function _resetPlatformIO(): void {
+  platformIO = undefined;
+}

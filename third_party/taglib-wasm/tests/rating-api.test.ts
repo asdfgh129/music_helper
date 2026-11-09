@@ -1,0 +1,205 @@
+/**
+ * @fileoverview Tests for Rating API integration
+ * Uses buffer mode (Emscripten) to test the Embind bindings
+ */
+
+import { describe, expect, it } from "vite-plus/test";
+import { readFile } from "node:fs/promises";
+import { expectDefined } from "./_assert-helpers.ts";
+import { TagLib } from "../src/taglib.ts";
+import { RatingUtils } from "../src/utils/rating.ts";
+import type { Rating } from "../src/constants/complex-properties.ts";
+
+// Test file paths
+const TEST_FILES = {
+  mp3: "tests/test-files/mp3/kiss-snippet.mp3",
+  flac: "tests/test-files/flac/kiss-snippet.flac",
+  ogg: "tests/test-files/ogg/kiss-snippet.ogg",
+  m4a: "tests/test-files/mp4/kiss-snippet.m4a",
+  opus: "tests/test-files/opus/kiss-snippet.opus",
+};
+
+describe("RatingAPI", () => {
+  it("getRatings returns empty array for files without ratings", async () => {
+    const taglib = await TagLib.initialize({ forceWasmType: "emscripten" });
+    const audioData = new Uint8Array(await readFile(TEST_FILES.mp3));
+    const file = await taglib.open(audioData.buffer);
+
+    const ratings = file.getRatings();
+    expectDefined(ratings);
+    expect(Array.isArray(ratings)).toStrictEqual(true);
+
+    file.dispose();
+  });
+
+  it("setRatings and getRatings roundtrip for MP3", async () => {
+    const taglib = await TagLib.initialize({ forceWasmType: "emscripten" });
+    const audioData = new Uint8Array(await readFile(TEST_FILES.mp3));
+    const file = await taglib.open(audioData.buffer);
+
+    // Set a rating
+    const testRatings: Rating[] = [
+      { rating: 0.8, email: "test@example.com", counter: 42 },
+    ];
+    file.setRatings(testRatings);
+
+    // Save and verify
+    file.save();
+
+    // Get ratings back
+    const ratings = file.getRatings();
+    expectDefined(ratings);
+    expect(ratings.length).toStrictEqual(1);
+    // Check rating value (may be slightly different due to POPM 0-255 conversion)
+    expect(typeof ratings[0].rating).toStrictEqual("number");
+    expect(
+      ratings[0].rating >= 0.75 && ratings[0].rating <= 0.85,
+    ).toStrictEqual(true);
+
+    file.dispose();
+  });
+
+  it("convenience methods getRating/setRating", async () => {
+    const taglib = await TagLib.initialize({ forceWasmType: "emscripten" });
+    const audioData = new Uint8Array(await readFile(TEST_FILES.mp3));
+    const file = await taglib.open(audioData.buffer);
+
+    // Set rating using convenience method
+    file.setRating(0.6, "user@test.com");
+    file.save();
+
+    // Get rating using convenience method
+    const rating = file.getRating();
+    expectDefined(rating);
+    expect(typeof rating).toStrictEqual("number");
+    // POPM mapping: 0.6 -> 128 (3 stars) -> 0.6
+    expect(rating >= 0.55 && rating <= 0.65).toStrictEqual(true);
+
+    // Branded return: the documented getRating -> RatingUtils pairing must
+    // typecheck without a manual normalized() wrap (docs preflight 2026-07-16)
+    expect(RatingUtils.toStars(rating)).toStrictEqual(3);
+
+    file.dispose();
+  });
+
+  it("multiple ratings", async () => {
+    const taglib = await TagLib.initialize({ forceWasmType: "emscripten" });
+    const audioData = new Uint8Array(await readFile(TEST_FILES.mp3));
+    const file = await taglib.open(audioData.buffer);
+
+    // Set multiple ratings
+    const testRatings: Rating[] = [
+      { rating: 0.4, email: "user1@example.com" },
+      { rating: 1.0, email: "user2@example.com" },
+    ];
+    file.setRatings(testRatings);
+    file.save();
+
+    // Get all ratings
+    const ratings = file.getRatings();
+    expectDefined(ratings);
+    // Note: MP3 POPM only stores one rating per email
+    expect(ratings.length >= 1).toStrictEqual(true);
+
+    file.dispose();
+  });
+
+  it("FLAC format support", async () => {
+    const taglib = await TagLib.initialize({ forceWasmType: "emscripten" });
+    const audioData = new Uint8Array(await readFile(TEST_FILES.flac));
+    const file = await taglib.open(audioData.buffer);
+
+    // Set a rating (FLAC uses Vorbis comments with RATING field)
+    file.setRating(0.8);
+    file.save();
+
+    // Get rating back
+    const rating = file.getRating();
+    expectDefined(rating);
+    expect(typeof rating).toStrictEqual("number");
+
+    file.dispose();
+  });
+
+  it("OGG format support", async () => {
+    const taglib = await TagLib.initialize({ forceWasmType: "emscripten" });
+    const audioData = new Uint8Array(await readFile(TEST_FILES.ogg));
+    const file = await taglib.open(audioData.buffer);
+
+    // Set a rating (OGG uses Vorbis comments with RATING field)
+    file.setRating(0.6);
+    file.save();
+
+    // Get rating back
+    const rating = file.getRating();
+    expectDefined(rating);
+    expect(typeof rating).toStrictEqual("number");
+
+    file.dispose();
+  });
+
+  it("M4A/MP4 format support", async () => {
+    const taglib = await TagLib.initialize({ forceWasmType: "emscripten" });
+    const audioData = new Uint8Array(await readFile(TEST_FILES.m4a));
+    const file = await taglib.open(audioData.buffer);
+
+    // Set a rating (M4A uses freeform ----:com.apple.iTunes:RATING atom)
+    file.setRating(0.9);
+    file.save();
+
+    // Get rating back
+    const rating = file.getRating();
+    expectDefined(rating);
+    expect(typeof rating).toStrictEqual("number");
+
+    file.dispose();
+  });
+
+  it("Opus format support", async () => {
+    const taglib = await TagLib.initialize({ forceWasmType: "emscripten" });
+    const audioData = new Uint8Array(await readFile(TEST_FILES.opus));
+    const file = await taglib.open(audioData.buffer);
+
+    // Set a rating (Opus uses Vorbis comments with RATING field)
+    file.setRating(0.7);
+    file.save();
+
+    // Get rating back
+    const rating = file.getRating();
+    expectDefined(rating);
+    expect(typeof rating).toStrictEqual("number");
+
+    file.dispose();
+  });
+});
+
+// Parity: taglib-86z — the singular getRating/setRating convenience wrappers
+// were Emscripten-only. Verify they round-trip through save and land on the
+// IDENTICAL value on both backends (POPM is quantized 0-255, so the backends
+// must agree exactly rather than land in a loose range).
+describe("getRating/setRating cross-backend parity (taglib-86z)", () => {
+  it("setRating then getRating round-trips identically on both backends", async () => {
+    const results: Record<string, number | undefined> = {};
+    for (const backend of ["wasi", "emscripten"] as const) {
+      const tl = await TagLib.initialize({ forceWasmType: backend });
+      const seed = await tl.open(
+        new Uint8Array(await readFile(TEST_FILES.mp3)),
+      );
+      seed.setRating(0.8, "user@example.com");
+      seed.save();
+      const buf = seed.getFileBuffer();
+      seed.dispose();
+
+      const reopened = await tl.open(buf);
+      results[backend] = reopened.getRating();
+      reopened.dispose();
+    }
+    expectDefined(
+      results.wasi,
+      "WASI getRating must return a value after a setRating round-trip",
+    );
+    expect(results.wasi, "getRating must match across backends").toStrictEqual(
+      results.emscripten,
+    );
+  });
+});

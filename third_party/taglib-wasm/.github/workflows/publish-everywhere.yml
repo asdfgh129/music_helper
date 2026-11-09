@@ -1,0 +1,1071 @@
+name: Publish to JSR/NPM/GitHub
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g., 1.2.3)"
+        required: true
+        type: string
+      notes:
+        description: "Release notes body (markdown). Sent by scripts/release-safe.sh from the local CHANGELOG ledger; empty falls back to the one-line body plus a compare link."
+        required: false
+        type: string
+  release:
+    types: [published]
+
+# Least privilege by default; jobs that need more declare it (id-token: write on
+# the npm OIDC publish leg, contents: write on finalize's tag push, packages:
+# write on the GitHub Packages leg). Review finding SEC-03.
+permissions:
+  contents: read
+
+# Prevent duplicate publish runs racing the same version (e.g., release event +
+# tag push, or two release edits in quick succession). One run per version wins.
+concurrency:
+  group: publish-${{ github.event.release.tag_name || github.event.inputs.version || github.ref }}
+  cancel-in-progress: false
+
+# Job execution order:
+# 1. prepare-and-build: Confirm CI passed, then build the package
+# 2. publish-jsr: Publish to JSR first (fail-fast if JSR OIDC is not working)
+# 3. verify-jsr: Instantiate both wasm backends from the published JSR package —
+#    the only check that can catch Deno's publish-time wasm import unfurl
+# 4. publish-npm: Publish to NPM (only if JSR succeeds)
+# 5. publish-github: Publish to GitHub Packages (only if JSR and NPM succeed)
+# 6. finalize: On success, create the release tag + GitHub release (notes from
+#    the `notes` dispatch input); on failure, write the failure summary with
+#    rollback commands.
+#    Tag/release creation lives here rather than in scripts/release-safe.sh so a
+#    failed publish leg cannot leave a released-but-unpublished version
+#    (taglib-rkx0).
+#
+# Publishing is atomic for all destinations. The should-publish gate asks
+# whether ANY registry lacks the version; when one does, every publish leg runs
+# — registries that already carry it no-op through their own "already
+# published" handling — and finalize creates the tag only after every leg
+# succeeded and the installed package verified. So one dispatch brings every
+# destination to the same state, and a version is never tagged while a
+# destination is missing it. Refilling a partial publish (the version on some
+# registries but not others) is exactly this path: the npm-only gate used to
+# skip every leg in that state, which left the gap unfillable and the tag
+# uncreatable.
+#
+# A version every destination already carries but that was never tagged is not
+# covered by a fresh dispatch — the gate finds nothing to publish, so finalize
+# is skipped; recovery there is `gh run rerun --failed` on the run that
+# published it, which reuses its prepare-and-build outputs.
+#
+# CI gate: release-safe.sh already waits for ci.yml to pass before dispatching.
+# The wait step here is belt-and-suspenders for the workflow_dispatch path and
+# for direct release edits — it uses scripts/wait-for-ci.sh with per-leg
+# classification so flaky Windows/macOS legs don't block a publish.
+
+jobs:
+  prepare-and-build:
+    name: Prepare and Build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read # the CI gate below reads workflow runs via `gh run list/view`
+      packages: read # the should-publish probe reads the GitHub Packages packument
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      should-publish: ${{ steps.check.outputs.should-publish }}
+      # The commit this run builds and publishes; the finalize job tags exactly
+      # this SHA so the tag can never disagree with the published artifacts.
+      release-sha: ${{ github.sha }}
+    steps:
+      - name: Verify the ref being published is reviewable
+        # Review finding SEC-02. Limits this deliberately does NOT claim to fix:
+        # a write-access actor can dispatch a branch's copy of this file (the
+        # workflow definition is sourced from the dispatched ref) and can push
+        # to main directly — so this is accident-prevention and a narrower
+        # release route, not an authorization boundary. The boundary a workflow
+        # edit cannot defeat is a GitHub Environment with required reviewers,
+        # recorded in the npm trusted-publisher entry (taglib-80l8).
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ "$EVENT_NAME" = "release" ]; then
+            # A hand-made release for an unreviewed branch commit must not
+            # publish: require the tagged commit to be on main.
+            STATUS=$(gh api "repos/${REPO}/compare/main...${SHA}" --jq .status 2>/dev/null || echo unknown)
+            case "$STATUS" in
+              behind | identical)
+                echo "Release commit ${SHA} is on main (compare status: ${STATUS})"
+                ;;
+              *)
+                echo "::error::Refusing to publish: release commit ${SHA} is not on main (compare status: ${STATUS})"
+                exit 1
+                ;;
+            esac
+          elif [ "$REF_NAME" != "refs/heads/main" ]; then
+            echo "::error::Refusing to publish from ${REF_NAME} (event: ${EVENT_NAME})."
+            echo "Publish runs from refs/heads/main, or from a published release whose commit is on main."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+
+      - name: Init submodules with retry
+        run: |
+          for i in 1 2 3; do
+            if git submodule update --init --recursive; then
+              echo "✅ Submodules initialized"
+              exit 0
+            fi
+            echo "⚠️ Attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+          echo "❌ Failed to init submodules after 3 attempts"
+          exit 1
+
+      - name: Wait for CI tests to pass (flake-tolerant)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # release-safe.sh already waited locally before tagging, so the
+        # release-event path finds CI finished here. The workflow_dispatch path
+        # (documented recovery, and how a failed leg is re-run) starts while CI
+        # on that commit is usually still in flight — the ci.yml matrix takes
+        # ~8 min, so a 180s budget guaranteed a timeout. Use the script's own
+        # default (900) and let the classification below tolerate flaky legs.
+        run: bash scripts/wait-for-ci.sh "${{ github.sha }}" 900 15
+
+      - name: Setup pnpm
+        # Version comes from packageManager in package.json — pnpm/action-setup
+        # reads it, so there is no version here to drift out of sync.
+        uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          # Cache the pnpm store (content-addressed), not node_modules:
+          # restoring a stale tree can mask what `pnpm install --frozen-lockfile`
+          # would install.
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Emscripten
+        uses: mymindstorm/setup-emsdk@v16
+        with:
+          version: 6.0.12
+
+      - name: Determine version
+        id: version
+        env:
+          # Passed through the environment, not interpolated into the script:
+          # GitHub substitutes ${{ }} before bash parses the text, so a crafted
+          # version input or tag name would otherwise be shell source in the job
+          # that builds what the OIDC publish legs push (review finding SEC-01).
+          EVENT_NAME: ${{ github.event_name }}
+          VERSION_INPUT: ${{ github.event.inputs.version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            VERSION="$VERSION_INPUT"
+          elif [[ "$EVENT_NAME" == "release" ]]; then
+            VERSION="$RELEASE_TAG"
+          else
+            echo "Unsupported event: $EVENT_NAME"
+            exit 1
+          fi
+
+          # Normalize version (remove 'v' prefix if present)
+          VERSION="${VERSION#v}"
+
+          # Validate version format
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$ ]]; then
+            echo "Invalid version format: $VERSION"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+      - name: Check which destinations still need the version
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Atomic for all destinations: ask whether ANY registry lacks the
+          # version. When one does, every publish leg runs (a registry that
+          # already carries it no-ops through that leg's own "already
+          # published" handling) and finalize tags the release only after every
+          # leg and the installed-package verification succeeded.
+          #
+          # A registry the probe cannot confirm (auth, network, CDN lag) counts
+          # as missing: its leg then runs and the idempotent path absorbs the
+          # false positive. The probes are registry-protocol reads: npm answers
+          # its immutable per-version URL (the packument `npm view` reads is
+          # CDN-cached and can lag a publish by minutes), JSR serves a
+          # per-version metadata document, and GitHub Packages is read through
+          # the abbreviated packument its own publish leg verifies with.
+          NPM_MISSING=true
+          JSR_MISSING=true
+          GITHUB_MISSING=true
+
+          NPM_CODE=$(curl -s --connect-timeout 10 --max-time 30 -o /dev/null -w '%{http_code}' \
+            "https://registry.npmjs.org/taglib-wasm/${VERSION}" || echo 000)
+          if [ "$NPM_CODE" = "200" ]; then NPM_MISSING=false; fi
+
+          JSR_CODE=$(curl -s --connect-timeout 10 --max-time 30 -o /dev/null -w '%{http_code}' \
+            "https://jsr.io/@charlesw/taglib-wasm/${VERSION}_meta.json" || echo 000)
+          if [ "$JSR_CODE" = "200" ]; then JSR_MISSING=false; fi
+
+          GITHUB_CODE=$(curl -s --connect-timeout 10 --max-time 30 -o /tmp/gh-pkg.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.npm.install-v1+json' \
+            "https://npm.pkg.github.com/@charleswiltgen%2Ftaglib-wasm" || echo 000)
+          if [ "$GITHUB_CODE" = "200" ] && jq -e --arg v "$VERSION" '.versions[$v]' /tmp/gh-pkg.json >/dev/null 2>&1; then
+            GITHUB_MISSING=false
+          fi
+
+          SHOULD_PUBLISH="false"
+          if [ "$NPM_MISSING" = "true" ] || [ "$JSR_MISSING" = "true" ] || [ "$GITHUB_MISSING" = "true" ]; then
+            SHOULD_PUBLISH="true"
+          fi
+
+          echo "npm=$NPM_CODE jsr=$JSR_CODE github=$GITHUB_CODE; should-publish=$SHOULD_PUBLISH"
+          echo "should-publish=$SHOULD_PUBLISH" >> "$GITHUB_OUTPUT"
+
+      - name: Sync versions across files
+        if: steps.check.outputs.should-publish == 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Use the sync-version script to update all version references
+          node -e "
+            const fs = require('fs');
+            const path = require('path');
+
+            // Update package.json
+            const pkgPath = path.join(__dirname, 'package.json');
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+            pkg.version = '$VERSION';
+            fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+
+            // Update src/version.ts
+            const versionTsPath = path.join(__dirname, 'src', 'version.ts');
+            fs.writeFileSync(versionTsPath, 'export const VERSION = \"$VERSION\";\n');
+
+            // Update jsr.json (the JSR package manifest — published verbatim,
+            // so its version must match package.json)
+            const jsrPath = path.join(__dirname, 'jsr.json');
+            const jsr = JSON.parse(fs.readFileSync(jsrPath, 'utf8'));
+            jsr.version = '$VERSION';
+            fs.writeFileSync(jsrPath, JSON.stringify(jsr, null, 2) + '\n');
+
+            console.log('Updated versions to $VERSION');
+          "
+
+      - name: Build project
+        if: steps.check.outputs.should-publish == 'true'
+        run: pnpm run build
+
+      - name: Verify build artifacts
+        if: steps.check.outputs.should-publish == 'true'
+        run: |
+          # Check that all required files exist
+          test -f dist/index.js || (echo "Missing dist/index.js" && exit 1)
+          test -f dist/index.d.ts || (echo "Missing dist/index.d.ts" && exit 1)
+          test -f dist/taglib-web.wasm || (echo "Missing dist/taglib-web.wasm" && exit 1)
+          test -f dist/taglib-wrapper.js || (echo "Missing dist/taglib-wrapper.js" && exit 1)
+
+          # Check file sizes are reasonable
+          WASM_SIZE=$(stat -c%s dist/taglib-web.wasm 2>/dev/null || stat -f%z dist/taglib-web.wasm)
+          if [ "$WASM_SIZE" -lt 1000 ]; then
+            echo "WASM file too small: $WASM_SIZE bytes"
+            exit 1
+          fi
+
+      - name: Verify WASI binary exists
+        if: steps.check.outputs.should-publish == 'true'
+        run: |
+          # WASI binary must exist with reasonable size (not rebuilt in publish CI)
+          if [ ! -f build/taglib-wasi.wasm ]; then
+            echo "::error::build/taglib-wasi.wasm is missing from the repository"
+            exit 1
+          fi
+          WASI_SIZE=$(stat -c%s build/taglib-wasi.wasm 2>/dev/null || stat -f%z build/taglib-wasi.wasm)
+          if [ "$WASI_SIZE" -lt 100000 ]; then
+            echo "::error::build/taglib-wasi.wasm is suspiciously small ($WASI_SIZE bytes)"
+            exit 1
+          fi
+          echo "✅ WASI binary verified (${WASI_SIZE} bytes)"
+
+      - name: Upload build artifacts
+        if: steps.check.outputs.should-publish == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-artifacts
+          path: |
+            dist/
+            package.json
+            jsr.json
+            README.md
+            LICENSE
+            NOTICE
+            legal/
+          retention-days: 1
+
+  publish-jsr:
+    name: Publish to JSR
+    needs: prepare-and-build
+    if: needs.prepare-and-build.outputs.should-publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write # Required for OIDC authentication to JSR
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: "2.9.6"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: build-artifacts
+          path: .
+
+      - name: Verify the JSR package file set
+        # What ships is decided by jsr.json's publish.exclude plus .gitignore,
+        # and nothing else asserts it: the 2.3.0 JSR package shipped
+        # .claude/**, repo dotfiles and src/**.test.ts. The guard pins the
+        # exact file set before anything is published (taglib-asy class).
+        run: bash scripts/check-jsr-package-files.sh
+
+      - name: Publish to JSR with retry
+        id: publish
+        run: |
+          MAX_ATTEMPTS=3
+          RETRY_WAIT=30
+          PER_ATTEMPT_TIMEOUT=300
+
+          for attempt in $(seq 1 $MAX_ATTEMPTS); do
+            echo "::group::JSR publish attempt $attempt of $MAX_ATTEMPTS"
+            # OIDC handles auth; --allow-dirty because we hydrate artifacts.
+            if OUTPUT=$(timeout "$PER_ATTEMPT_TIMEOUT" deno publish --allow-slow-types --allow-dirty 2>&1); then
+              echo "$OUTPUT"
+              echo "::endgroup::"
+              echo "✅ JSR publish successful"
+              echo "published=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            echo "$OUTPUT"
+            echo "::endgroup::"
+
+            # Idempotent: treat "already published" as success.
+            if echo "$OUTPUT" | grep -qiE "already published|already exists"; then
+              echo "✅ JSR version already published, treating as success"
+              echo "published=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              echo "⚠️ Attempt $attempt failed, retrying in ${RETRY_WAIT}s..."
+              sleep "$RETRY_WAIT"
+            fi
+          done
+
+          echo "❌ JSR publish failed after $MAX_ATTEMPTS attempts"
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          exit 1
+
+  # Post-publish gate: pull the ACTUAL published JSR package and instantiate
+  # both backends. This is the only check that can catch Deno's publish-time
+  # wasm unfurl (deno publish rewrites the wasm's import names AFTER the build
+  # guard runs) — it would have caught the 1.4.1/1.4.2 regressions. The
+  # "./"-aliased import objects (fix-deno-compat.js, wasi-host-loader.ts) make
+  # this pass.
+  verify-jsr:
+    name: Verify published JSR package
+    needs: [prepare-and-build, publish-jsr]
+    # Verify only a JSR leg that succeeded this run: after a failed publish the
+    # import would target a version that is not there, burning the retry
+    # budget and reporting a misleading failure (finalize already blocks the
+    # tag either way).
+    if: needs.prepare-and-build.outputs.should-publish == 'true' && needs.publish-jsr.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: "2.9.6"
+      - name: Instantiate both backends from the published JSR package
+        env:
+          VERSION: ${{ needs.prepare-and-build.outputs.version }}
+        run: |
+          printf 'import { TagLib } from "jsr:@charlesw/taglib-wasm@%s";\nawait TagLib.initialize({ forceWasmType: "wasi" });\nawait TagLib.initialize({ forceWasmType: "emscripten" });\nconsole.log("both backends instantiate");\n' "$VERSION" > verify.ts
+          for attempt in 1 2 3 4 5 6; do
+            echo "verify attempt $attempt (jsr @$VERSION)..."
+            if deno run --reload --no-lock --minimum-dependency-age=0 --allow-read --allow-env --allow-net verify.ts; then
+              echo "✅ published JSR @$VERSION instantiates on Deno (both backends)"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "::error::published JSR @$VERSION failed to instantiate on Deno — the wasm may be corrupted"
+          exit 1
+
+  publish-npm:
+    name: Publish to NPM
+    needs: [prepare-and-build, publish-jsr] # Depends on JSR success (fail-fast)
+    if: needs.prepare-and-build.outputs.should-publish == 'true' && needs.publish-jsr.outputs.published == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write # Required for OIDC (npm trusted publishing, taglib-gmgj)
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+    steps:
+      # The pre-publish verification below runs this commit's
+      # scripts/verify-published.mjs and reads a fixture from tests/test-files,
+      # so the repository has to be here. The artifact then lands ON TOP of the
+      # checkout: it overwrites package.json, README.md, LICENSE and NOTICE
+      # (its copies are the publish inputs) and adds dist/. That is only correct
+      # because the
+      # artifact was built from this same SHA — which is exactly why the
+      # verification below also checks the staged version.
+      - uses: actions/checkout@v7
+
+      # No project dependency install in this job, so no pnpm store cache: npm
+      # is retained as the registry client, not as the package manager — the
+      # release path's OIDC trusted publishing is verified against the npm CLI.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: build-artifacts
+          path: .
+
+      - name: Prepare publish directory
+        run: |
+          # Create a clean directory with only files to publish
+          mkdir -p publish-dir
+          cp -r dist publish-dir/
+          cp package.json README.md LICENSE NOTICE publish-dir/
+          cp -r legal publish-dir/
+          cd publish-dir
+          echo "Contents of publish directory:"
+          ls -la
+          echo "Contents of dist:"
+          ls -la dist/
+
+      - name: Determine NPM tag
+        id: npm-tag
+        run: |
+          VERSION="${{ needs.prepare-and-build.outputs.version }}"
+          if [[ "$VERSION" == *-* ]]; then
+            echo "tag=beta" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Confirm OIDC is available to this job
+        # id-token: write is required for the npm trusted-publishing exchange.
+        # Without it the CLI silently falls back to any configured token, which
+        # is how a dead NPM_TOKEN produced an identical-looking E404-on-PUT.
+        run: |
+          if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "OIDC request endpoint present — trusted publishing can exchange a token."
+          else
+            echo "::error::ACTIONS_ID_TOKEN_REQUEST_URL is unset — the job lacks 'id-token: write'."
+            exit 1
+          fi
+
+      - name: Setup Deno
+        # The pre-publish verification runs the same probes as the post-publish
+        # one, including its Deno leg. Same pinned version as CI.
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: "2.9.6"
+
+      - name: Verify the staged package before publishing
+        # Irreversibility is the point: an npm version cannot be unpublished
+        # after 24h, so the artifact is exercised BEFORE the PUT. The verifier
+        # packs publish-dir itself (applying its `files`), asserts the installed
+        # tree carries every file the registry must receive and exactly the
+        # version this run publishes, then runs the Node and Deno probes.
+        env:
+          VERSION: ${{ needs.prepare-and-build.outputs.version }}
+        run: node scripts/verify-published.mjs publish-dir "$VERSION"
+
+      - name: Publish to NPM with retry
+        id: publish
+        env:
+          # Deliberately NOT setting NODE_AUTH_TOKEN: npm prefers OIDC but the
+          # presence of a token can shadow it, and the repository no longer
+          # holds an npm credential at all (NPM_TOKEN deleted 2026-09-17,
+          # taglib-gmgj). Auth here is the OIDC exchange against the package's
+          # trusted-publisher entry.
+          NPM_TAG: ${{ steps.npm-tag.outputs.tag }}
+          # Verbose output is echoed with the rest of the attempt's output, so
+          # npm's auth decision appears in the log for both outcomes. Safe at
+          # this level: npm's OIDC helper logs fixed strings (never the token)
+          # and npm-registry-fetch logs method/status/URL without headers —
+          # verified against npm 11.19 (lib/utils/oidc.js, check-response.js).
+          NPM_CONFIG_LOGLEVEL: verbose
+        run: |
+          MAX_ATTEMPTS=3
+          RETRY_WAIT=30
+          PER_ATTEMPT_TIMEOUT=300
+
+          cd publish-dir
+          for attempt in $(seq 1 $MAX_ATTEMPTS); do
+            echo "::group::NPM publish attempt $attempt of $MAX_ATTEMPTS"
+            if OUTPUT=$(timeout "$PER_ATTEMPT_TIMEOUT" npm publish --access public --tag "$NPM_TAG" 2>&1); then
+              echo "$OUTPUT"
+              echo "::endgroup::"
+              echo "✅ NPM publish successful"
+              echo "published=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            echo "$OUTPUT"
+            echo "::endgroup::"
+
+            # Idempotent: treat "already published" / 409 as success.
+            if echo "$OUTPUT" | grep -qiE "previously published|cannot publish over|EPUBLISHCONFLICT|403 Forbidden.*cannot publish"; then
+              echo "✅ NPM version already published, treating as success"
+              echo "published=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              echo "⚠️ Attempt $attempt failed, retrying in ${RETRY_WAIT}s..."
+              sleep "$RETRY_WAIT"
+            fi
+          done
+
+          echo "❌ NPM publish failed after $MAX_ATTEMPTS attempts"
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          exit 1
+
+      - name: Verify NPM publication
+        run: |
+          VERSION="${{ needs.prepare-and-build.outputs.version }}"
+          # This is the npm leg's only post-publish verification: it proves the
+          # version is retrievable from the registry. The post-publish wasm
+          # unfurl check lives on the JSR leg (verify-jsr) — `deno publish`
+          # rewrites the wasm's import names after the build guard runs, which
+          # is what the 1.4.1/1.4.2 regressions were. `npm publish` performs no
+          # such rewrite, so there is no npm analogue.
+          # Query the IMMUTABLE version endpoint, not the packument that
+          # `npm view pkg@ver` reads: the packument is CDN-cached, so a check
+          # seconds after a publish can serve a pre-publish document and report
+          # a false negative. Measured on 2.2.3 (2026-09-17): npm printed
+          # "+ taglib-wasm@2.2.3" and /taglib-wasm/2.2.3 answered 200 while
+          # `npm view` kept saying "not found" past the old 50s budget.
+          URL="https://registry.npmjs.org/taglib-wasm/$VERSION"
+
+          # Budget, not a verdict. On 2026-10-10 this step's 12 x 10s schedule
+          # declared failure AFTER a publish that had succeeded, and that failure
+          # skipped the tag, the GitHub release and the whole GitHub Packages leg.
+          # The immutable version endpoint is still the right query — it is the
+          # packument (`npm view`) that lies for minutes — but propagation can
+          # exceed two minutes, so back off for ~9 minutes; if it still lags,
+          # defer the verdict rather than failing the leg. The finalize job
+          # installs the published package and exercises both wasm backends, and
+          # that check owns the tag. Recovery if a publish leg fails for any other
+          # reason: `gh run rerun <id> --failed` — it replays this definition and
+          # keeps should-publish true, whereas a fresh dispatch would compute
+          # should-publish=false and create no tag.
+          DELAY=10
+          for attempt in $(seq 1 20); do
+            if [ "$(curl -s -o /dev/null -w '%{http_code}' "$URL")" = "200" ]; then
+              echo "Successfully verified version $VERSION on NPM (attempt $attempt)"
+              exit 0
+            fi
+            echo "Attempt $attempt/20: version endpoint not ready, waiting ${DELAY}s..."
+            sleep "$DELAY"
+            if [ "$DELAY" -lt 30 ]; then DELAY=$((DELAY + 5)); fi
+          done
+
+          echo "::warning title=NPM version endpoint still lagging::${URL} did not answer 200 within the backoff window. The publish step reported success; the finalize job installs taglib-wasm@${VERSION} and exercises both wasm backends before any tag is created, so the verdict is deferred there. If that verification fails, the release is genuinely broken rather than unlucky."
+          exit 0
+
+  publish-github:
+    name: Publish to GitHub Packages
+    needs: [prepare-and-build, publish-jsr, publish-npm] # Depends on JSR and NPM success
+    if: needs.prepare-and-build.outputs.should-publish == 'true' && needs.publish-jsr.outputs.published == 'true' && needs.publish-npm.outputs.published == 'true'
+    permissions:
+      contents: read
+      packages: write # Required to publish to npm.pkg.github.com (SEC-03)
+    runs-on: ubuntu-24.04
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+    steps:
+      # No project dependency install in this job, so no pnpm store cache: npm
+      # is retained as the registry client, not as the package manager.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          registry-url: "https://npm.pkg.github.com"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: build-artifacts
+          path: .
+
+      - name: Prepare publish directory
+        run: |
+          # Create a clean directory with only files to publish
+          mkdir -p publish-dir
+          cp -r dist publish-dir/
+          cp package.json README.md LICENSE NOTICE publish-dir/
+          cp -r legal publish-dir/
+
+      - name: Update package.json for GitHub
+        run: |
+          cd publish-dir
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('./package.json', 'utf8'));
+
+            // Update package name for GitHub
+            pkg.name = '@charleswiltgen/taglib-wasm';
+
+            // Remove NPM-specific config
+            delete pkg.publishConfig;
+
+            // Add GitHub registry config
+            pkg.publishConfig = {
+              registry: 'https://npm.pkg.github.com'
+            };
+
+            fs.writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
+            console.log('Updated package.json for GitHub Packages');
+          "
+
+      - name: Verify the rewritten manifest
+        # The npm leg verified this same dist/ byte-for-byte; what differs on
+        # this leg is the manifest rewritten above, so check that the rewrite
+        # produced a publishable one: the scoped name, the registry, and every
+        # path the manifest points at must exist in the staging directory.
+        # (This leg deliberately does not re-run the wasm/Deno probes: they
+        # exercise dist/, which the npm leg already verified.)
+        run: |
+          node -e "
+            const { existsSync, readFileSync } = require('node:fs');
+            const { join } = require('node:path');
+            const dir = 'publish-dir';
+            const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+            const problems = [];
+            if (pkg.name !== '@charleswiltgen/taglib-wasm') problems.push('name is ' + pkg.name);
+            if (pkg.publishConfig?.registry !== 'https://npm.pkg.github.com') {
+              problems.push('registry is ' + pkg.publishConfig?.registry);
+            }
+            const targets = [];
+            for (const field of ['main', 'module', 'browser', 'types']) {
+              if (typeof pkg[field] === 'string') targets.push([field, pkg[field]]);
+            }
+            const walk = (value, key) => {
+              if (typeof value === 'string') {
+                if (value.startsWith('./')) targets.push([key, value]);
+                return;
+              }
+              for (const [k, child] of Object.entries(value ?? {})) walk(child, k.startsWith('.') ? k : key + '.' + k);
+            };
+            walk(pkg.exports, 'exports');
+            for (const [key, path] of targets) {
+              if (!existsSync(join(dir, path))) problems.push(key + ' -> ' + path + ' is missing');
+            }
+            if (problems.length > 0) {
+              console.error('::error::the GitHub Packages manifest is broken:');
+              for (const p of problems) console.error('  ' + p);
+              process.exit(1);
+            }
+            console.log('✅ manifest verified: ' + pkg.name + '@' + pkg.version + ', ' + targets.length + ' paths resolve');
+          "
+
+      - name: Determine NPM tag
+        id: npm-tag
+        run: |
+          VERSION="${{ needs.prepare-and-build.outputs.version }}"
+          if [[ "$VERSION" == *-* ]]; then
+            echo "tag=beta" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to GitHub with retry
+        id: publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TAG: ${{ steps.npm-tag.outputs.tag }}
+        run: |
+          MAX_ATTEMPTS=3
+          RETRY_WAIT=30
+          PER_ATTEMPT_TIMEOUT=300
+
+          cd publish-dir
+          for attempt in $(seq 1 $MAX_ATTEMPTS); do
+            echo "::group::GitHub Packages publish attempt $attempt of $MAX_ATTEMPTS"
+            if OUTPUT=$(timeout "$PER_ATTEMPT_TIMEOUT" npm publish --tag "$NPM_TAG" 2>&1); then
+              echo "$OUTPUT"
+              echo "::endgroup::"
+              echo "✅ GitHub Packages publish successful"
+              echo "published=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            echo "$OUTPUT"
+            echo "::endgroup::"
+
+            # Idempotent: treat "already published" / 409 as success.
+            if echo "$OUTPUT" | grep -qiE "previously published|cannot publish over|EPUBLISHCONFLICT|409 Conflict"; then
+              echo "✅ GitHub Packages version already published, treating as success"
+              echo "published=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              echo "⚠️ Attempt $attempt failed, retrying in ${RETRY_WAIT}s..."
+              sleep "$RETRY_WAIT"
+            fi
+          done
+
+          echo "❌ GitHub Packages publish failed after $MAX_ATTEMPTS attempts"
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          exit 1
+
+      - name: Verify GitHub Packages publication
+        # Confirms the version is actually readable from the registry, so the
+        # leg is not taken on the CLI's word alone.
+        #
+        # Endpoint measured 2026-09-17 (probe run 35260820646) for
+        # @charleswiltgen/taglib-wasm with a packages:read token:
+        #   GET /<pkg>/<version>            -> 405  (no per-version manifest,
+        #                                            unlike registry.npmjs.org)
+        #   GET /<pkg>  (abbreviated packument) -> 200, versions + dist-tags
+        #   GET /repos/{o}/{r}/packages     -> 404  (not usable here)
+        # so presence of the version in the packument is the check.
+        #
+        # The REST packages API was re-investigated 2026-09-18 (taglib-80l8)
+        # looking for a cache-immune check, and it is not reachable from here:
+        #
+        #   * /users/{username}/packages/npm/{name}/versions (the user-owned
+        #     listing; an org/repo equivalent would not apply to a user-owned
+        #     package) needs the `read:packages` scope. Measured 403 —
+        #     "You need at least read:packages scope to list packages" — with
+        #     the repository token; with a name it cannot resolve it answers
+        #     404, so unauthorized and absent are indistinguishable.
+        #   * The REST docs state Packages management "must authenticate using a
+        #     personal access token (classic)" with read:packages, and no
+        #     packages endpoint lists GITHUB_TOKEN or a GitHub App token as
+        #     supported. Using it would mean re-adding a long-lived PAT — the
+        #     credential class this workflow was rebuilt to remove.
+        #   * /repos/{owner}/{repo}/packages no longer exists in the published
+        #     packages API at all (404 measured; zero occurrences in
+        #     https://docs.github.com/en/rest/packages/packages.md).
+        #   * Anonymous registry reads are rejected (401 for the packument,
+        #     403 for a tarball path — measured), i.e. auth is required even
+        #     for a public package, and the registry exposes no per-version
+        #     route (405), so the packument is the only observable a
+        #     GITHUB_TOKEN can make.
+        #
+        # Best-effort is therefore the ceiling, not an unfinished first pass:
+        # unlike npmjs.org, this registry's packument can serve a stale document
+        # right after a publish, and a verification step that fails after a
+        # genuinely successful publish is worse than a loud warning (the lesson
+        # from the npm leg's first fix). The definitive check waits on a
+        # read:packages-capable credential, which this design deliberately does
+        # not have.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.prepare-and-build.outputs.version }}"
+          URL="https://npm.pkg.github.com/@charleswiltgen%2Ftaglib-wasm"
+          sleep 10
+
+          for i in {1..18}; do
+            CODE=$(curl -s -o /tmp/gh-pkg.json -w '%{http_code}' \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H 'Accept: application/vnd.npm.install-v1+json' "$URL" || echo "000")
+            if [ "$CODE" = "200" ] && jq -e --arg v "$VERSION" '.versions[$v]' /tmp/gh-pkg.json >/dev/null 2>&1; then
+              echo "Successfully verified version $VERSION on GitHub Packages"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $CODE, version not confirmed yet..."
+            sleep 10
+          done
+
+          echo "::warning title=GitHub Packages verification inconclusive::Could not confirm $VERSION in the GitHub Packages packument within 3 minutes (last HTTP $CODE). The publish step reported success; either the registry is serving a stale packument or the token lacks packages:read. Re-check with: curl -H 'Authorization: Bearer <token>' '$URL'"
+
+  finalize:
+    name: Finalize Release
+    needs:
+      [prepare-and-build, publish-jsr, verify-jsr, publish-npm, publish-github] # every publish leg is
+    # listed so a failed leg cannot produce a tag/release (review findings
+    # SEC-04 / rkx0 review finding 2, and verify-jsr so a failed post-publish
+    # check cannot produce one either).
+    if: always() && needs.prepare-and-build.outputs.should-publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # Required to create tags
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Full history + tags: this job pushes the release tag and derives the
+          # compare link from the previous tag. (Default checkout is shallow and
+          # tag-less.)
+          fetch-depth: 0
+
+      - name: Setup Node
+        # The artifact verification below instantiates the published package,
+        # which enforces Node >= 22.6 at runtime (engines: >=24). The runner's
+        # default `node` is older, so relying on it would fail the step for an
+        # environment reason and block a legitimate release. Every other job in
+        # this repo pins the version the same way.
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Check publication status
+        id: status
+        env:
+          # Job results, not the publish steps' own `published` outputs: a leg
+          # whose verification step fails still wrote published=true, and no
+          # release may be created in that case (review finding SEC-04).
+          VERSION: ${{ needs.prepare-and-build.outputs.version }}
+          NPM_RESULT: ${{ needs.publish-npm.result }}
+          GITHUB_RESULT: ${{ needs.publish-github.result }}
+          JSR_RESULT: ${{ needs.publish-jsr.result }}
+          VERIFY_JSR_RESULT: ${{ needs.verify-jsr.result }}
+        run: |
+          SUCCESS=true
+          FAILURES=""
+
+          for entry in \
+            "JSR:${JSR_RESULT}" \
+            "JSR verification:${VERIFY_JSR_RESULT}" \
+            "npm:${NPM_RESULT}" \
+            "GitHub Packages:${GITHUB_RESULT}"; do
+            name="${entry%%:*}"
+            result="${entry#*:}"
+            if [ "$result" != "success" ]; then
+              FAILURES="${FAILURES}${name}(${result:-skipped}) "
+              SUCCESS=false
+            fi
+          done
+
+          echo "success=$SUCCESS" >> "$GITHUB_OUTPUT"
+          echo "failures=$FAILURES" >> "$GITHUB_OUTPUT"
+
+          if [ "$SUCCESS" = "true" ]; then
+            echo "✅ All publications and post-publish verifications succeeded for version ${VERSION}"
+          else
+            echo "❌ Failed: ${FAILURES}"
+          fi
+
+      - name: Rollback NPM
+        if: steps.status.outputs.success == 'false' && needs.publish-npm.outputs.published == 'true'
+        run: |
+          VERSION="${{ needs.prepare-and-build.outputs.version }}"
+          echo "⚠️  Rollback required for NPM version $VERSION"
+          echo "To rollback NPM:"
+          echo "1. npm unpublish taglib-wasm@$VERSION"
+          echo "2. Wait 24 hours before republishing the same version"
+          echo ""
+          echo "Note: NPM has restrictions on unpublishing. You may need to:"
+          echo "- Deprecate the version instead: npm deprecate taglib-wasm@$VERSION 'Published in error'"
+          echo "- Publish a patch version with fixes"
+
+      - name: Write failure summary
+        if: steps.status.outputs.success == 'false'
+        run: |
+          VERSION="${{ needs.prepare-and-build.outputs.version }}"
+          FAILURES="${{ steps.status.outputs.failures }}"
+          NPM_PUBLISHED="${{ needs.publish-npm.outputs.published }}"
+          GITHUB_PUBLISHED="${{ needs.publish-github.outputs.published }}"
+          JSR_PUBLISHED="${{ needs.publish-jsr.outputs.published }}"
+
+          {
+            echo "## ❌ Publication Failed for v${VERSION}"
+            echo ""
+            echo "Failed to publish to: ${FAILURES}"
+            echo ""
+            echo "### Publication Status"
+            echo "| Registry | Status |"
+            echo "|----------|--------|"
+            echo "| JSR | $([ "$JSR_PUBLISHED" = "true" ] && echo "✅ Published" || echo "❌ Failed") |"
+            echo "| NPM | $([ "$NPM_PUBLISHED" = "true" ] && echo "✅ Published" || echo "❌ Failed") |"
+            echo "| GitHub Packages | $([ "$GITHUB_PUBLISHED" = "true" ] && echo "✅ Published" || echo "❌ Failed") |"
+            echo ""
+
+            if [ "$JSR_PUBLISHED" = "true" ] || [ "$NPM_PUBLISHED" = "true" ] || [ "$GITHUB_PUBLISHED" = "true" ]; then
+              echo "### ⚠️ Rollback Required"
+              echo ""
+
+              if [ "$JSR_PUBLISHED" = "true" ]; then
+                echo "#### JSR Rollback"
+                echo "JSR does not support unpublishing. Consider publishing a patch version."
+                echo ""
+              fi
+
+              if [ "$NPM_PUBLISHED" = "true" ]; then
+                echo "#### NPM Rollback"
+                echo '```bash'
+                echo "# Option 1: Deprecate (recommended)"
+                echo "npm deprecate taglib-wasm@${VERSION} 'Published in error'"
+                echo ""
+                echo "# Option 2: Unpublish (requires waiting 24h to republish)"
+                echo "npm unpublish taglib-wasm@${VERSION}"
+                echo '```'
+                echo ""
+              fi
+
+              if [ "$GITHUB_PUBLISHED" = "true" ]; then
+                echo "#### GitHub Packages Rollback"
+                echo "Delete the package version from GitHub Packages UI or use:"
+                echo '```bash'
+                echo "gh api -X DELETE /user/packages/npm/@charleswiltgen%2Ftaglib-wasm/versions/VERSION_ID"
+                echo '```'
+                echo ""
+              fi
+
+            fi
+
+            echo "### Next Steps"
+            echo "1. Review the workflow logs above for specific error details"
+            echo "2. Fix the underlying issue"
+            echo "3. If any registries were published, follow rollback procedures above"
+            echo "4. Re-run the workflow or publish a new patch version"
+            echo ""
+            echo "No tag or GitHub release was created for this version."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Setup Deno
+        # The verification below has a Deno leg (the published package's Deno
+        # surface is a distinct code path). Same pin as the CI job, quoted so
+        # YAML keeps it a string.
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: "2.9.6"
+
+      - name: Verify the published artifact
+        # The registry copies are the deliverable, and nothing else here
+        # exercises them: the npm leg's own check is an HTTP 200 on the version
+        # URL, which proves the version exists, not that it works. This installs
+        # the version from the registry and runs a probe from inside the temp app
+        # that installed it, so its imports resolve through the package's
+        # `exports` map and it reads real tags on BOTH wasm backends — then
+        # repeats it under Deno, which reaches the Deno filesystem provider and
+        # the shipped-Wasm resolver no Node-side check can see. A failure means
+        # no tag and no release.
+        if: steps.status.outputs.success == 'true'
+        env:
+          VERSION: ${{ needs.prepare-and-build.outputs.version }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if node scripts/verify-published.mjs "$VERSION"; then
+            exit 0
+          fi
+          # The failure summary above is gated on the publication status, which
+          # was already computed — this path needs its own, or the run fails with
+          # no diagnosis and no rollback guidance.
+          {
+            echo "### ❌ Published taglib-wasm@${VERSION} failed verification"
+            echo ""
+            echo "Every registry carries ${VERSION}, but the installed package did not work, so no tag and no GitHub release were created."
+            echo ""
+            echo "1. The step log above names the failing check (a subpath import, a wasm backend, a read, or the Deno leg)."
+            echo "2. ${VERSION} is live on npm and unpublishing is restricted — a code fix ships as a new patch version."
+            echo "3. If the failure was environmental (a lagging packument, a network error), re-run this run:"
+            echo "   gh run rerun ${RUN_ID} --failed"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+      - name: Create and push release tag
+        # The tag is created HERE, not by scripts/release-safe.sh, and only once
+        # every registry has the version (taglib-rkx0): a locally created tag
+        # turns a failed publish leg into a released-but-unpublished version.
+        # It points at the commit this run built, so the tag and the published
+        # artifacts can never disagree even if main moves during the run.
+        if: steps.status.outputs.success == 'true'
+        env:
+          VERSION: ${{ needs.prepare-and-build.outputs.version }}
+          RELEASE_SHA: ${{ needs.prepare-and-build.outputs.release-sha }}
+        run: |
+          TAG="v${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            EXISTING=$(git rev-list -n 1 "${TAG}")
+            if [ "$EXISTING" != "$RELEASE_SHA" ]; then
+              # Refuse rather than announce a release whose tag points at a
+              # different commit (review finding SEC-05). Failing here skips the
+              # release step below.
+              echo "::error::Tag ${TAG} exists at ${EXISTING}, not at the published commit ${RELEASE_SHA}"
+              {
+                echo "### ❌ Tag conflict for v${VERSION}"
+                echo ""
+                echo "Tag \`${TAG}\` already exists at \`${EXISTING}\`; this run published \`${RELEASE_SHA}\`."
+                echo "The registries carry ${VERSION}, but no GitHub release was created — resolve the tag by hand."
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            echo "Tag ${TAG} already exists at the published commit — leaving it in place"
+          else
+            git tag -a "${TAG}" "${RELEASE_SHA}" -m "Release version ${VERSION}"
+            git push origin "refs/tags/${TAG}"
+            echo "Created and pushed tag ${TAG} at ${RELEASE_SHA}"
+          fi
+
+      - name: Publish GitHub release
+        # The body is the `notes` input, which scripts/release-safe.sh fills from
+        # the version's CHANGELOG section. That ledger is local and untracked, so
+        # it cannot be read from this checkout. An empty input (a hand dispatch,
+        # or the release-event trigger) falls back to the compare link below.
+        if: steps.status.outputs.success == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare-and-build.outputs.version }}
+          NOTES_INPUT: ${{ inputs.notes }}
+        run: |
+          TAG="v${VERSION}"
+          NOTES=/tmp/release-notes.md
+
+          if [ -n "$NOTES_INPUT" ]; then
+            printf '%s\n' "$NOTES_INPUT" > "$NOTES"
+          else
+            echo "::warning::No release notes were passed for ${VERSION}; falling back to the compare link"
+            echo "Release ${TAG}." > "$NOTES"
+          fi
+
+          PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+          if [ -n "$PREV" ]; then
+            printf '\n**Full Changelog**: https://github.com/%s/compare/%s...%s\n' \
+              "${{ github.repository }}" "$PREV" "$TAG" >> "$NOTES"
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists — leaving it unchanged"
+            exit 0
+          fi
+
+          FLAGS="--latest"
+          case "$VERSION" in *-*) FLAGS="--prerelease" ;; esac
+
+          gh release create "$TAG" --title "Release ${TAG}" --notes-file "$NOTES" "$FLAGS"
+          echo "Published GitHub release ${TAG} with the dispatched notes"

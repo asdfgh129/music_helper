@@ -1,0 +1,421 @@
+#include "taglib_audio_props.h"
+
+#include "formats/taglib_lame.h"
+
+#include <tfile.h>
+#include <audioproperties.h>
+#include <mpack/mpack.h>
+
+#include <mpeg/mpegfile.h>
+#include <mpeg/mpegproperties.h>
+#include <mpeg/mpegheader.h>
+#include <flac/flacfile.h>
+#include <flac/flacproperties.h>
+#include <mp4/mp4file.h>
+#include <mp4/mp4properties.h>
+#include <ogg/vorbis/vorbisfile.h>
+#include <ogg/opus/opusfile.h>
+#include <ogg/flac/oggflacfile.h>
+#include <ogg/speex/speexfile.h>
+#include <riff/wav/wavfile.h>
+#include <riff/wav/wavproperties.h>
+#include <riff/aiff/aifffile.h>
+#include <riff/aiff/aiffproperties.h>
+#include <asf/asffile.h>
+#include <asf/asfproperties.h>
+#include <ape/apefile.h>
+#include <ape/apeproperties.h>
+#include <dsf/dsffile.h>
+#include <dsf/dsfproperties.h>
+#include <dsdiff/dsdifffile.h>
+#include <dsdiff/dsdiffproperties.h>
+#include <wavpack/wavpackfile.h>
+#include <wavpack/wavpackproperties.h>
+#include <mpc/mpcfile.h>
+#include <mpc/mpcproperties.h>
+#include <trueaudio/trueaudiofile.h>
+#include <trueaudio/trueaudioproperties.h>
+#include <shorten/shortenfile.h>
+#include <shorten/shortenproperties.h>
+#include <mod/modfile.h>
+#include <s3m/s3mfile.h>
+#include <it/itfile.h>
+#include <xm/xmfile.h>
+#include <matroska/matroskafile.h>
+#include <matroska/matroskaproperties.h>
+
+ExtendedAudioInfo get_extended_audio_info(
+    TagLib::File* file, TagLib::AudioProperties* /* audio */)
+{
+    ExtendedAudioInfo info = {0, "", "", false, 0, 0, false, 0, nullptr, 0.0, false};
+
+    if (auto* f = dynamic_cast<TagLib::MPEG::File*>(file)) {
+        auto* props = f->audioProperties();
+        if (props) {
+            info.mpegVersion = props->version() == TagLib::MPEG::Header::Version1 ? 1 : 2;
+            info.mpegLayer = props->layer();
+
+            // Read first frame and parse LAME extension for bitrate-mode detection.
+            long firstFrame = f->firstFrameOffset();
+            if (firstFrame >= 0) {
+                f->seek(firstFrame);
+                TagLib::ByteVector frameBytes = f->readBlock(taglib_wasm::kRequiredFirstFrameBytes);
+                int rawVersion = static_cast<int>(props->version());
+                int rawChannelMode = static_cast<int>(props->channelMode());
+                auto lame = taglib_wasm::parseLameInfo(
+                    reinterpret_cast<const unsigned char*>(frameBytes.data()),
+                    static_cast<size_t>(frameBytes.size()),
+                    rawVersion, rawChannelMode);
+                if (lame.valid && lame.mode != taglib_wasm::BitrateMode::Unknown) {
+                    info.bitrateMode = taglib_wasm::modeString(lame.mode);
+                }
+            }
+        }
+        // ADTS (raw .aac) also parses through MPEG::File (MPEG::Header::isADTS,
+        // mpegheader.cpp) — label the stream, not the file class. Twin of the
+        // check in build/taglib_embind.cpp — keep in sync.
+        if (props && props->isADTS()) {
+            info.codec = "AAC";
+            info.container = "ADTS";
+        } else {
+            info.codec = "MP3";
+            info.container = "MP3";
+        }
+        return info;
+    }
+
+    if (auto* f = dynamic_cast<TagLib::FLAC::File*>(file)) {
+        auto* props = f->audioProperties();
+        if (props) info.bitsPerSample = props->bitsPerSample();
+        info.codec = "FLAC";
+        info.container = "FLAC";
+        info.isLossless = true;
+        return info;
+    }
+
+    if (auto* f = dynamic_cast<TagLib::MP4::File*>(file)) {
+        auto* props = f->audioProperties();
+        if (props) {
+            info.bitsPerSample = props->bitsPerSample();
+            info.isEncrypted = props->isEncrypted();
+            // TagLib 2.3.2 detects AC-3/E-AC-3/FLAC/DTS/Opus sample entries in
+            // MP4 (previously all non-ALAC tracks read as AAC). Twin of the
+            // switch in build/taglib_embind.cpp — keep in sync.
+            switch (props->codec()) {
+                case TagLib::MP4::Properties::AAC:
+                    info.codec = "AAC";
+                    break;
+                case TagLib::MP4::Properties::ALAC:
+                    info.codec = "ALAC";
+                    info.isLossless = true;
+                    break;
+                case TagLib::MP4::Properties::AC3:
+                    info.codec = "AC-3";
+                    break;
+                case TagLib::MP4::Properties::EAC3:
+                    info.codec = "E-AC-3";
+                    break;
+                case TagLib::MP4::Properties::FLAC:
+                    info.codec = "FLAC";
+                    info.isLossless = true;
+                    break;
+                case TagLib::MP4::Properties::DTS:
+                    info.codec = "DTS";
+                    break;
+                case TagLib::MP4::Properties::Opus:
+                    info.codec = "Opus";
+                    break;
+                default:
+                    info.codec = "unknown";
+                    break;
+            }
+        }
+        info.container = "MP4";
+        return info;
+    }
+
+    if (dynamic_cast<TagLib::Ogg::Vorbis::File*>(file)) {
+        info.codec = "Vorbis";
+        info.container = "OGG";
+        return info;
+    }
+
+    if (auto* f = dynamic_cast<TagLib::Ogg::Opus::File*>(file)) {
+        if (auto* props = f->audioProperties()) {
+            // TagLib returns the raw Q7.8 fixed-point value; dB = raw / 256.0.
+            info.outputGainDb = static_cast<double>(props->outputGain()) / 256.0;
+            info.outputGainValid = true;
+        }
+        info.codec = "Opus";
+        info.container = "OGG";
+        return info;
+    }
+
+    if (auto* f = dynamic_cast<TagLib::Ogg::FLAC::File*>(file)) {
+        auto* props = dynamic_cast<TagLib::FLAC::Properties*>(f->audioProperties());
+        if (props) info.bitsPerSample = props->bitsPerSample();
+        info.codec = "FLAC";
+        info.container = "OGG";
+        info.isLossless = true;
+        return info;
+    }
+
+    if (dynamic_cast<TagLib::Ogg::Speex::File*>(file)) {
+        info.codec = "Speex";
+        info.container = "OGG";
+        return info;
+    }
+
+    if (auto* f = dynamic_cast<TagLib::RIFF::WAV::File*>(file)) {
+        auto* props = f->audioProperties();
+        if (props) info.bitsPerSample = props->bitsPerSample();
+        // Three-way codec mapping and the lossless flag that follows it, exactly
+        // as the Emscripten binding reports both (build/taglib_embind.cpp: the
+        // WAV branch maps the RIFF format code 1/3/other, and its codec-name
+        // isLossless rule treats PCM and IEEEFloat as lossless, "WAV" as lossy).
+        // Keep both backends in sync (taglib-e2cg).
+        unsigned int format = 0;
+        if (auto* wavProps =
+                dynamic_cast<TagLib::RIFF::WAV::Properties*>(props)) {
+            format = wavProps->format();
+        }
+        if (format == 1) {
+            info.codec = "PCM";
+            info.isLossless = true;
+        } else if (format == 3) {
+            info.codec = "IEEEFloat";
+            info.isLossless = true;
+        } else {
+            info.codec = "WAV";
+            info.isLossless = false;
+        }
+        info.container = "WAV";
+        return info;
+    }
+
+    if (auto* f = dynamic_cast<TagLib::RIFF::AIFF::File*>(file)) {
+        auto* props = f->audioProperties();
+        if (props) info.bitsPerSample = props->bitsPerSample();
+        info.codec = "PCM";
+        info.container = "AIFF";
+        info.isLossless = true;
+        return info;
+    }
+
+    if (auto* f = dynamic_cast<TagLib::ASF::File*>(file)) {
+        auto* props = f->audioProperties();
+        if (props) {
+            info.bitsPerSample = props->bitsPerSample();
+            info.isEncrypted = props->isEncrypted();
+            if (props->codec() == TagLib::ASF::Properties::WMA9Lossless) {
+                info.codec = "WMALossless";
+                info.isLossless = true;
+            } else {
+                info.codec = "WMA";
+            }
+        }
+        info.container = "ASF";
+        return info;
+    }
+
+    if (auto* f = dynamic_cast<TagLib::APE::File*>(file)) {
+        auto* props = f->audioProperties();
+        if (props) {
+            info.bitsPerSample = props->bitsPerSample();
+            info.version = props->version();
+        }
+        info.codec = "APE";
+        info.container = "APE";
+        info.isLossless = true;
+        return info;
+    }
+
+    if (auto* f = dynamic_cast<TagLib::DSF::File*>(file)) {
+        auto* props = f->audioProperties();
+        if (props) info.bitsPerSample = props->bitsPerSample();
+        info.codec = "DSD";
+        info.container = "DSF";
+        info.isLossless = true;
+        return info;
+    }
+
+    if (auto* f = dynamic_cast<TagLib::DSDIFF::File*>(file)) {
+        auto* props = f->audioProperties();
+        if (props) info.bitsPerSample = props->bitsPerSample();
+        info.codec = "DSD";
+        info.container = "DSDIFF";
+        info.isLossless = true;
+        return info;
+    }
+
+    if (auto* f = dynamic_cast<TagLib::WavPack::File*>(file)) {
+        auto* props = f->audioProperties();
+        if (props) {
+            info.bitsPerSample = props->bitsPerSample();
+            info.isLossless = props->isLossless();
+            info.version = props->version();
+        }
+        info.codec = "WavPack";
+        info.container = "WavPack";
+        return info;
+    }
+
+    if (auto* f = dynamic_cast<TagLib::MPC::File*>(file)) {
+        auto* props = f->audioProperties();
+        if (props) info.version = props->mpcVersion();
+        info.codec = "MPC";
+        info.container = "MPC";
+        return info;
+    }
+
+    if (auto* f = dynamic_cast<TagLib::TrueAudio::File*>(file)) {
+        auto* props = f->audioProperties();
+        if (props) {
+            info.bitsPerSample = props->bitsPerSample();
+            info.version = props->ttaVersion();
+        }
+        info.codec = "TTA";
+        info.container = "TTA";
+        info.isLossless = true;
+        return info;
+    }
+
+    if (auto* f = dynamic_cast<TagLib::Shorten::File*>(file)) {
+        auto* props = f->audioProperties();
+        if (props) {
+            info.bitsPerSample = props->bitsPerSample();
+            info.version = props->shortenVersion();
+        }
+        info.codec = "Shorten";
+        info.container = "Shorten";
+        info.isLossless = true;
+        return info;
+    }
+
+    if (dynamic_cast<TagLib::Mod::File*>(file)) {
+        info.codec = "MOD";
+        info.container = "MOD";
+        return info;
+    }
+
+    if (dynamic_cast<TagLib::S3M::File*>(file)) {
+        info.codec = "S3M";
+        info.container = "S3M";
+        return info;
+    }
+
+    if (dynamic_cast<TagLib::IT::File*>(file)) {
+        info.codec = "IT";
+        info.container = "IT";
+        return info;
+    }
+
+    if (dynamic_cast<TagLib::XM::File*>(file)) {
+        info.codec = "XM";
+        info.container = "XM";
+        return info;
+    }
+
+    if (auto* f = dynamic_cast<TagLib::Matroska::File*>(file)) {
+        auto* props = dynamic_cast<TagLib::Matroska::Properties*>(f->audioProperties());
+        if (props) {
+            info.bitsPerSample = props->bitsPerSample();
+            TagLib::String cn = props->codecName();
+            if (!cn.isEmpty()) {
+                std::string name = cn.to8Bit(true);
+                if (name.find("OPUS") != std::string::npos) info.codec = "Opus";
+                else if (name.find("VORBIS") != std::string::npos) info.codec = "Vorbis";
+                else if (name.find("FLAC") != std::string::npos) { info.codec = "FLAC"; info.isLossless = true; }
+                else if (name.find("PCM") != std::string::npos) { info.codec = "PCM"; info.isLossless = true; }
+                else if (name.find("TRUEHD") != std::string::npos) { info.codec = "TrueHD"; info.isLossless = true; }
+                else if (name.find("AAC") != std::string::npos) info.codec = "AAC";
+                else if (name.find("MPEG") != std::string::npos) info.codec = "MP3";
+            }
+        }
+        info.container = "Matroska";
+        return info;
+    }
+
+    return info;
+}
+
+uint32_t count_extended_audio_fields(const ExtendedAudioInfo& info) {
+    uint32_t count = 0;
+    if (info.bitsPerSample > 0) count++;
+    if (info.codec[0] != '\0') count++;
+    if (info.container[0] != '\0') count++;
+    count++; // isLossless always written
+    if (info.mpegVersion > 0) count++;
+    if (info.mpegLayer > 0) count++;
+    if (info.isEncrypted) count++;
+    if (info.version > 0) count++;
+    if (info.bitrateMode != nullptr) count++;
+    if (info.outputGainValid) count++;
+    return count;
+}
+
+uint32_t encode_extended_audio(
+    mpack_writer_t* writer, const ExtendedAudioInfo& info)
+{
+    uint32_t written = 0;
+
+    if (info.bitsPerSample > 0) {
+        mpack_write_cstr(writer, "bitsPerSample");
+        mpack_write_uint(writer, static_cast<uint32_t>(info.bitsPerSample));
+        written++;
+    }
+
+    if (info.codec[0] != '\0') {
+        mpack_write_cstr(writer, "codec");
+        mpack_write_cstr(writer, info.codec);
+        written++;
+    }
+
+    if (info.container[0] != '\0') {
+        mpack_write_cstr(writer, "containerFormat");
+        mpack_write_cstr(writer, info.container);
+        written++;
+    }
+
+    mpack_write_cstr(writer, "isLossless");
+    mpack_write_bool(writer, info.isLossless);
+    written++;
+
+    if (info.mpegVersion > 0) {
+        mpack_write_cstr(writer, "mpegVersion");
+        mpack_write_uint(writer, static_cast<uint32_t>(info.mpegVersion));
+        written++;
+    }
+
+    if (info.mpegLayer > 0) {
+        mpack_write_cstr(writer, "mpegLayer");
+        mpack_write_uint(writer, static_cast<uint32_t>(info.mpegLayer));
+        written++;
+    }
+
+    if (info.isEncrypted) {
+        mpack_write_cstr(writer, "isEncrypted");
+        mpack_write_bool(writer, true);
+        written++;
+    }
+
+    if (info.version > 0) {
+        mpack_write_cstr(writer, "formatVersion");
+        mpack_write_uint(writer, static_cast<uint32_t>(info.version));
+        written++;
+    }
+
+    if (info.bitrateMode != nullptr) {
+        mpack_write_cstr(writer, "bitrateMode");
+        mpack_write_cstr(writer, info.bitrateMode);
+        written++;
+    }
+
+    if (info.outputGainValid) {
+        mpack_write_cstr(writer, "outputGainDb");
+        mpack_write_double(writer, info.outputGainDb);
+        written++;
+    }
+
+    return written;
+}

@@ -1,0 +1,117 @@
+name: Unit Tests
+
+on: [push, pull_request]
+
+jobs:
+
+
+
+  macos-clang-amalgamated:
+    name: "macOS Clang (amalgamated)"
+    runs-on: macos-latest
+    env:
+      AMALGAMATED: 1
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Dependencies
+        run: brew install ninja
+
+      - name: Run ci-unix
+        run: test/unit/ci-unix.sh
+
+
+
+  ubuntu-scan-build:
+    name: "Clang Static Analysis (source)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang-tools
+
+      - name: Run scan-build
+        run: tools/scan-build.sh
+
+
+
+  ubuntu-tcc:
+    name: "TinyCC (source)"
+    runs-on: ubuntu-latest
+    env:
+      CC: tcc
+      CXX: /bin/false
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build tcc
+
+      - name: Run ci-unix
+        run: test/unit/ci-unix.sh
+
+
+
+  ubuntu-26-gcc:
+    name: "Ubuntu 26.04 GCC (source)"
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build lcov
+
+      - name: Run ci-unix
+        run: test/unit/ci-unix.sh
+
+      - name: Collect coverage
+        run: tools/coverage.sh
+
+      - name: Submit coverage to Coveralls
+        id: coverage
+        uses: coverallsapp/github-action@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Print Coveralls submission result
+        run: echo ${{ steps.coverage.outputs['coveralls-api-result'] }}
+
+
+
+  windows-cl-2019-x64:
+    name: "Windows VS2019 amd64 (source)"
+    runs-on: windows-latest
+    env:
+      COMPILER: cl-2019-x64
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run ci-windows (Windows)
+        shell: cmd
+        run: test\\unit\\ci-windows.bat
+
+
+
+  windows-cl-2015-x86:
+    name: "Windows VS2015 x86 (amalgamated)"
+    runs-on: windows-latest
+    env:
+      COMPILER: cl-2015-x86
+      AMALGAMATED: 1
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Amalgamate
+        shell: bash
+        run: tools\\amalgamate.sh
+
+      - name: Run ci-windows (Windows)
+        shell: cmd
+        run: test\\unit\\ci-windows.bat

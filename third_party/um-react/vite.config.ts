@@ -1,0 +1,152 @@
+import url from 'node:url';
+import path from 'node:path';
+import fs from 'node:fs';
+
+import { defineConfig } from 'vitest/config';
+import react from '@vitejs/plugin-react';
+import wasm from 'vite-plugin-wasm';
+import replace from '@rollup/plugin-replace';
+import { VitePWA } from 'vite-plugin-pwa';
+import tailwindcss from '@tailwindcss/vite';
+
+import { tryCommand } from './support/command.ts';
+import { base64Loader } from './support/b64-loader.ts';
+import { macCommandLoader } from './support/mac-command-loader.ts';
+
+const projectRoot = url.fileURLToPath(new URL('.', import.meta.url));
+const pkg = JSON.parse(fs.readFileSync(projectRoot + '/package.json', 'utf-8')) as { version: string };
+
+const COMMAND_GIT_VERSION = 'git describe --long --dirty --tags --always';
+const shortCommit = process.env.GIT_COMMIT || tryCommand(COMMAND_GIT_VERSION, projectRoot, 'unknown');
+const version = `${pkg.version} (${shortCommit})`;
+
+// https://vitejs.dev/config/
+export default defineConfig({
+  base: '/',
+  worker: {
+    format: 'es',
+  },
+  server: {
+    fs: {
+      // Note:
+      //   This is _insecure_, but is required to get pnpm link to work.
+      // strict: false,
+
+      allow: [
+        'index.html',
+        'src',
+        'node_modules',
+
+        // Allow pnpm to link.
+        process.env.LIB_UM_WASM_LOADER_DIR || '../lib_um_crypto_rust/um_wasm_loader',
+      ],
+    },
+  },
+  optimizeDeps: {
+    exclude: ['@unlock-music/crypto', 'sql.js'],
+  },
+  plugins: [
+    tailwindcss(),
+    base64Loader,
+    macCommandLoader,
+    replace({
+      preventAssignment: true,
+      values: {
+        __APP_VERSION_SHORT__: pkg.version,
+        __APP_VERSION__: version,
+      },
+    }),
+    react(),
+    wasm(),
+    VitePWA({
+      registerType: 'prompt',
+      workbox: {
+        // Cache everything from dist
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,wasm,webp}'],
+      },
+      manifest: {
+        display: 'standalone',
+        name: '音乐解锁 (Unlock Music)',
+        short_name: '音乐解锁',
+        lang: 'zh-cmn-Hans-CN',
+        description: '在现代浏览器解锁已购的加密音乐！',
+        theme_color: '#ffffff',
+        icons: [
+          {
+            src: 'pwa-192x192.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
+          {
+            src: 'pwa-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+          },
+        ],
+      },
+    }),
+  ],
+  resolve: {
+    alias: {
+      '~': path.resolve(projectRoot, 'src'),
+      '@sql-wasm': path.resolve(projectRoot, 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+
+      // workaround for vite, workbox (PWA)
+      module: path.resolve(projectRoot, 'src', 'dummy.mjs'),
+    },
+  },
+  build: {
+    assetsDir: 'um-react.assets',
+    minify: true,
+    rolldownOptions: {
+      output: {
+        manualChunks(id) {
+          if (/\/node_modules\/(react|react-dom)\//.test(id)) return 'core';
+          if (/\/node_modules\/react-router\//.test(id)) return 'router';
+          if (/\/node_modules\/(react-redux|@reduxjs\/toolkit)\//.test(id)) return 'store';
+          if (/\/node_modules\/(react-dropzone|react-toastify)\//.test(id)) return 'extras';
+        },
+      },
+    },
+  },
+  test: {
+    globals: true,
+    mockReset: true,
+    environment: 'jsdom',
+    pool: 'vmThreads',
+    setupFiles: ['src/test-utils/setup-jest.ts'],
+    // workaround: sql.js is not ESModule friendly, yet...
+    deps: {
+      optimizer: {
+        client: {
+          include: ['sql.js'],
+        },
+      },
+    },
+    api: {
+      port: 5174, // vite port + 1
+    },
+    coverage: {
+      provider: 'v8',
+      exclude: [
+        // default rules
+        'coverage/**',
+        'dist/**',
+        'packages/*/test{,s}/**',
+        '**/*.d.ts',
+        'cypress/**',
+        'test{,s}/**',
+        'test{,-*}.{js,cjs,mjs,ts,tsx,jsx}',
+        '**/*{.,-}test.{js,cjs,mjs,ts,tsx,jsx}',
+        '**/*{.,-}spec.{js,cjs,mjs,ts,tsx,jsx}',
+        '**/__tests__/**',
+        '**/{karma,rollup,webpack,vite,vitest,jest,ava,babel,nyc,cypress,tsup,build}.config.*',
+        '**/.{eslint,mocha,prettier}rc.{js,cjs,yml}',
+
+        // custom ones
+        'src/test-utils/**',
+      ],
+    },
+  },
+});

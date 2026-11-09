@@ -1,0 +1,26 @@
+comment: false
+
+github_checks:
+  annotations: false
+
+coverage:
+  status:
+    # Coverage only reflects the host-runnable Python tests
+    # (`pytest --runtime=host`), so report it without failing PRs.
+    project:
+      default:
+        target: auto
+        threshold: 1%
+        informational: true
+    patch:
+      default:
+        target: auto
+        threshold: 1%
+        informational: true
+
+codecov:
+  notify:
+    # Prevent coverage status to upload multiple times for parallel and long
+    # running CI pipelines. This configuration is particularly useful on PRs
+    # to avoid confusion.
+    after_n_builds: 1

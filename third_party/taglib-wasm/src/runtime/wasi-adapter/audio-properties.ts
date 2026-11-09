@@ -1,0 +1,235 @@
+/**
+ * Audio metrics and format detection over the WASI tag-data snapshot.
+ *
+ * Pure functions over (tagData, fileData): the WasiFileHandle wrappers add
+ * destruction guards and pass their fields. Extracted from file-handle.ts in
+ * the taglib-1dfc split.
+ */
+
+import type {
+  AudioCodec,
+  AudioProperties,
+  ContainerFormat,
+} from "../../types.ts";
+
+/**
+ * Container string (from the C++ snapshot) to declared `FileType`. Every
+ * `ContainerFormat` member has a key here except "unknown"; where the two
+ * unions differ in spelling, this table carries the translation — "Shorten"
+ * (container) is "SHN" (FileType). A container with no key falls through to
+ * the magic-byte sniff and then to "unknown", so a missing key silently
+ * degrades `getFormat()` on the WASI backend only (taglib-uat8).
+ */
+const CONTAINER_TO_FORMAT: Record<string, string> = {
+  MP3: "MP3",
+  ADTS: "AAC",
+  MP4: "MP4",
+  FLAC: "FLAC",
+  OGG: "OGG",
+  WAV: "WAV",
+  AIFF: "AIFF",
+  ASF: "ASF",
+  APE: "APE",
+  DSF: "DSF",
+  DSDIFF: "DSDIFF",
+  WavPack: "WV",
+  MPC: "MPC",
+  TTA: "TTA",
+  Shorten: "SHN",
+  MOD: "MOD",
+  S3M: "S3M",
+  IT: "IT",
+  XM: "XM",
+  Matroska: "MATROSKA",
+};
+
+/**
+ * Formats inside the Ogg container. The container alone is not enough: three
+ * of the four codecs TagLib reads there are declared FileType members of their
+ * own ("OPUS", "OggFLAC", "SPEEX"), so Ogg Vorbis is the only flavour that
+ * stays "OGG" (taglib-f6a3). Keyed by the snapshot's codec value.
+ */
+const OGG_CODEC_TO_FORMAT: Record<string, string> = {
+  Opus: "OPUS",
+  FLAC: "OggFLAC",
+  Speex: "SPEEX",
+};
+
+/** The audio-properties block of the C++ snapshot, null when absent. */
+export function getAudioProperties(
+  tagData: Record<string, unknown> | null,
+): AudioProperties | null {
+  if (!tagData || !("sampleRate" in tagData)) return null;
+  const d = tagData;
+  const containerFormat = ((d.containerFormat as string) ||
+    "unknown") as ContainerFormat;
+  const mpegVersion = (d.mpegVersion as number) ?? 0;
+  const formatVersion = (d.formatVersion as number) ?? 0;
+  return {
+    duration: (d.length as number) ?? 0,
+    durationMs: (d.lengthMs as number) ?? 0,
+    bitrate: (d.bitrate as number) ?? 0,
+    sampleRate: (d.sampleRate as number) ?? 0,
+    channels: (d.channels as number) ?? 0,
+    bitsPerSample: (d.bitsPerSample as number) ?? 0,
+    codec: ((d.codec as string) || "unknown") as AudioCodec,
+    containerFormat,
+    isLossless: (d.isLossless as boolean) ?? false,
+    ...(mpegVersion > 0
+      ? { mpegVersion, mpegLayer: (d.mpegLayer as number) ?? 0 }
+      : {}),
+    // isEncrypted: include it only when the parse reports true, or default it
+    // for the two formats whose contract carries the flag; an explicit false
+    // from any other format stays absent — the exact evaluation the
+    // Emscripten adapter performs (taglib-rcz).
+    ...(d.isEncrypted === true
+      ? { isEncrypted: true }
+      : containerFormat === "MP4" || containerFormat === "ASF"
+        ? { isEncrypted: false }
+        : {}),
+    ...(formatVersion > 0 ? { formatVersion } : {}),
+    ...(d.outputGainDb !== undefined
+      ? { outputGainDb: d.outputGainDb as number }
+      : {}),
+  };
+}
+
+/**
+ * OGG codec sniffing from the first page payload: "OpusHead" (Opus),
+ * 0x7F"FLAC" (FLAC-in-Ogg), "Speex   " (Speex), else Ogg Vorbis ("OGG").
+ */
+export function detectOggCodec(fileData: Uint8Array): string {
+  if (fileData.length < 37) return "OGG";
+  // OGG page header: "OggS" at 0, then header_type(1), granule(8),
+  // serial(4), seq(4), crc(4), segments(1), segment_table(variable).
+  // First page payload starts after 27 + segment_count bytes.
+  const segCount = fileData[26];
+  if (segCount === undefined) return "OGG";
+  const payloadStart = 27 + segCount;
+  if (fileData.length < payloadStart + 8) return "OGG";
+  const sig = fileData.slice(payloadStart, payloadStart + 8);
+  // Opus: payload starts with "OpusHead"
+  const text = String.fromCharCode(...sig);
+  if (text === "OpusHead") return "OPUS";
+  // FLAC-in-Ogg: the mapping header starts with 0x7F "FLAC" (the native
+  // "fLaC" stream marker follows the mapping version).
+  if (
+    sig[0] === 0x7f &&
+    sig[1] === 0x46 &&
+    sig[2] === 0x4c &&
+    sig[3] === 0x41 &&
+    sig[4] === 0x43
+  )
+    return "OggFLAC";
+  // Speex: the 5-char name padded to the 8-byte comment-header signature.
+  if (text === "Speex   ") return "SPEEX";
+  return "OGG";
+}
+
+/**
+ * Format detection: container-based first (works for path and buffer modes),
+ * magic-byte fallback for buffers.
+ */
+export function getFormat(
+  tagData: Record<string, unknown> | null,
+  fileData: Uint8Array | null,
+): string {
+  // Container-based detection works for both path and buffer modes
+  const container = tagData?.containerFormat as string | undefined;
+  if (container) {
+    const codec = tagData?.codec as string | undefined;
+    if (container === "OGG" && codec && OGG_CODEC_TO_FORMAT[codec]) {
+      return OGG_CODEC_TO_FORMAT[codec];
+    }
+    if (CONTAINER_TO_FORMAT[container]) return CONTAINER_TO_FORMAT[container];
+  }
+
+  // Magic byte fallback requires buffer data
+  if (!fileData || fileData.length < 8) return "unknown";
+  const magic = fileData.slice(0, 4);
+  if (magic[0] === 0xff && (magic[1] & 0xe0) === 0xe0) return "MP3";
+  if (magic[0] === 0x49 && magic[1] === 0x44 && magic[2] === 0x33) {
+    return "MP3";
+  }
+  if (
+    magic[0] === 0x66 &&
+    magic[1] === 0x4c &&
+    magic[2] === 0x61 &&
+    magic[3] === 0x43
+  )
+    return "FLAC";
+  if (
+    magic[0] === 0x4f &&
+    magic[1] === 0x67 &&
+    magic[2] === 0x67 &&
+    magic[3] === 0x53
+  )
+    return detectOggCodec(fileData);
+  if (
+    magic[0] === 0x52 &&
+    magic[1] === 0x49 &&
+    magic[2] === 0x46 &&
+    magic[3] === 0x46
+  )
+    return "WAV";
+  // WavPack: "wvpk"
+  if (
+    magic[0] === 0x77 &&
+    magic[1] === 0x76 &&
+    magic[2] === 0x70 &&
+    magic[3] === 0x6b
+  )
+    return "WV";
+  // TrueAudio: "TTA1"
+  if (
+    magic[0] === 0x54 &&
+    magic[1] === 0x54 &&
+    magic[2] === 0x41 &&
+    magic[3] === 0x31
+  )
+    return "TTA";
+  // ASF/WMA: ASF header object GUID
+  if (
+    fileData.length >= 16 &&
+    magic[0] === 0x30 &&
+    magic[1] === 0x26 &&
+    magic[2] === 0xb2 &&
+    magic[3] === 0x75
+  )
+    return "ASF";
+  // Matroska/WebM: EBML signature
+  if (
+    magic[0] === 0x1a &&
+    magic[1] === 0x45 &&
+    magic[2] === 0xdf &&
+    magic[3] === 0xa3
+  )
+    return "MATROSKA";
+  const ftyp = fileData.slice(4, 8);
+  if (
+    ftyp[0] === 0x66 &&
+    ftyp[1] === 0x74 &&
+    ftyp[2] === 0x79 &&
+    ftyp[3] === 0x70
+  )
+    return "MP4";
+  return "unknown";
+}
+
+/** MP4 detection: containerFormat (path mode) or ftyp box (buffer mode). */
+export function isMP4(
+  tagData: Record<string, unknown> | null,
+  fileData: Uint8Array | null,
+): boolean {
+  if (!fileData) {
+    return (tagData?.containerFormat as string | undefined) === "MP4";
+  }
+  if (fileData.length < 8) return false;
+  const magic = fileData.slice(4, 8);
+  return (
+    magic[0] === 0x66 &&
+    magic[1] === 0x74 &&
+    magic[2] === 0x79 &&
+    magic[3] === 0x70
+  );
+}

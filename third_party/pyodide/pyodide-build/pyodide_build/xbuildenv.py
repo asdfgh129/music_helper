@@ -1,0 +1,805 @@
+import os
+import shutil
+import subprocess
+import sys
+from collections.abc import Iterable, Mapping
+from pathlib import Path
+
+from packaging.utils import canonicalize_name
+from packaging.version import InvalidVersion, Version
+from pyodide_lock import PyodideLockSpec
+
+from pyodide_build import build_env, uv_helper
+from pyodide_build.common import download_and_unpack_archive, remove_readonly
+from pyodide_build.create_package_index import create_package_index
+from pyodide_build.logger import logger
+from pyodide_build.xbuildenv_releases import (
+    CrossBuildEnvReleaseSpec,
+    cross_build_env_metadata_url,
+    load_cross_build_env_metadata,
+)
+
+CDN_BASE = "https://cdn.jsdelivr.net/pyodide/v{version}/full/"
+PYTHON_VERSION_MARKER_FILE = ".build-python-version"
+EMSCRIPTEN_VERSION_MARKER_FILE = ".emscripten-version"
+
+
+class CrossBuildEnvManager:
+    """
+    Manager for the cross-build environment.
+    """
+
+    def __init__(self, env_dir: str | Path, metadata_url: str | None = None) -> None:
+        """
+        Parameters
+        ----------
+        env_dir
+            The directory to store the cross-build environments.
+        metadata_url
+            URL to the metadata file that contains the information about the available
+            cross-build environments. If not specified, the default metadata file is used.
+        """
+        self.env_dir = Path(env_dir).resolve()
+        self.metadata_url = metadata_url or cross_build_env_metadata_url()
+
+        try:
+            self.env_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            raise ValueError(
+                f"Failed to create cross-build environment at {self.env_dir}"
+            ) from e
+
+    @property
+    def symlink_dir(self):
+        """
+        Returns the path to the symlink that points to the currently used xbuildenv version.
+        """
+        return self.env_dir / "xbuildenv"
+
+    @property
+    def pyodide_root(self) -> Path:
+        """
+        Returns the path to the pyodide-root directory inside the xbuildenv directory.
+        """
+        return self.symlink_dir.resolve() / "xbuildenv" / "pyodide-root"
+
+    @property
+    def current_version(self) -> str | None:
+        """
+        Returns the currently used xbuildenv version.
+        """
+        if not self.symlink_dir.exists():
+            return None
+
+        return self.symlink_dir.resolve().name
+
+    def _find_remote_release(self, version: str) -> CrossBuildEnvReleaseSpec:
+        """
+        Find the cross-build environment release with the given version from remote metadata.
+        """
+        metadata = load_cross_build_env_metadata(self.metadata_url)
+        return metadata.get_release(version)
+
+    def _path_for_version(self, version: str) -> Path:
+        """Returns the path to the xbuildenv for the given version."""
+        return self.env_dir / version
+
+    def ensure_cross_build_packages_installed(
+        self, packages: Iterable[tuple[str, str]]
+    ) -> None:
+        """
+        Install the given cross-build packages into the host site-packages of
+        the active xbuildenv, if they are not installed there already.
+
+        Cross-build packages are not installed when the xbuildenv itself is
+        installed; instead `pyodide build` and `pyodide build-recipes` call this
+        with the subset of cross-build packages that the package being built
+        actually needs, so that we never pay for (say) a scipy install when
+        building something that only depends on numpy.
+
+        This method is idempotent: packages that are already present in the host
+        site-packages at the pinned version are skipped.
+
+        Parameters
+        ----------
+        packages
+            `(name, version)` pairs of the cross-build packages to install,
+            where the version is the one pinned by this xbuildenv. Callers
+            select these from the xbuildenv's cross-build packages, see
+            `build_env.get_unisolated_packages`.
+
+        Raises
+        ------
+        RuntimeError
+            If package installation fails.
+        """
+        packages = list(packages)
+        if not packages:
+            return
+
+        xbuildenv_root = self.symlink_dir.resolve() / "xbuildenv"
+        xbuildenv_pyodide_root = xbuildenv_root / "pyodide-root"
+
+        host_site_packages = self._host_site_packages_dir(xbuildenv_pyodide_root)
+        installed = _installed_distributions(host_site_packages)
+
+        to_install = {
+            name: version
+            for name, version in packages
+            if not _same_version(installed.get(canonicalize_name(name)), version)
+        }
+
+        if not to_install:
+            return
+
+        logger.info(
+            "Installing cross-build packages %s for %s",
+            ", ".join(sorted(to_install)),
+            self.symlink_dir.resolve().name,
+        )
+        self._install_cross_build_packages(
+            xbuildenv_root, xbuildenv_pyodide_root, to_install
+        )
+
+    def list_versions(self) -> list[str]:
+        """
+        List the downloaded xbuildenv versions.
+
+        TODO: add a parameter to list only compatible versions
+        """
+        versions = []
+        for version_dir in self.env_dir.glob("*"):
+            if not version_dir.is_dir() or version_dir == self.symlink_dir:
+                continue
+
+            versions.append(version_dir.name)
+
+        return sorted(versions)
+
+    def use_version(self, version: str) -> None:
+        """
+        Select the xbuildenv version to use.
+
+        This creates a symlink to the selected version in the xbuildenv directory.
+
+        Parameters
+        ----------
+        version
+            The version of xbuildenv to use.
+        """
+        logger.info("Using Pyodide cross-build environment version: %s", version)
+
+        version_path = self._path_for_version(version)
+        if not version_path.exists():
+            raise ValueError(
+                f"Cannot find cross-build environment version {version}, available versions: {self.list_versions()}"
+            )
+
+        symlink_dir = self.symlink_dir
+
+        # Use is_symlink() / exists() with lexists semantics so that a dangling
+        # symlink (one whose target no longer exists) is also removed. A plain
+        # exists() check follows the link and returns False for dangling links,
+        # which would leave the stale symlink in place and make symlink_to()
+        # raise FileExistsError.
+        if symlink_dir.is_symlink():
+            # symlink (possibly dangling), expected case
+            symlink_dir.unlink()
+        elif symlink_dir.is_dir():
+            # real directory, for backwards compatibility
+            shutil.rmtree(symlink_dir)
+        elif symlink_dir.exists():
+            # file. This should not happen unless the user manually created a file
+            # but we will remove it anyway
+            symlink_dir.unlink()
+
+        symlink_dir.symlink_to(version_path)
+
+    def install(
+        self,
+        version: str | None = None,
+        *,
+        url: str | None = None,
+        force_install: bool = False,
+    ) -> Path:
+        """
+        Install cross-build environment.
+
+        Parameters
+        ----------
+        version
+            The version of the cross-build environment to install. If not specified,
+            use the same version as the current version of pyodide-build.
+        url
+            URL to download the cross-build environment from.
+            The URL should point to a tarball containing the cross-build environment.
+            This is useful for testing unreleased version of the cross-build environment.
+
+            Warning: if you are downloading from a version that is not the same
+            as the current version of pyodide-build, make sure that the cross-build
+            environment is compatible with the current version of Pyodide.
+        force_install
+            If True, force the installation even if the cross-build environment is not compatible
+
+        Returns
+        -------
+        Path to the root directory for the cross-build environment.
+        """
+
+        if url and version:
+            raise ValueError("Cannot specify both version and url")
+
+        # Whether we are installing from an arbitrary URL (explicit or default).
+        # In that case the "version" is a mangled URL string rather than a real
+        # release version, so we must not bake it into the package index.
+        installed_from_url = False
+        # Expected sha256 of the archive. Only release metadata carries one;
+        # an install from an explicit URL has nothing to check against.
+        expected_sha256: str | None = None
+
+        if url:
+            version = _url_to_version(url)
+            download_url = url
+            installed_from_url = True
+        # if default version is specified in the configuration, use that
+        elif not version and (default_url := self._get_default_xbuildenv_url()):
+            version = _url_to_version(default_url)
+            download_url = default_url
+            installed_from_url = True
+        else:
+            version = version or self._find_latest_version()
+
+            local_versions = build_env.local_versions()
+            release = self._find_remote_release(version)
+            if not force_install and not release.is_compatible(
+                python_version=local_versions["python"],
+                pyodide_build_version=local_versions["pyodide-build"],
+            ):
+                raise ValueError(
+                    f"Version {version} is not compatible with the current environment."
+                )
+
+            download_url = release.url
+            expected_sha256 = release.sha256
+            if expected_sha256 is None:
+                # Note that every release in our official stable, nightly, and
+                # debug metadata has published sha256 checksums. This is only
+                # reachable through a user's custom file passed with --metadata.
+                logger.warning(
+                    "No sha256 checksum is published for cross-build environment "
+                    "version %s, so the download will not be verified",
+                    version,
+                )
+
+        download_path = self._path_for_version(version)
+
+        # Track whether THIS call created the directory, so that a failure later
+        # in this method does not delete a previously-good cached installation.
+        download_path_preexisted = download_path.exists()
+
+        if download_path_preexisted:
+            logger.info(
+                "The cross-build environment already exists at '%s', skipping download",
+                download_path,
+            )
+        else:
+            download_and_unpack_archive(
+                download_url,
+                download_path,
+                "Pyodide cross-build environment",
+                sha256=expected_sha256,
+            )
+
+        try:
+            # there is an redundant directory "xbuildenv" inside the xbuildenv archive
+            # TODO: remove the redundant directory from the archive
+            xbuildenv_root = download_path / "xbuildenv"
+            xbuildenv_pyodide_root = xbuildenv_root / "pyodide-root"
+            install_marker = download_path / ".installed"
+
+            # Detect a Python-version mismatch on an already-installed env so we
+            # can refresh the host packages that were installed under the old
+            # Python version.
+            version_marker_mismatch = False
+            if install_marker.exists():
+                matches, _ = self._version_marker_matches_for(download_path)
+                version_marker_mismatch = not matches
+
+            did_install_work = False
+            if not install_marker.exists() or version_marker_mismatch:
+                logger.info(
+                    "Installing Pyodide cross-build environment to %s", download_path
+                )
+                did_install_work = True
+
+                if version_marker_mismatch:
+                    # Any host packages present were installed under a different
+                    # Python version, so they are unusable. Drop them; the builds
+                    # that need them will reinstall them.
+                    shutil.rmtree(
+                        self._host_site_packages_dir(xbuildenv_pyodide_root),
+                        ignore_errors=True,
+                    )
+
+                if not installed_from_url:
+                    # If installed from url, skip creating the PyPI index
+                    # (version is a mangled URL string, not a real version)
+                    self._create_package_index(xbuildenv_pyodide_root, version)
+
+            install_marker.touch()
+            self.use_version(version)
+            # Only (re)write the Python version marker when we actually performed
+            # installation work, so a mismatch on a skipped install is not
+            # silently masked by overwriting the marker with the current Python.
+            if did_install_work:
+                self._add_version_marker()
+        except Exception:
+            # If THIS call created the download directory and the installation
+            # failed, remove it. Do not delete a pre-existing cached install.
+            if not download_path_preexisted:
+                shutil.rmtree(download_path, ignore_errors=True)
+            raise
+
+        return xbuildenv_pyodide_root
+
+    def _find_latest_version(self) -> str:
+        """
+        Find the latest compatible cross-build environment release.
+        """
+        metadata = load_cross_build_env_metadata(self.metadata_url)
+        local = build_env.local_versions()
+        latest = metadata.get_latest_compatible_release(
+            python_version=local["python"],
+            pyodide_build_version=local["pyodide-build"],
+        )
+
+        if not latest:
+            # Check for Python version mismatch. The releases are sorted by
+            # Pyodide version, so we must re-sort the Python versions explicitly
+            # (by Python version) before comparing newest/oldest.
+            python_versions = sorted(
+                {
+                    release.python_version_tuple[:2]
+                    for release in metadata.list_compatible_releases()
+                },
+                key=lambda v: Version(".".join(str(x) for x in v)),
+            )
+
+            if not python_versions:
+                raise ValueError(
+                    "No cross-build environment releases are available in the "
+                    f"metadata at {self.metadata_url}."
+                )
+
+            pyver = tuple(int(x) for x in local["python"].split("."))
+            newest_supported = python_versions[-1]
+            oldest_supported = python_versions[0]
+
+            if pyver > newest_supported:
+                latest_supported = ".".join(str(x) for x in newest_supported)
+                raise ValueError(
+                    f"Python version {local['python']} is not yet supported. The newest supported version of Python is {latest_supported}."
+                )
+
+            if pyver < oldest_supported:
+                oldest_supported_str = ".".join(str(x) for x in oldest_supported)
+                raise ValueError(
+                    f"Python version {local['python']} is too old. The oldest supported version of Python is {oldest_supported_str}."
+                )
+
+            raise ValueError(
+                f"Python version {local['python']} is not compatible with pyodide build version {local['pyodide-build']}"
+            )
+
+        return latest.version
+
+    def _get_default_xbuildenv_url(self) -> str:
+        """
+        Get the default URL for the cross-build environment. If not specified, return empty string (no default).
+        """
+        return build_env.get_host_build_flag("DEFAULT_CROSS_BUILD_ENV_URL")
+
+    def _install_cross_build_packages(
+        self,
+        xbuildenv_root: Path,
+        xbuildenv_pyodide_root: Path,
+        packages: Mapping[str, str],
+    ) -> None:
+        """
+        Install the given cross-build packages into the host site-packages.
+
+        Parameters
+        ----------
+        xbuildenv_root
+            Path to the xbuildenv directory.
+        xbuildenv_pyodide_root
+            Path to the pyodide-root directory inside the xbuildenv directory.
+        packages
+            Mapping of cross-build package name to the version pinned by this
+            xbuildenv.
+        """
+        host_site_packages = self._host_site_packages_dir(xbuildenv_pyodide_root)
+        host_site_packages.mkdir(exist_ok=True, parents=True)
+
+        requirements_file = xbuildenv_root / "requirements.txt"
+
+        install_prefix = (
+            [
+                uv_helper.find_uv_bin(),
+                "pip",
+                "install",
+            ]
+            if uv_helper.should_use_uv()
+            else [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--no-user",
+            ]
+        )
+
+        install_suffix = [
+            # Constrain to the xbuildenv pins so that a cross-build package
+            # pulled in as a transitive dependency (scipy depends on numpy,
+            # for instance) still lands at the version the xbuildenv ships
+            # cross-build files for.
+            "--constraint",
+            str(requirements_file),
+            "--target",
+            str(host_site_packages),
+            *(f"{name}=={version}" for name, version in sorted(packages.items())),
+        ]
+
+        # `pip install --target` skips every entry that already exists in the
+        # target directory unless `--upgrade` is passed, so without it a package
+        # that is present at a different version would keep its old contents
+        # while gaining a second `.dist-info`. Upgrade the packages we were asked
+        # for, but with `--no-deps`: their dependencies may be cross-build
+        # packages themselves, and replacing those would drop the cross-build
+        # files that were copied over them. A second pass without `--upgrade`
+        # then installs the dependencies that are still missing.
+        for extra_args in (["--upgrade", "--no-deps"], []):
+            result = subprocess.run(
+                [*install_prefix, *extra_args, *install_suffix],
+                capture_output=True,
+                encoding="utf8",
+                check=False,
+            )
+
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"Failed to install cross-build packages: {result.stderr}"
+                )
+
+        self._copy_site_packages_extras(xbuildenv_root, host_site_packages)
+
+    def _copy_site_packages_extras(
+        self, xbuildenv_root: Path, host_site_packages: Path
+    ) -> None:
+        """
+        Copy the site-packages-extras (coming from the cross-build-files
+        meta.yaml key) over the host site-packages.
+
+        Only extras belonging to a package that is actually present in the host
+        site-packages are copied. We re-copy the extras of every such package on
+        each install rather than only those of the packages we just installed,
+        because installing one cross-build package can overwrite the files of
+        another one that it depends on.
+        """
+        extras_root = xbuildenv_root / "site-packages-extras"
+        if not extras_root.is_dir():
+            return
+
+        for extras_entry in extras_root.iterdir():
+            target = host_site_packages / extras_entry.name
+            if not extras_entry.is_dir():
+                # A cross-build file at the root of the wheel. There is no
+                # package directory to key it off, so always copy it.
+                shutil.copy2(extras_entry, target)
+                continue
+            if not target.exists():
+                continue
+            shutil.copytree(extras_entry, target, dirs_exist_ok=True)
+
+    def _host_site_packages_dir(
+        self, xbuildenv_pyodide_root: Path | None = None
+    ) -> Path:
+        """
+        Returns the path to the hostsitepackages directory in the xbuild environment.
+        This is inferred using the current version of the xbuild environment,
+        but can optionally be overridden by passing the pyodide root directory as a parameter.
+
+        Parameters
+        ----------
+        xbuildenv_pyodide_root
+            The path to the pyodide root directory inside the xbuild environment.
+        """
+
+        if xbuildenv_pyodide_root is None:
+            xbuildenv_pyodide_root = self.pyodide_root
+
+        return Path(
+            build_env.get_build_environment_vars(pyodide_root=xbuildenv_pyodide_root)[
+                "HOSTSITEPACKAGES"
+            ]
+        )
+
+    def _create_package_index(self, xbuildenv_pyodide_root: Path, version: str) -> None:
+        """
+        Create the PyPI index for the packages in the xbuild environment.
+        TODO: Creating the PyPI Index is not required for the xbuild environment to work, so maybe we can
+              move this to a separate command (to pyodide venv?)
+        """
+
+        cdn_base = CDN_BASE.format(version=version)
+        lockfile_path = xbuildenv_pyodide_root / "dist" / "pyodide-lock.json"
+
+        if not lockfile_path.exists():
+            logger.warning(
+                "Pyodide lockfile not found at %s. Skipping PyPI index creation",
+                lockfile_path,
+            )
+            return
+
+        lockfile = PyodideLockSpec.from_json(lockfile_path)
+        create_package_index(lockfile.packages, xbuildenv_pyodide_root, cdn_base)
+
+    def uninstall_version(self, version: str | None) -> str:
+        """
+        Uninstall the installed xbuildenv version.
+
+        Parameters
+        ----------
+        version
+            The version of xbuildenv to uninstall.
+        """
+        if version is None:
+            version = self.current_version
+
+        if version is None:
+            raise ValueError("No xbuildenv version is currently in use")
+
+        version_path = self._path_for_version(version)
+
+        # if the target version is the current version, remove the symlink
+        # to prevent symlinking to a non-existent directory
+        if self.symlink_dir.resolve() == version_path:
+            self.symlink_dir.unlink()
+
+        if version_path.is_dir():
+            shutil.rmtree(version_path)
+        else:
+            raise ValueError(
+                f"Cannot find cross-build environment version {version}, available versions: {self.list_versions()}"
+            )
+
+        return version
+
+    def _clone_emscripten(self, emsdk_dir: Path | str | None = None) -> Path:
+        """
+        Clone the Emscripten SDK repository into the currently selected xbuildenv.
+
+        Parameters
+        ----------
+        emsdk_dir
+            The directory to clone the emsdk into. If not specified, uses the default location
+            inside the currently selected xbuildenv.
+
+        Returns
+        -------
+        Path
+            Path to the emsdk directory inside the xbuildenv.
+        """
+        if not self.symlink_dir.exists():
+            raise ValueError(
+                "No active xbuildenv. Run `pyodide xbuildenv install` first."
+            )
+
+        if emsdk_dir is None:
+            xbuild_root = self.symlink_dir.resolve()
+            emsdk_path = xbuild_root / "emsdk"
+        else:
+            emsdk_path = Path(emsdk_dir)
+
+        logger.info("Cloning Emscripten SDK into %s", emsdk_path)
+
+        if emsdk_path.exists():
+            logger.info("Removing existing emsdk directory %s", emsdk_path)
+            shutil.rmtree(emsdk_path, onexc=remove_readonly)
+
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "https://github.com/emscripten-core/emsdk.git",
+                str(emsdk_path),
+            ],
+            check=True,
+        )
+
+        return emsdk_path
+
+    def install_emscripten(
+        self, emscripten_version: str = "latest", *, force: bool = False
+    ) -> Path:
+        """
+        Install and activate Emscripten SDK inside the currently selected xbuildenv.
+
+        Parameters
+        ----------
+        emscripten_version
+            The Emscripten SDK version to install (default: 'latest').
+        force
+            If True, force reinstallation even if the same version is already installed.
+
+        Returns
+        -------
+        Path
+            Path to the emsdk directory inside the xbuildenv.
+        """
+        if not self.symlink_dir.exists():
+            raise ValueError(
+                "No active xbuildenv. Run `pyodide xbuildenv install` first."
+            )
+
+        xbuild_root = self.symlink_dir.resolve()
+        emsdk_dir = xbuild_root / "emsdk"
+        patches_dir = self.pyodide_root / "emsdk" / "patches"
+        emscripten_root = emsdk_dir / "upstream" / "emscripten"
+
+        marker = xbuild_root / EMSCRIPTEN_VERSION_MARKER_FILE
+        if not force and marker.exists():
+            installed_version = marker.read_text().strip()
+            if installed_version == emscripten_version:
+                logger.debug(
+                    "Emscripten SDK (version: %s) is already installed at %s, skipping",
+                    emscripten_version,
+                    emsdk_dir,
+                )
+                return emsdk_dir
+
+        logger.info(
+            "Installing Emscripten SDK (version: %s) into %s",
+            emscripten_version,
+            emsdk_dir,
+        )
+
+        # Clone or update emsdk directory
+        self._clone_emscripten()
+
+        # Install the specified Emscripten version
+        emsdk = shutil.which("emsdk", path=emsdk_dir)
+        assert emsdk
+        subprocess.run(
+            [emsdk, "install", "--build=Release", emscripten_version],
+            cwd=emsdk_dir,
+            check=True,
+        )
+
+        # Apply patches from xbuildenv/emsdk/patches directory to upstream/emscripten
+        # `GIT_DIR=.` prevents `git apply` from finding the parent emsdk git repo
+        # and applying patches relative to it instead of the current emscripten directory
+        # and skipping them silently.
+        try:
+            patch_env = os.environ.copy() | {"GIT_DIR": "."}
+            for patch_file in sorted(patches_dir.glob("*.patch")):
+                subprocess.run(
+                    ["git", "apply", "--verbose", str(patch_file)],
+                    cwd=emscripten_root,
+                    env=patch_env,
+                    check=True,
+                )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(
+                f"Failed to apply Emscripten patches. This may occur if the Emscripten version "
+                f"({emscripten_version}) does not match the version for which the patches were generated. "
+                f"Please ensure you are using a compatible Emscripten version or update the patches "
+                f"in {patches_dir}"
+            ) from e
+
+        # Activate the specified Emscripten version
+        subprocess.run(
+            [
+                emsdk,
+                "activate",
+                "--embedded",
+                "--build=Release",
+                emscripten_version,
+            ],
+            cwd=emsdk_dir,
+            check=True,
+        )
+
+        marker.write_text(emscripten_version)
+
+        logger.info("Emscripten SDK installed successfully at %s", emsdk_dir)
+        return emsdk_dir
+
+    def _add_version_marker(self) -> None:
+        """
+        Store the Python version in the xbuildenv directory, so we can check compatibility later.
+        """
+        if not self.symlink_dir.is_dir():
+            raise ValueError("cross-build env directory does not exist")
+
+        version_file = self.symlink_dir / PYTHON_VERSION_MARKER_FILE
+        version_file.write_text(build_env.local_versions()["python"])
+
+    def version_marker_matches(self) -> tuple[bool, str | None]:
+        if not self.symlink_dir.is_dir():
+            return False, "cross-build env directory does not exist"
+
+        return self._version_marker_matches_for(self.symlink_dir)
+
+    def _version_marker_matches_for(
+        self, version_path: Path
+    ) -> tuple[bool, str | None]:
+        """
+        Check whether the Python version marker stored in ``version_path``
+        matches the local Python version.
+
+        Parameters
+        ----------
+        version_path
+            Path to an xbuildenv version directory (or the active symlink).
+        """
+        version_file = version_path / PYTHON_VERSION_MARKER_FILE
+        if not version_file.exists():
+            return False, "Python version marker file not found"
+
+        version_local = build_env.local_versions()["python"]
+        version_on_install = version_file.read_text().strip()
+        if version_on_install != version_local:
+            return False, (
+                f"local Python version ({version_local}) does not match the Python version ({version_on_install}) "
+                "used to create the Pyodide cross-build environment. "
+                "Please switch back to the original Python version, "
+                "or reinstall the xbuildenv, by running `pyodide xbuildenv uninstall` and then `pyodide xbuildenv install`"
+            )
+        return True, None
+
+
+def _url_to_version(url: str) -> str:
+    # : - invalid character on Windows.
+    return url.replace("://", "_").replace(".", "_").replace("/", "_").replace(":", "_")
+
+
+def _installed_distributions(site_packages: Path) -> dict[str, str]:
+    """
+    Return the distributions installed in `site_packages` as a mapping of
+    canonicalized name to version, by looking at the `.dist-info` directories.
+
+    We use this instead of a marker file so that adding a package to an
+    xbuildenv whose cross-build packages were partially installed earlier
+    installs just the missing package.
+    """
+    installed: dict[str, str] = {}
+    if not site_packages.is_dir():
+        return installed
+
+    for dist_info in site_packages.glob("*.dist-info"):
+        name, _, version = dist_info.name.removesuffix(".dist-info").rpartition("-")
+        if not name or not version:
+            continue
+        installed[canonicalize_name(name)] = version
+    return installed
+
+
+def _same_version(installed_version: str | None, pinned_version: str) -> bool:
+    """
+    Compare an installed version against a pinned one.
+
+    pip and uv write the PEP 440 normalized version into the `.dist-info`
+    directory name, whereas the pin in the xbuildenv `requirements.txt` is not
+    necessarily normalized, so a plain string comparison would report a
+    mismatch for e.g. `2024.02.02` versus `2024.2.2`.
+    """
+    if installed_version is None:
+        return False
+    try:
+        return Version(installed_version) == Version(pinned_version)
+    except InvalidVersion:
+        return installed_version == pinned_version

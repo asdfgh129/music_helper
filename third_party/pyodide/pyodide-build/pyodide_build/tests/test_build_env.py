@@ -1,0 +1,551 @@
+import os
+import re
+import sys
+from textwrap import dedent
+
+import pytest
+
+from pyodide_build import build_env, common
+from pyodide_build.config import BUILD_KEY_TO_VAR
+from pyodide_build.xbuildenv import CrossBuildEnvManager
+
+
+class TestInTree:
+    def test_search_pyodide_root(self, tmp_path, reset_env_vars, reset_cache):
+        pyproject_file = tmp_path / "pyproject.toml"
+        pyproject_file.write_text("[tool._pyodide]")
+        assert build_env.search_pyodide_root(tmp_path) == tmp_path
+        assert build_env.search_pyodide_root(tmp_path / "subdir") == tmp_path
+        assert build_env.search_pyodide_root(tmp_path / "subdir" / "subdir") == tmp_path
+
+        pyproject_file.unlink()
+        assert build_env.search_pyodide_root(tmp_path) is None
+
+
+class TestOutOfTree(TestInTree):
+    # Note: other tests are inherited from TestInTree
+
+    def test_init_environment(self, dummy_xbuildenv, reset_env_vars, reset_cache):
+        assert "PYODIDE_ROOT" not in os.environ
+
+        build_env.init_environment()
+        manager = CrossBuildEnvManager(dummy_xbuildenv / common.xbuildenv_dirname())
+
+        assert "PYODIDE_ROOT" in os.environ
+        assert os.environ["PYODIDE_ROOT"] == str(manager.pyodide_root)
+
+    def test_init_environment_pyodide_root_already_set(
+        self, reset_env_vars, reset_cache
+    ):
+        assert "PYODIDE_ROOT" not in os.environ
+        os.environ["PYODIDE_ROOT"] = "/set_by_user"
+
+        build_env.init_environment()
+
+        assert os.environ["PYODIDE_ROOT"] == "/set_by_user"
+
+    def test_get_pyodide_root(self, dummy_xbuildenv, reset_env_vars, reset_cache):
+        assert "PYODIDE_ROOT" not in os.environ
+
+        pyodide_root = build_env.get_pyodide_root()
+        manager = CrossBuildEnvManager(dummy_xbuildenv / common.xbuildenv_dirname())
+        assert pyodide_root == manager.pyodide_root
+
+    def test_get_pyodide_root_pyodide_root_already_set(
+        self, reset_env_vars, reset_cache
+    ):
+        assert "PYODIDE_ROOT" not in os.environ
+        os.environ["PYODIDE_ROOT"] = "/set_by_user"
+
+        assert str(build_env.get_pyodide_root()) == "/set_by_user"
+
+    def test_in_xbuildenv(self, dummy_xbuildenv, reset_env_vars, reset_cache):
+        assert build_env.in_xbuildenv()
+
+    def test_get_unisolated_packages(
+        self, dummy_xbuildenv, reset_env_vars, reset_cache
+    ):
+        manager = CrossBuildEnvManager(dummy_xbuildenv / common.xbuildenv_dirname())
+        requirements_file = manager.pyodide_root / ".." / "requirements.txt"
+
+        expected = {}
+        for line in requirements_file.read_text().splitlines():
+            name, version = line.strip().split("==", 1)
+            expected[name] = version
+
+        assert expected
+        assert build_env.get_unisolated_packages() == expected
+
+    def test_get_unisolated_packages_no_requirements_file(
+        self, dummy_xbuildenv, reset_env_vars, reset_cache
+    ):
+        manager = CrossBuildEnvManager(dummy_xbuildenv / common.xbuildenv_dirname())
+        requirements_file = manager.pyodide_root / ".." / "requirements.txt"
+        requirements_file.unlink()
+
+        with pytest.raises(FileNotFoundError, match="Expected .* to exist"):
+            build_env.get_unisolated_packages()
+
+    def test_get_cross_build_files_dir(
+        self, dummy_xbuildenv, reset_env_vars, reset_cache
+    ):
+        manager = CrossBuildEnvManager(dummy_xbuildenv / common.xbuildenv_dirname())
+        site_packages_extras = manager.pyodide_root / ".." / "site-packages-extras"
+
+        # Check every package that actually has a directory in site-packages-extras
+        found_any = False
+        for subdir in site_packages_extras.iterdir():
+            if not subdir.is_dir():
+                continue
+            found_any = True
+            package_dir = build_env.get_cross_build_files_dir(subdir.name)
+            assert package_dir == subdir
+            assert any(package_dir.rglob("*"))
+        assert found_any
+
+    def test_get_cross_build_files_dir_missing_package(
+        self, dummy_xbuildenv, reset_env_vars, reset_cache
+    ):
+        package_dir = build_env.get_cross_build_files_dir("no-such-package")
+        assert not package_dir.exists()
+
+    def test_get_build_environment_vars(
+        self, dummy_xbuildenv, reset_env_vars, reset_cache
+    ):
+        manager = CrossBuildEnvManager(dummy_xbuildenv / common.xbuildenv_dirname())
+        build_vars = build_env.get_build_environment_vars(manager.pyodide_root)
+
+        # extra variables that does not come from config files.
+        extra_vars = {"PYODIDE", "PYODIDE_PACKAGE_ABI"}
+
+        all_keys = set(BUILD_KEY_TO_VAR.values()) | extra_vars
+        for var in build_vars:
+            assert var in all_keys, f"Unknown {var}"
+
+        # Additionally we set these variables
+        for var in extra_vars:
+            assert var in build_vars, f"Missing {var}"
+
+        # PYVERSION of the dummy xbuildenv is a stable release, so the PyO3
+        # forward compatibility flag should not be set.
+        assert "PYO3_USE_ABI3_FORWARD_COMPATIBILITY" not in build_vars
+
+    @pytest.mark.parametrize(
+        "pyversion, expected",
+        [
+            ("3.13.2", False),
+            ("3.14.0a1", True),
+            ("3.14.0b2", True),
+            ("3.14.0rc1", True),
+        ],
+    )
+    def test_get_build_environment_vars_prerelease(
+        self, dummy_xbuildenv, reset_env_vars, reset_cache, pyversion, expected
+    ):
+        manager = CrossBuildEnvManager(dummy_xbuildenv / common.xbuildenv_dirname())
+        makefile_envs = manager.pyodide_root / "Makefile.envs"
+        contents = makefile_envs.read_text()
+        contents, replaced = re.subn(
+            r"^export PYVERSION \?= .*$",
+            f"export PYVERSION ?= {pyversion}",
+            contents,
+            flags=re.MULTILINE,
+        )
+        assert replaced == 1, "PYVERSION is not set the way this test expects"
+        makefile_envs.write_text(contents)
+
+        build_env.get_build_environment_vars.cache_clear()
+        build_vars = build_env.get_build_environment_vars(manager.pyodide_root)
+
+        assert (
+            build_vars.get("PYO3_USE_ABI3_FORWARD_COMPATIBILITY") == "1"
+        ) is expected
+
+    def test_get_build_flag(self, dummy_xbuildenv, reset_env_vars, reset_cache):
+        manager = CrossBuildEnvManager(dummy_xbuildenv / common.xbuildenv_dirname())
+        for key, val in build_env.get_build_environment_vars(
+            pyodide_root=manager.pyodide_root
+        ).items():
+            assert build_env.get_build_flag(key) == val
+
+        with pytest.raises(ValueError):
+            build_env.get_build_flag("UNKNOWN_VAR")
+
+    def test_get_build_environment_vars_host_env(
+        self, monkeypatch, dummy_xbuildenv, reset_env_vars, reset_cache
+    ):
+        # host environment variables should have precedence over
+        # variables defined in Makefile.envs
+
+        manager = CrossBuildEnvManager(dummy_xbuildenv / common.xbuildenv_dirname())
+        pyodide_root = manager.pyodide_root
+
+        e = build_env.get_build_environment_vars(pyodide_root)
+        assert e["PYODIDE"] == "1"
+
+        monkeypatch.setenv("PIP_CONSTRAINT", "/tmp/constraint.txt")
+
+        build_env.get_build_environment_vars.cache_clear()
+
+        e_host = build_env.get_build_environment_vars(pyodide_root)
+        assert e_host.get("PIP_CONSTRAINT") == "/tmp/constraint.txt"
+        assert e_host.get("PIP_CONSTRAINT") != e.get("PIP_CONSTRAINT")
+
+        build_env.get_build_environment_vars.cache_clear()
+
+        monkeypatch.delenv("PIP_CONSTRAINT")
+        monkeypatch.setenv("RANDOM_ENV", "1234")
+
+        build_env.get_build_environment_vars.cache_clear()
+        e = build_env.get_build_environment_vars(pyodide_root)
+        assert "PIP_CONSTRAINT" in e
+        assert "RANDOM_ENV" not in e
+
+
+class TestWheelPlatform:
+    def test_default_pyemscripten(self, dummy_xbuildenv, reset_env_vars, reset_cache):
+        abi_version = build_env.get_build_flag("PYODIDE_ABI_VERSION")
+        assert build_env.wheel_platform() == f"pyemscripten_{abi_version}_wasm32"
+
+    def test_legacy_pyodide(
+        self, dummy_xbuildenv, monkeypatch, reset_env_vars, reset_cache
+    ):
+        monkeypatch.setenv("USE_LEGACY_PLATFORM", "1")
+        build_env.get_host_build_environment_vars.cache_clear()
+        build_env.get_build_environment_vars.cache_clear()
+
+        abi_version = build_env.get_build_flag("PYODIDE_ABI_VERSION")
+        assert build_env.wheel_platform() == f"pyodide_{abi_version}_wasm32"
+
+    def test_pyodide_tags_include_both_platforms(
+        self, dummy_xbuildenv, reset_env_vars, reset_cache
+    ):
+        build_env.pyodide_tags.cache_clear()
+        tags = build_env.pyodide_tags()
+        platforms = {t.platform for t in tags}
+
+        emscripten_plat = build_env.platform()
+        wheel_plat = build_env.wheel_platform()
+
+        assert emscripten_plat in platforms
+        assert wheel_plat in platforms
+        assert wheel_plat.startswith("pyemscripten_")
+
+    def test_pyodide_tags_legacy_platform(
+        self, dummy_xbuildenv, monkeypatch, reset_env_vars, reset_cache
+    ):
+        monkeypatch.setenv("USE_LEGACY_PLATFORM", "1")
+        build_env.get_host_build_environment_vars.cache_clear()
+        build_env.get_build_environment_vars.cache_clear()
+        build_env.pyodide_tags.cache_clear()
+
+        tags = build_env.pyodide_tags()
+        platforms = {t.platform for t in tags}
+
+        wheel_plat = build_env.wheel_platform()
+        assert wheel_plat.startswith("pyodide_")
+        assert wheel_plat in platforms
+
+
+def test_wheel_paths(dummy_xbuildenv):
+    from pathlib import Path
+
+    old_version = "cp38"
+    PYMAJOR = int(build_env.get_build_flag("PYMAJOR"))
+    PYMINOR = int(build_env.get_build_flag("PYMINOR"))
+    PLATFORM = build_env.platform()
+    current_version = f"cp{PYMAJOR}{PYMINOR}"
+    future_version = f"cp{PYMAJOR}{PYMINOR + 1}"
+    strings = []
+
+    for interp in [
+        old_version,
+        current_version,
+        future_version,
+        "py3",
+        "py2",
+        "py2.py3",
+    ]:
+        for abi in [interp, "abi3", "none"]:
+            for arch in [PLATFORM, "linux_x86_64", "any"]:
+                strings.append(f"wrapt-1.13.3-{interp}-{abi}-{arch}.whl")
+
+    paths = [Path(x) for x in strings]
+    assert sorted(
+        [
+            x.stem.split("-", 2)[-1]
+            for x in common._find_matching_wheels(paths, build_env.pyodide_tags())
+        ]
+    ) == sorted(
+        [
+            f"{current_version}-{current_version}-{PLATFORM}",
+            f"{current_version}-abi3-{PLATFORM}",
+            f"{current_version}-none-{PLATFORM}",
+            f"{old_version}-abi3-{PLATFORM}",
+            f"py3-none-{PLATFORM}",
+            f"py2.py3-none-{PLATFORM}",
+            "py3-none-any",
+            "py2.py3-none-any",
+            f"{current_version}-none-any",
+        ]
+    )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only emsdk_env.sh")
+def test_activate_emscripten_env_does_not_import_ssl_cert_file(tmp_path):
+    """SSL_CERT_FILE from emsdk_env.sh must not leak into our environment.
+
+    On macOS, emsdk exports SSL_CERT_FILE pointing at the certifi bundle inside
+    its bundled Python, which is only as fresh as that tarball. Importing it
+    would make every TLS client we spawn trust stale root stores.
+    """
+    emsdk_dir = tmp_path / "emsdk"
+    emsdk_dir.mkdir()
+    (emsdk_dir / "emsdk_env.sh").write_text(
+        dedent(
+            f"""
+            export EMSDK={emsdk_dir}
+            export EMSDK_NODE={emsdk_dir}/node/bin/node
+            export EMSDK_PYTHON={emsdk_dir}/python/bin/python3
+            export SSL_CERT_FILE={emsdk_dir}/python/site-packages/certifi/cacert.pem
+            export PATH={emsdk_dir}:$PATH
+            """
+        )
+    )
+
+    env_vars = build_env.activate_emscripten_env(emsdk_dir)
+
+    assert env_vars["EMSDK"] == str(emsdk_dir)
+    assert env_vars["EMSDK_NODE"] == f"{emsdk_dir}/node/bin/node"
+    assert env_vars["EMSDK_PYTHON"] == f"{emsdk_dir}/python/bin/python3"
+    assert env_vars["PATH"].startswith(str(emsdk_dir))
+    assert "SSL_CERT_FILE" not in env_vars
+
+
+def test_ensure_emscripten_auto_installs_when_missing(dummy_xbuildenv, monkeypatch):
+    needed_version = build_env.emscripten_version()
+    install_called = False
+    activate_called = False
+    call_count = [0]
+
+    def mock_get_emscripten_version_info():
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise FileNotFoundError()
+        return f"emcc (Emscripten) {needed_version} (abc123)\nclang version 15.0.0"
+
+    def mock_install_emscripten(self, version=None):
+        nonlocal install_called
+        install_called = True
+        return dummy_xbuildenv / "emsdk"
+
+    def mock_activate_emscripten_env(emsdk_dir):
+        nonlocal activate_called
+        activate_called = True
+        return {"EMSDK": str(emsdk_dir), "PATH": f"{emsdk_dir}/bin"}
+
+    monkeypatch.setattr(
+        build_env, "get_emscripten_version_info", mock_get_emscripten_version_info
+    )
+    monkeypatch.setattr(
+        CrossBuildEnvManager, "install_emscripten", mock_install_emscripten
+    )
+    monkeypatch.setattr(
+        build_env, "activate_emscripten_env", mock_activate_emscripten_env
+    )
+
+    build_env.ensure_emscripten()
+
+    assert install_called
+    assert activate_called
+    assert "EMSDK" in os.environ
+
+
+def test_ensure_emscripten_skipped_with_env_var(dummy_xbuildenv, monkeypatch):
+    needed_version = build_env.emscripten_version()
+    install_called = False
+
+    def mock_get_emscripten_version_info():
+        raise FileNotFoundError()
+
+    def mock_install_emscripten(self, version=None):
+        nonlocal install_called
+        install_called = True
+        return dummy_xbuildenv / "emsdk"
+
+    monkeypatch.setattr(
+        build_env, "get_emscripten_version_info", mock_get_emscripten_version_info
+    )
+    monkeypatch.setattr(
+        CrossBuildEnvManager, "install_emscripten", mock_install_emscripten
+    )
+    monkeypatch.setenv("PYODIDE_SKIP_EMSCRIPTEN_INSTALL", "1")
+
+    with pytest.raises(
+        RuntimeError,
+        match=f"No Emscripten compiler found. Need Emscripten version {needed_version}",
+    ):
+        build_env.ensure_emscripten()
+
+    assert not install_called
+
+
+def test_ensure_emscripten_skipped_with_flag(dummy_xbuildenv, monkeypatch):
+    needed_version = build_env.emscripten_version()
+    install_called = False
+
+    def mock_get_emscripten_version_info():
+        raise FileNotFoundError()
+
+    def mock_install_emscripten(self, version=None):
+        nonlocal install_called
+        install_called = True
+        return dummy_xbuildenv / "emsdk"
+
+    monkeypatch.setattr(
+        build_env, "get_emscripten_version_info", mock_get_emscripten_version_info
+    )
+    monkeypatch.setattr(
+        CrossBuildEnvManager, "install_emscripten", mock_install_emscripten
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=f"No Emscripten compiler found. Need Emscripten version {needed_version}",
+    ):
+        build_env.ensure_emscripten(skip_install=True)
+
+    assert not install_called
+
+
+def test_ensure_emscripten_already_installed(dummy_xbuildenv, monkeypatch):
+    needed_version = build_env.emscripten_version()
+    install_called = False
+
+    def mock_get_emscripten_version_info():
+        return f"emcc (Emscripten) {needed_version} (abc123)\nclang version 15.0.0"
+
+    def mock_install_emscripten(self, version=None):
+        nonlocal install_called
+        install_called = True
+        return dummy_xbuildenv / "emsdk"
+
+    monkeypatch.setattr(
+        build_env, "get_emscripten_version_info", mock_get_emscripten_version_info
+    )
+    monkeypatch.setattr(
+        CrossBuildEnvManager, "install_emscripten", mock_install_emscripten
+    )
+
+    build_env.ensure_emscripten()
+
+    assert not install_called
+
+
+def test_ensure_emscripten_ignores_output_before_version(dummy_xbuildenv, monkeypatch):
+    needed_version = build_env.emscripten_version()
+
+    def mock_get_emscripten_version_info():
+        return (
+            "config:DEBUG: using config file with Python 3.12.1\n"
+            "shared:INFO: (Emscripten: Running sanity checks)\n"
+            f"emcc (Emscripten) {needed_version} (abc123)\n"
+            "clang version 15.0.0"
+        )
+
+    monkeypatch.setattr(
+        build_env, "get_emscripten_version_info", mock_get_emscripten_version_info
+    )
+
+    build_env.ensure_emscripten()
+
+
+def test_ensure_emscripten_version_mismatch(dummy_xbuildenv, monkeypatch):
+    needed_version = build_env.emscripten_version()
+    wrong_version = "3.1.0"
+    install_called = False
+
+    def mock_get_emscripten_version_info():
+        return f"emcc (Emscripten) {wrong_version} (abc123)\nclang version 15.0.0"
+
+    def mock_install_emscripten(self, version=None):
+        nonlocal install_called
+        install_called = True
+        return dummy_xbuildenv / "emsdk"
+
+    monkeypatch.setattr(
+        build_env, "get_emscripten_version_info", mock_get_emscripten_version_info
+    )
+    monkeypatch.setattr(
+        CrossBuildEnvManager, "install_emscripten", mock_install_emscripten
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=f"Incorrect Emscripten version {wrong_version}. Need Emscripten version {needed_version}",
+    ):
+        build_env.ensure_emscripten()
+
+    assert not install_called
+
+
+def test_create_constraints_file_with_pip_build_constraint(
+    tmp_path, dummy_xbuildenv, monkeypatch, reset_env_vars, reset_cache
+):
+    """Test that _create_constraints_file prioritizes PIP_BUILD_CONSTRAINT."""
+    # Set up a test constraints file
+    constraints_file = tmp_path / "build_constraints.txt"
+    constraints_file.write_text("numpy<2.0\n")
+
+    # Set PIP_BUILD_CONSTRAINT via environment - this will override the computed default
+    monkeypatch.setenv("PIP_BUILD_CONSTRAINT", str(constraints_file))
+
+    # Clear caches to pick up the new environment variable
+    build_env.get_build_environment_vars.cache_clear()
+    build_env.get_pyodide_root.cache_clear()
+
+    result = build_env._create_constraints_file()
+    # Should use PIP_BUILD_CONSTRAINT when explicitly set
+    assert result == str(constraints_file)
+
+
+def test_create_constraints_file_uses_default_from_xbuildenv(
+    dummy_xbuildenv, reset_env_vars, reset_cache
+):
+    """Test that _create_constraints_file uses values from xbuildenv when no override is provided."""
+    # Don't set any environment overrides - use what comes from xbuildenv
+    # The xbuildenv has PIP_CONSTRAINT set, and pip_build_constraint defaults to it
+
+    # Clear caches
+    build_env.get_build_environment_vars.cache_clear()
+    build_env.get_pyodide_root.cache_clear()
+
+    result = build_env._create_constraints_file()
+    # Should get the default constraint file path from xbuildenv
+    assert "constraints.txt" in result
+    assert result  # Should not be empty
+
+
+def test_create_constraints_file_pip_build_constraint_takes_precedence(
+    tmp_path, dummy_xbuildenv, monkeypatch, reset_env_vars, reset_cache
+):
+    """Test that PIP_BUILD_CONSTRAINT takes precedence over PIP_CONSTRAINT."""
+    # Set up two different constraints files
+    build_constraints_file = tmp_path / "build_constraints.txt"
+    build_constraints_file.write_text("numpy<2.0\n")
+
+    regular_constraints_file = tmp_path / "constraints.txt"
+    regular_constraints_file.write_text("scipy<2.0\n")
+
+    # Set both environment variables
+    monkeypatch.setenv("PIP_BUILD_CONSTRAINT", str(build_constraints_file))
+    monkeypatch.setenv("PIP_CONSTRAINT", str(regular_constraints_file))
+
+    # Clear caches to pick up the new environment variables
+    build_env.get_build_environment_vars.cache_clear()
+    build_env.get_pyodide_root.cache_clear()
+
+    # PIP_BUILD_CONSTRAINT should take precedence
+    result = build_env._create_constraints_file()
+    assert result == str(build_constraints_file)
+    assert result != str(regular_constraints_file)

@@ -1,0 +1,146 @@
+/**
+ * @fileoverview Batch/simple reads: includeProperties for arbitrary wire keys
+ * (taglib-3s1f).
+ *
+ * readMetadataBatch/readTagsBatch are the one-stop read path — except for
+ * keys outside the typed ExtendedTag set, which previously forced a second
+ * Full-API open pass per file (tuneup's enrich.ts). includeProperties
+ * surfaces raw WIRE keys on the typed read result under extraProperties,
+ * without extra opens: the PropertyMap is already fetched per file on both
+ * backends (WASI: open-time snapshot; Emscripten: built once per call).
+ */
+
+import { beforeAll, describe, expect, it } from "vite-plus/test";
+import { readFile } from "node:fs/promises";
+import { TagLib } from "../src/taglib.ts";
+import {
+  applyTags,
+  readMetadata,
+  readMetadataBatch,
+  readTags,
+  readTagsBatch,
+} from "../src/simple/index.ts";
+import { FIXTURE_PATH } from "./shared-fixtures.ts";
+import { useSimpleBackend } from "./simple-backend.ts";
+
+const RELEASE_ID = "11111111-2222-3333-4444-555555555555";
+
+/** Seed an MP3 with one modeled and one unmodeled wire key. */
+async function seedMp3(): Promise<Uint8Array> {
+  const src = new Uint8Array(await readFile(FIXTURE_PATH.mp3));
+  const tl = await TagLib.initialize();
+  const file = await tl.open(src);
+  file.setProperty("MUSICBRAINZ_RELEASEID", RELEASE_ID);
+  // Modeled key: catalogNumber IS in the PROPERTIES table, so it would not
+  // catch a regression where extras only work for modeled keys.
+  file.setProperty("CATALOGNUMBER", "LC1234");
+  // Truly unmodeled: no PROPERTIES entry, so it only surfaces via
+  // extraProperties (taglib-3s1f).
+  file.setProperty("WEIRDK3Y", "wxyz");
+  file.save();
+  const buf = file.getFileBuffer();
+  file.dispose();
+  return buf;
+}
+
+function runScenarios(): void {
+  it("readMetadataBatch: modeled + unmodeled wire keys in extraProperties, absent keys omitted", async () => {
+    const seeded = await seedMp3();
+    const { items } = await readMetadataBatch([seeded], {
+      includeProperties: [
+        "MUSICBRAINZ_RELEASEID",
+        "CATALOGNUMBER",
+        "WEIRDK3Y",
+        "NOPE",
+      ],
+    });
+    const item = items[0];
+    if (item.status === "error") throw item.error;
+    expect(item.data.tags.extraProperties).toStrictEqual({
+      MUSICBRAINZ_RELEASEID: [RELEASE_ID],
+      CATALOGNUMBER: ["LC1234"],
+      WEIRDK3Y: ["wxyz"],
+    });
+  });
+
+  it("readTagsBatch: same option surfaces extras per item", async () => {
+    const seeded = await seedMp3();
+    const { items } = await readTagsBatch([seeded], {
+      includeProperties: ["CATALOGNUMBER", "WEIRDK3Y"],
+    });
+    const item = items[0];
+    if (item.status === "error") throw item.error;
+    expect(item.data.extraProperties).toStrictEqual({
+      CATALOGNUMBER: ["LC1234"],
+      WEIRDK3Y: ["wxyz"],
+    });
+  });
+
+  it("readTags (single-file): same option, same field", async () => {
+    const seeded = await seedMp3();
+    const tags = await readTags(seeded, {
+      includeProperties: ["CATALOGNUMBER", "WEIRDK3Y", "NOPE"],
+    });
+    expect(tags.extraProperties).toStrictEqual({
+      CATALOGNUMBER: ["LC1234"],
+      WEIRDK3Y: ["wxyz"],
+    });
+  });
+
+  it("readMetadata (single-file): same option, same field", async () => {
+    const seeded = await seedMp3();
+    const meta = await readMetadata(seeded, {
+      includeProperties: ["CATALOGNUMBER", "WEIRDK3Y"],
+    });
+    expect(meta.tags.extraProperties).toStrictEqual({
+      CATALOGNUMBER: ["LC1234"],
+      WEIRDK3Y: ["wxyz"],
+    });
+  });
+
+  it("without the option extraProperties is absent", async () => {
+    const seeded = await seedMp3();
+    const tags = await readTags(seeded);
+    expect(tags.extraProperties).toStrictEqual(undefined);
+    const { items } = await readMetadataBatch([seeded]);
+    const item = items[0];
+    if (item.status === "error") throw item.error;
+    expect(item.data.tags.extraProperties).toStrictEqual(undefined);
+  });
+
+  it("readTags -> applyTags round-trip never writes EXTRAPROPERTIES", async () => {
+    const seeded = await seedMp3();
+    const tags = await readTags(seeded, {
+      includeProperties: ["CATALOGNUMBER", "WEIRDK3Y"],
+    });
+    const out = await applyTags(seeded, tags);
+    const again = await readTags(out);
+    expect(again.extraProperties).toStrictEqual(undefined);
+    // The wire must not carry a synthetic key.
+    const tl = await TagLib.initialize();
+    const file = await tl.open(out);
+    const props = file.properties();
+    file.dispose();
+    expect((props as Record<string, string[]>).EXTRAPROPERTIES).toStrictEqual(
+      undefined,
+    );
+    // The unmodeled key itself must survive the round-trip.
+    const after = await readTags(out, {
+      includeProperties: ["CATALOGNUMBER", "WEIRDK3Y"],
+    });
+    expect(after.extraProperties).toStrictEqual({
+      CATALOGNUMBER: ["LC1234"],
+      WEIRDK3Y: ["wxyz"],
+    });
+  });
+}
+
+describe("includeProperties (taglib-3s1f) [wasi]", () => {
+  beforeAll(() => useSimpleBackend(false));
+  runScenarios();
+});
+
+describe("includeProperties (taglib-3s1f) [emscripten]", () => {
+  beforeAll(() => useSimpleBackend(true));
+  runScenarios();
+});

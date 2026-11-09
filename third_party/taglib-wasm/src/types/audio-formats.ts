@@ -1,0 +1,245 @@
+/**
+ * Named audio input for buffer-based operations.
+ * Provides a name for correlation in batch results.
+ */
+export interface NamedAudioInput {
+  readonly name: string;
+  readonly data: Uint8Array | ArrayBuffer;
+}
+
+/**
+ * Input types accepted by TagLib-Wasm for audio files
+ */
+export type AudioFileInput =
+  | string
+  | Uint8Array
+  | ArrayBuffer
+  | File
+  | NamedAudioInput;
+
+export function isNamedAudioInput(
+  input: AudioFileInput,
+): input is NamedAudioInput {
+  return (
+    typeof input === "object" &&
+    input !== null &&
+    "name" in input &&
+    "data" in input &&
+    !(input instanceof File) &&
+    !(input instanceof Uint8Array) &&
+    !(input instanceof ArrayBuffer)
+  );
+}
+
+/**
+ * Supported file types detected by TagLib.
+ * "unknown" indicates the format could not be determined.
+ *
+ * @example
+ * ```typescript
+ * const file = await taglib.open(buffer);
+ * const format = file.getFormat();
+ * if (format === "MP3") {
+ *   // Handle MP3-specific features
+ * }
+ * ```
+ */
+export type FileType =
+  | "MP3"
+  | "AAC" // ADTS / raw AAC stream (parsed through MPEG::File)
+  | "MP4"
+  | "FLAC"
+  | "OGG"
+  | "OPUS"
+  | "WAV"
+  | "AIFF"
+  | "ASF"
+  | "APE"
+  | "DSF"
+  | "DSDIFF"
+  | "WV"
+  | "MPC"
+  | "TTA"
+  | "SHN"
+  | "MOD"
+  | "S3M"
+  | "IT"
+  | "XM"
+  | "OggFLAC"
+  | "SPEEX"
+  | "MATROSKA"
+  | "unknown";
+
+/**
+ * Container formats for audio files.
+ * A container format defines how audio data and metadata are stored in a file.
+ * Note that some formats like MP3 and FLAC are both container and codec.
+ *
+ * @example
+ * ```typescript
+ * const props = file.audioProperties();
+ * console.log(`Container: ${props.containerFormat}`); // "MP4"
+ * console.log(`Codec: ${props.codec}`);               // "AAC"
+ * ```
+ */
+export type ContainerFormat =
+  | "MP3" // MPEG Layer 3 (container and codec)
+  | "ADTS" // Audio Data Transport Stream (raw AAC; parsed through MPEG::File)
+  | "MP4" // ISO Base Media File Format (includes .m4a files)
+  | "FLAC" // Free Lossless Audio Codec (container and codec)
+  | "OGG" // Ogg container (can contain Vorbis, Opus, FLAC, Speex)
+  | "WAV" // RIFF WAVE format
+  | "AIFF" // Audio Interchange File Format
+  | "ASF" // Advanced Systems Format (WMA/WMV)
+  | "APE" // Monkey's Audio container
+  | "DSF" // DSD Stream File
+  | "DSDIFF" // DSD Interchange File Format
+  | "WavPack" // WavPack container
+  | "MPC" // Musepack container
+  | "TTA" // TrueAudio container
+  | "Shorten" // Shorten container
+  | "MOD" // ProTracker Module
+  | "S3M" // Scream Tracker 3 Module
+  | "IT" // Impulse Tracker Module
+  | "XM" // Extended Module
+  | "Matroska" // Matroska container (MKA, MKV, WebM)
+  | "unknown";
+
+/**
+ * Audio codecs (compression formats) for audio data.
+ * A codec defines how audio is encoded/compressed within a container.
+ *
+ * @example
+ * ```typescript
+ * // MP4 container can have different codecs:
+ * const props1 = file1.audioProperties();
+ * console.log(props1.containerFormat); // "MP4"
+ * console.log(props1.codec);           // "AAC" (lossy)
+ *
+ * const props2 = file2.audioProperties();
+ * console.log(props2.containerFormat); // "MP4"
+ * console.log(props2.codec);           // "ALAC" (lossless)
+ * ```
+ */
+export type AudioCodec =
+  | "AAC" // Advanced Audio Coding (lossy)
+  | "ALAC" // Apple Lossless Audio Codec
+  | "AC-3" // Dolby Digital (MP4 only)
+  | "E-AC-3" // Dolby Digital Plus / Enhanced AC-3 (MP4 only)
+  | "DTS" // DTS Coherent Acoustics (MP4 only)
+  | "MP3" // MPEG Layer 3 (lossy)
+  | "FLAC" // Free Lossless Audio Codec
+  | "Vorbis" // Ogg Vorbis (lossy)
+  | "Opus" // Opus (lossy)
+  | "Speex" // Speex (lossy, speech)
+  | "PCM" // Pulse Code Modulation (uncompressed)
+  | "IEEEFloat" // IEEE floating-point PCM
+  | "WAV" // Generic WAV codec (when specific codec unknown)
+  | "WMA" // Windows Media Audio (lossy)
+  | "WMALossless" // Windows Media Audio Lossless
+  | "APE" // Monkey's Audio (lossless)
+  | "DSD" // Direct Stream Digital
+  | "WavPack" // WavPack (lossless or hybrid)
+  | "MPC" // Musepack (lossy)
+  | "TTA" // TrueAudio (lossless)
+  | "Shorten" // Shorten (lossless)
+  | "MOD" // ProTracker Module
+  | "S3M" // Scream Tracker 3 Module
+  | "IT" // Impulse Tracker Module
+  | "XM" // Extended Module
+  | "unknown";
+
+/**
+ * Bitrate mode for MP3 audio.
+ *
+ * Detected by parsing the LAME extension header in the first MPEG frame.
+ * Undefined for non-MP3 formats and for MP3 files lacking Xing/Info/VBRI headers.
+ */
+export type BitrateMode = "CBR" | "VBR" | "ABR";
+
+/**
+ * Audio properties containing technical information about the file.
+ * All properties are read-only and represent the actual audio stream data.
+ *
+ * @example
+ * ```typescript
+ * const props = file.audioProperties();
+ * console.log(`Duration: ${props.duration} seconds`);
+ * console.log(`Bitrate: ${props.bitrate} kbps`);
+ * console.log(`Sample rate: ${props.sampleRate} Hz`);
+ * console.log(`Container: ${props.containerFormat}`);
+ * console.log(`Codec: ${props.codec}`);
+ * console.log(`Is lossless: ${props.isLossless}`);
+ * ```
+ */
+export interface AudioProperties {
+  /** Duration of the audio in seconds */
+  readonly duration: number;
+  /** Duration of the audio in milliseconds (more precise than `duration`) */
+  readonly durationMs?: number;
+  /** Bitrate in kb/s */
+  readonly bitrate: number;
+  /** Sample rate in Hz */
+  readonly sampleRate: number;
+  /** Number of audio channels */
+  readonly channels: number;
+  /** Bits per sample (0 if not applicable or unknown) */
+  readonly bitsPerSample: number;
+  /** Audio codec (e.g., "AAC", "ALAC", "MP3", "FLAC", "PCM") */
+  readonly codec: AudioCodec;
+  /** Container format (e.g., "MP4", "OGG", "MP3", "FLAC") */
+  readonly containerFormat: ContainerFormat;
+  /** Whether the audio is lossless (uncompressed or losslessly compressed) */
+  readonly isLossless: boolean;
+  /** MPEG version (1 or 2, MP3 only) */
+  readonly mpegVersion?: number;
+  /** MPEG layer (1, 2, or 3, MP3 only) */
+  readonly mpegLayer?: number;
+  /**
+   * Whether the audio is DRM-encrypted. Reported for every format whose
+   * container carries the flag (MP4 and ASF always report it; elsewhere it is
+   * absent unless the format supports it).
+   */
+  readonly isEncrypted?: boolean;
+  /** Format-specific version number (APE, WavPack, TTA, etc.) */
+  readonly formatVersion?: number;
+  /** Bitrate mode (MP3 only — undefined for formats where it is not meaningful or detectable) */
+  readonly bitrateMode?: BitrateMode;
+  /**
+   * OpusHead output gain in decibels (Opus only, RFC 7845 §5.1). Players apply
+   * this unconditionally; it is independent of, and stacks with, ReplayGain /
+   * R128 *tags*. Almost always 0.
+   */
+  readonly outputGainDb?: number;
+}
+
+/**
+ * AudioProperties narrowed by file format, making format-specific fields required.
+ *
+ * After narrowing via `isFormat()`, optional fields that are guaranteed present
+ * for a given format become required:
+ * - MP3 / ADTS (`"AAC"`, raw .aac): `mpegVersion`, `mpegLayer`
+ * - MP4/ASF: `isEncrypted`
+ * - OPUS: `outputGainDb`
+ * - APE/WV/TTA/MPC/SHN: `formatVersion`
+ *
+ * @example
+ * ```typescript
+ * if (file.isFormat("MP3")) {
+ *   const props = file.audioProperties();
+ *   props?.mpegVersion; // number (not number | undefined)
+ * }
+ * ```
+ */
+export type TypedAudioProperties<F extends FileType> = F extends "MP3" | "AAC"
+  ? AudioProperties & {
+      readonly mpegVersion: number;
+      readonly mpegLayer: number;
+    }
+  : F extends "MP4" | "ASF"
+    ? AudioProperties & { readonly isEncrypted: boolean }
+    : F extends "OPUS"
+      ? AudioProperties & { readonly outputGainDb: number }
+      : F extends "APE" | "WV" | "TTA" | "MPC" | "SHN"
+        ? AudioProperties & { readonly formatVersion: number }
+        : AudioProperties;

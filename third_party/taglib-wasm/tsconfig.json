@@ -1,0 +1,38 @@
+{
+  // This file is used for NPM package building only.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "emitDeclarationOnly": true,
+    // ESNext.Disposable provides Disposable/AsyncDisposable + Symbol.dispose for
+    // the `using` RAII code. "types": ["node"] is explicit because TypeScript 6.0
+    // changed the default to `[]` (no auto @types/node) — without it, tsc 6.0 can't
+    // resolve node: imports / the NodeJS namespace (taglib-yis).
+    "lib": ["ES2022", "DOM", "ESNext.Disposable"],
+    "types": ["node"],
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "removeComments": false,
+    "preserveConstEnums": true
+  },
+  "include": ["src/**/*"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "lib",
+    "build",
+    "examples",
+    "tests",
+    "**/*.test.ts"
+  ]
+}

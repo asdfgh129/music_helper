@@ -1,0 +1,136 @@
+const API = Module.API;
+const Hiwire = {};
+const Tests = {};
+API.tests = Tests;
+Module.hiwire = Hiwire;
+
+function getTypeTag(x) {
+  try {
+    return Object.prototype.toString.call(x);
+  } catch (e) {
+    return "";
+  }
+}
+API.getTypeTag = getTypeTag;
+
+/**
+ * Safe property check
+ *
+ * Observe whether a property exists or not without invoking getters.
+ * Should never throw as long as arguments have the correct types.
+ * This check is better than `prop in obj` because it works also with
+ * primitives where `"length" in "str"`, as example, would throw.
+ *
+ * obj: an object
+ * prop: a string or symbol
+ */
+function hasProperty(obj, prop) {
+  try {
+    while (obj) {
+      if (Object.hasOwn(obj, prop)) {
+        return true;
+      }
+      obj = Object.getPrototypeOf(obj);
+    }
+  } catch (e) {}
+  return false;
+}
+
+/**
+ * Observe whether a method exists or not
+ *
+ * Invokes getters but catches any error produced by a getter and throws it away.
+ * Never throws an error
+ *
+ * obj: an object
+ * prop: a string or symbol
+ */
+function hasMethod(obj, prop) {
+  try {
+    return typeof obj[prop] === "function";
+  } catch (e) {
+    return false;
+  }
+}
+
+const pyproxyIsAlive = (px) => !!Module.PyProxy_getAttrsQuiet(px).shared.ptr;
+API.pyproxyIsAlive = pyproxyIsAlive;
+
+const errNoRet = () => {
+  throw new Error(
+    "Assertion error: control reached end of function without return",
+  );
+};
+
+// This is factored out for testing purposes.
+function isPromise(obj) {
+  try {
+    // clang-format off
+    return typeof obj?.then === "function";
+    // clang-format on
+  } catch (e) {
+    return false;
+  }
+}
+API.isPromise = isPromise;
+
+/**
+ * Turn any ArrayBuffer view or ArrayBuffer into a Uint8Array.
+ *
+ * This respects slices: if the ArrayBuffer view is restricted to a slice of
+ * the backing ArrayBuffer, we return a Uint8Array that shows the same slice.
+ */
+function bufferAsUint8Array(arg) {
+  if (ArrayBuffer.isView(arg)) {
+    return new Uint8Array(arg.buffer, arg.byteOffset, arg.byteLength);
+  } else {
+    return new Uint8Array(arg);
+  }
+}
+API.typedArrayAsUint8Array = bufferAsUint8Array;
+
+Module.iterObject = function* (object) {
+  for (let k in object) {
+    if (Object.hasOwn(object, k)) {
+      yield k;
+    }
+  }
+};
+
+// biome-ignore format: Keep list compact
+const pythonReservedWords = new Set(
+  [
+    "False",  "await", "else",     "import", "pass",   "None",    "break",
+    "except", "in",    "raise",    "True",   "class",  "finally", "is",
+    "return", "and",   "continue", "for",    "lambda", "try",     "as",
+    "def",    "from",  "nonlocal", "while",  "assert", "del",     "global",
+    "not",    "with",  "async",    "elif",   "if",     "or",      "yield",
+  ],
+);
+
+function isReservedWord(word) {
+  return pythonReservedWords.has(word);
+}
+
+function normalizeReservedWords(word) {
+  // clang-format off
+  // 1. without a trailing underscore the word is always returned unchanged
+  //    95 is the char code of "_".
+  if (word.charCodeAt(word.length - 1) !== 95) {
+    return word;
+  }
+  // 2. if word is not a reserved word followed by 0 or more underscores, return
+  //    it unchanged.
+  const noTrailing_ = word.replace(/_*$/, "");
+  if (!isReservedWord(noTrailing_)) {
+    return word;
+  }
+  // 3. If there is at least one trailing underscore, return the word with a
+  //    single underscore removed.
+  if (noTrailing_ !== word) {
+    return word.slice(0, -1);
+  }
+  // 4. If the word is exactly a reserved word, return it unchanged
+  return word;
+  // clang-format on
+}

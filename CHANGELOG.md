@@ -40,6 +40,11 @@
   技术选型、必须保持的行为契约、分期路线、验收策略、补充事项与待决决策。
 - 新增全仓文档可浏览索引 [docs/index.html](docs/index.html) 与生成脚本
   `scripts/build_docs_index.py`；`docs/README.md`、`scripts/README.md`、`AGENTS.md` 同步登记。
+- `browser-local` 分支：把浏览器本机实现所需的上游源码以快照形式收进 `third_party/`
+  （`um-react` / `lib_um_crypto_rust` / `qmpc-mmkv` / `go-mmkv` / `web` / `taglib-wasm` /
+  `unimusic-chromaprint` / `ffmpeg-wasm` / `pyodide` / `taglib` / `sqlite-wasm` 及各
+  submodule），来源、commit 与许可证见 [third_party/README.md](third_party/README.md) §4；
+  `scripts/check_docs.py` 不再校验第三方自带文档，[docs/index.html](docs/index.html) 重新生成。
 
 ### 计划中
 

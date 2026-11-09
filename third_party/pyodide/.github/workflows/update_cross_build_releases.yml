@@ -1,0 +1,98 @@
+name: Update cross-build metadata files
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version number to update to. This should not contain the 'v' prefix, since our releases on GitHub do not have it."
+        required: true
+
+env:
+  version: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.version }}
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update_cross_build_releases:
+    name: Update cross-build metadata files
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # for pushing cross-build metadata files updates
+      pull-requests: write # for creating a PR with the metadata files update
+      issues: write # for creating an issue if the update fails
+    steps:
+      # Note: we check out the main branch so that the cross-build metadata
+      # files are always updated on top of the latest state of the repository.
+      - name: Checkout main branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          ref: main
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: 3.14
+
+      - name: Install pyodide-build
+        run: |
+          python -m pip install --upgrade pip
+          make pyodide_build
+
+      - name: Update cross-build metadata file
+        id: update_cross_build_metadata
+        working-directory: tools
+        env:
+          VERSION: ${{ env.version }}
+        run: |
+          python update_cross_build_releases.py "$VERSION"
+
+      - name: Create Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ env.version }}
+        run: |
+          BRANCH="update-cross-build-metadata-${VERSION}-$(date +%s)"
+
+          gh auth setup-git
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "$BRANCH"
+          git add metadata/pyodide-cross-build-environments-v2.json
+          git add metadata/pyodide-cross-build-environments-debug-v2.json
+          git commit -m "Update cross-build metadata files for version ${VERSION} [skip ci]"
+
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "Update cross-build metadata files for version ${VERSION}" \
+            --body "$(printf 'This PR updates the cross-build metadata files for the new version %s.\nRequesting a review from the @pyodide/core team.' "${VERSION}")" \
+            --base main \
+            --head "$BRANCH"
+
+      - name: Create an issue if the update fails
+        if: failure() || steps.update_cross_build_metadata.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ env.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ASSIGNEE: ${{ github.actor }}
+        run: |
+          gh issue create \
+            --title "Update cross-build metadata files for version ${VERSION} failed" \
+            --assignee "${ASSIGNEE}" \
+            --body "## Description
+
+          The update of the cross-build metadata files for version ${VERSION} failed.
+
+          ## Additional information
+
+          Please check the logs at ${RUN_URL}
+          for more information and update the metadata files manually if necessary."

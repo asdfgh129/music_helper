@@ -1,0 +1,41 @@
+{
+  // Tests-inclusive type-check config. `deno check ./src ./tests` covered the
+  // test files; tsconfig.json is the npm package build config and excludes them,
+  // so this config keeps that coverage after the toolchain flip.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "emitDeclarationOnly": false,
+    "declaration": false,
+    // tsconfig.json sets rootDir to src/ for the *build* (so dist/ mirrors src/).
+    // This config also includes tests/ and the root *.ts, which are outside src/,
+    // and tsc rejects any input outside rootDir (TS6059) even with noEmit.
+    "rootDir": ".",
+    // tsconfig.json sets declarationMap: true; TS5069 rejects a declaration map
+    // without `declaration` (or `composite`), so this override is required.
+    "declarationMap": false,
+    // TS switch to target ES2022 for the package build, but the tests run on
+    // Node 24 (Deno's check ran with the ESNext lib via `deno.window`), and
+    // tests/auto-dispose.test.ts uses Promise.withResolvers (ES2024,
+    // TS2550 under ES2022). Widen the lib for the check only; the build
+    // config is untouched.
+    "lib": ["ESNext", "DOM", "ESNext.Disposable"]
+  },
+  "include": ["src/**/*", "tests/**/*", "*.ts"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "lib",
+    "build",
+    "examples",
+    // tests/test-files/_gen/make-bwf-fixtures.ts and
+    // tests/wasi-vs-emscripten.bench.ts run on Node and type-check under this
+    // config, so neither is excluded here.
+    // The Deno-gated tests use Deno's built-in test globals that the Node type
+    // check does not model; `pnpm run test:deno` runs them under Deno instead.
+    // Listing them here keeps this gate aligned with the files the Node test
+    // gate actually runs — it is not a way to hide a type error in code Node
+    // executes.
+    "tests/deno-*"
+  ]
+}

@@ -1,0 +1,189 @@
+import type {
+  AudioFileInput,
+  AudioProperties,
+  ExtendedTag,
+  FileType,
+  PropertyMap,
+  TagInput,
+} from "../types.ts";
+import { FileOperationError, MetadataError } from "../errors.ts";
+
+import { mergeTagUpdates, readExtendedTag } from "../utils/tag-mapping.ts";
+import { getTagLib } from "./config.ts";
+import {
+  withAudioFile,
+  withAudioFileSave,
+  withAudioFileSaveToFile,
+} from "./with-audio-file.ts";
+
+/**
+ * Reads all metadata tags from an audio file.
+ *
+ * @param file - File path, Uint8Array, ArrayBuffer, or File object
+ * @param options - Read options; `includeProperties` (wire keys) surfaces raw
+ *   values in `extraProperties` (taglib-3s1f)
+ * @returns Parsed tag fields including extended metadata from the audio file
+ * @throws {TagLibInitializationError} If the Wasm module fails to initialize
+ * @throws {InvalidFormatError} If the file is corrupted or in an unsupported format
+ */
+export async function readTags(
+  file: AudioFileInput,
+  options: { includeProperties?: string[] } = {},
+): Promise<ExtendedTag> {
+  return withAudioFile(file, (audioFile) =>
+    readExtendedTag(audioFile, options.includeProperties),
+  );
+}
+
+/**
+ * Applies metadata tag changes to an audio file and returns the modified content as a buffer.
+ *
+ * The input is read, never written: a path is only where the bytes come from,
+ * so the file on disk is left untouched. Use {@link applyTagsToFile} for an
+ * in-place update.
+ *
+ * @param file - File path, Uint8Array, ArrayBuffer, or File object
+ * @param tags - Partial tag fields to merge with existing metadata
+ * @returns Modified audio file contents with updated tags
+ * @throws {TagLibInitializationError} If the Wasm module fails to initialize
+ * @throws {InvalidFormatError} If the file is corrupted or in an unsupported format
+ * @throws {FileOperationError} If saving the modified metadata fails
+ */
+export async function applyTags(
+  file: AudioFileInput,
+  tags: Partial<TagInput>,
+): Promise<Uint8Array> {
+  return withAudioFileSave(file, (audioFile) => {
+    mergeTagUpdates(audioFile, tags);
+  });
+}
+
+/**
+ * Writes metadata tag changes directly to an audio file on disk.
+ *
+ * @param file - File path string; the file is updated in place
+ * @param tags - Partial tag fields to merge with existing metadata
+ * @returns Resolves when the file has been written successfully
+ * @throws {FileOperationError} If a non-string input is provided, saving fails, or the file write fails
+ * @throws {TagLibInitializationError} If the Wasm module fails to initialize
+ * @throws {InvalidFormatError} If the file is corrupted or in an unsupported format
+ * @throws {EnvironmentError} If the runtime does not support filesystem write access
+ */
+export async function applyTagsToFile(
+  file: string,
+  tags: Partial<TagInput>,
+): Promise<void> {
+  if (typeof file !== "string") {
+    throw new FileOperationError(
+      "save",
+      "applyTagsToFile requires a file path string to save changes",
+    );
+  }
+
+  await withAudioFileSaveToFile(file, (audioFile) => {
+    mergeTagUpdates(audioFile, tags);
+  });
+}
+
+/**
+ * Reads audio properties (duration, bitrate, sample rate, channels) from an audio file.
+ *
+ * @param file - File path, Uint8Array, ArrayBuffer, or File object
+ * @returns Audio codec properties for the file
+ * @throws {TagLibInitializationError} If the Wasm module fails to initialize
+ * @throws {InvalidFormatError} If the file is corrupted or in an unsupported format
+ * @throws {MetadataError} If the file does not contain valid audio property data
+ */
+export async function readProperties(
+  file: AudioFileInput,
+): Promise<AudioProperties> {
+  return withAudioFile(file, (audioFile) => {
+    const props = audioFile.audioProperties();
+    if (!props) {
+      throw new MetadataError(
+        "read",
+        "File may not contain valid audio data",
+        "audioProperties",
+      );
+    }
+    return props;
+  });
+}
+
+/**
+ * Checks whether the given input is a valid, readable audio file.
+ *
+ * @param file - File path, Uint8Array, ArrayBuffer, or File object
+ * @returns `true` if the file is valid and recognized by TagLib; `false` otherwise
+ */
+export async function isValidAudioFile(file: AudioFileInput): Promise<boolean> {
+  try {
+    const taglib = await getTagLib();
+    const audioFile = await taglib.open(file);
+    try {
+      return audioFile.isValid();
+    } finally {
+      audioFile.dispose();
+    }
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Detects the audio format of a file.
+ *
+ * @param file - File path, Uint8Array, ArrayBuffer, or File object
+ * @returns The detected `FileType`, or `undefined` if the format cannot be determined
+ * @throws {TagLibInitializationError} If the Wasm module fails to initialize
+ */
+export async function readFormat(
+  file: AudioFileInput,
+): Promise<FileType | undefined> {
+  const taglib = await getTagLib();
+  const audioFile = await taglib.open(file);
+  try {
+    if (!audioFile.isValid()) {
+      return undefined;
+    }
+    return audioFile.getFormat();
+  } finally {
+    audioFile.dispose();
+  }
+}
+
+/**
+ * Removes all metadata tags and pictures from an audio file and returns the stripped content.
+ *
+ * The input is read, never written: a path is only where the bytes come from,
+ * so the file on disk is left untouched.
+ *
+ * @param file - File path, Uint8Array, ArrayBuffer, or File object
+ * @returns Modified audio file contents with all tags and pictures cleared
+ * @throws {TagLibInitializationError} If the Wasm module fails to initialize
+ * @throws {InvalidFormatError} If the file is corrupted or in an unsupported format
+ * @throws {FileOperationError} If saving the modified metadata fails
+ */
+export async function clearTags(file: AudioFileInput): Promise<Uint8Array> {
+  return withAudioFileSave(file, (audioFile) => {
+    // Clear every writable text property. An empty value list removes the key on
+    // both backends: Emscripten's setProperties replaces wholesale, and WASI now
+    // treats `[]` as a delete rather than a no-op merge (taglib-nc5). properties()
+    // already excludes audio/derived props, structured fields, and lyrics, so
+    // only user-set text metadata is touched.
+    const cleared: PropertyMap = {};
+    for (const key of Object.keys(audioFile.properties())) cleared[key] = [];
+    audioFile.setProperties(cleared);
+
+    // Structured fields each have a dedicated accessor and never ride the text
+    // PropertyMap. removePictures/setLyrics/setRatings are safe on any format;
+    // setChapters/setBextData/setIxml throw on formats that can't hold them, so
+    // only call those when the getter reports something to clear.
+    audioFile.removePictures();
+    audioFile.setLyrics([]);
+    audioFile.setRatings([]);
+    if (audioFile.getChapters().length > 0) audioFile.setChapters([]);
+    if (audioFile.getBextData() !== undefined) audioFile.setBextData(null);
+    if (audioFile.getIxml() !== undefined) audioFile.setIxml(null);
+  });
+}

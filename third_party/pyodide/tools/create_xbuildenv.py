@@ -1,0 +1,271 @@
+import argparse
+import json
+import logging
+import shutil
+import sys
+import zipfile
+from pathlib import Path
+
+from packaging.utils import canonicalize_name
+from packaging.version import InvalidVersion, Version
+
+try:
+    from pyodide_build.build_env import (
+        get_build_flag,
+        get_unisolated_packages,
+    )
+    from pyodide_build.recipe.loader import load_all_recipes
+except ImportError:
+    print("Requires pyodide-build package to be installed")
+    sys.exit(1)
+
+
+def _versions_equal(left: str, right: str) -> bool:
+    try:
+        return Version(left) == Version(right)
+    except InvalidVersion:
+        return left == right
+
+
+def _check_unisolated_packages_match_dist(
+    pyodide_root: Path,
+    unisolated_packages: dict[str, str],
+    skip_missing_files: bool = False,
+) -> None:
+    """Check the recipes agree with the distribution we are shipping.
+
+    requirements.txt is generated from the recipes in packages/, but the wheels
+    when  ENABLE_PREBUILT_PACKAGES=1 the distribution is downloaded from the
+    pyodide-recipes release. If the pyodide-recipes packages are a different
+    version, the pins describe versions we do not ship..
+
+    dist/pyodide-lock.json records what is actually in the distribution, so
+    compare against it and refuse to build a cross-build environment if there is
+    a mismatch.
+    """
+    lockfile = pyodide_root / "dist" / "pyodide-lock.json"
+    if not lockfile.exists():
+        if skip_missing_files:
+            logging.warning(f"Cross-build file '{lockfile}' not found")
+            return
+
+        raise FileNotFoundError(f"Cross-build file '{lockfile}' not found")
+
+    shipped = {
+        canonicalize_name(name): package["version"]
+        for name, package in json.loads(lockfile.read_text())["packages"].items()
+    }
+
+    mismatched = []
+    missing = []
+    for name, version in sorted(unisolated_packages.items()):
+        shipped_version = shipped.get(canonicalize_name(name))
+        if shipped_version is None:
+            missing.append(name)
+        elif not _versions_equal(shipped_version, version):
+            mismatched.append((name, version, shipped_version))
+
+    if missing:
+        # A subset build (PYODIDE_PACKAGES) legitimately omits packages, so this
+        # is not fatal, but the pin is then unbacked by anything we ship.
+        logging.warning(
+            "Cross-build packages missing from dist/pyodide-lock.json: "
+            + ", ".join(missing)
+        )
+
+    if mismatched:
+        details = "\n".join(
+            f"  {name}: recipe {version}, but dist/pyodide-lock.json has {shipped_version}"
+            for name, version, shipped_version in mismatched
+        )
+        raise ValueError(
+            "Cross-build package versions in packages/ do not match the "
+            f"distribution in dist/:\n{details}\n"
+            "The cross-build environment would tell downstream builds to compile "
+            "against versions that are not the ones shipped. If the distribution "
+            "was downloaded with ENABLE_PREBUILT_PACKAGES=1, the prebuilt packages "
+            "were built from different recipes than the ones in this checkout."
+        )
+
+
+def _find_wheel(pyodide_root: Path, package_name: str) -> Path | None:
+    """Find the built wheel for a package in its recipe dist directory."""
+    dist_dir = pyodide_root / "packages" / package_name / "dist"
+    wheels = sorted(dist_dir.glob("*.whl"))
+    if not wheels:
+        return None
+    return wheels[0]
+
+
+def _copy_xbuild_files_from_wheel(
+    pyodide_root: Path,
+    package_name: str,
+    xbuild_files: list[str],
+    site_packages_extras: Path,
+    skip_missing_files: bool = False,
+) -> None:
+    # When cross-build-env-skip-install is set, the package is not installed
+    # into HOSTSITEPACKAGES during the build, so the cross-build files are not
+    # available there. Extract them directly from the built wheel instead.
+    wheel = _find_wheel(pyodide_root, package_name)
+    if wheel is None:
+        if skip_missing_files:
+            logging.warning(f"Built wheel for '{package_name}' not found")
+            return
+
+        raise FileNotFoundError(
+            f"Built wheel for '{package_name}' not found. "
+            "It is required to extract cross-build files because "
+            "cross-build-env-skip-install is set."
+        )
+
+    with zipfile.ZipFile(wheel) as zf:
+        names = set(zf.namelist())
+        for path in xbuild_files:
+            target = site_packages_extras / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+
+            if path not in names:
+                if skip_missing_files:
+                    logging.warning(
+                        f"Cross-build file '{path}' not found in wheel '{wheel.name}'"
+                    )
+                    continue
+
+                raise FileNotFoundError(
+                    f"Cross-build file '{path}' not found in wheel '{wheel.name}'"
+                )
+
+            with zf.open(path) as src, open(target, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+
+
+def _copy_xbuild_files(
+    pyodide_root: Path, xbuildenv_path: Path, skip_missing_files: bool = False
+) -> None:
+    # Store package cross-build-files into site_packages_extras in the same tree
+    # structure as they would appear in the real package.
+    # In install_xbuildenv, we will use:
+    # pip install -t $HOSTSITEPACKAGES -r requirements.txt
+    # cp site-packages-extras $HOSTSITEPACKAGES
+    site_packages_extras = xbuildenv_path / "site-packages-extras"
+    recipes = load_all_recipes(pyodide_root / "packages")
+    for recipe in recipes.values():
+        xbuild_files = recipe.build.cross_build_files
+        if not xbuild_files:
+            continue
+
+        _copy_xbuild_files_from_wheel(
+            pyodide_root,
+            recipe.package.name,
+            xbuild_files,
+            site_packages_extras,
+            skip_missing_files,
+        )
+
+
+def _copy_wasm_libs(
+    pyodide_root: Path, xbuildenv_root: Path, skip_missing_files: bool = False
+) -> None:
+    def get_relative_path(pyodide_root: Path, flag: str) -> Path:
+        return Path(get_build_flag(flag)).relative_to(pyodide_root)
+
+    pythoninclude = get_relative_path(pyodide_root, "PYTHONINCLUDE")
+    sysconfig_dir = get_relative_path(pyodide_root, "SYSCONFIGDATA_DIR")
+
+    to_copy: list[Path] = [
+        pythoninclude,
+        sysconfig_dir,
+        Path("Makefile.envs"),
+        Path("dist/pyodide-lock.json"),
+        Path("dist/python"),
+        Path("dist/python.bat"),
+        Path("dist/python.exe"),
+        Path("dist/python_cli_entry.mjs"),
+        Path("dist/python_stdlib.zip"),
+        Path("tools/constraints.txt"),
+    ]
+    to_copy.extend(
+        x.relative_to(pyodide_root) for x in (pyodide_root / "dist").glob("pyodide.*")
+    )
+
+    for path in to_copy:
+        if not (pyodide_root / path).exists():
+            if skip_missing_files:
+                logging.warning(f"Cross-build file '{path}' not found")
+                continue
+
+            raise FileNotFoundError(f"Cross-build file '{path}' not found")
+
+        if (pyodide_root / path).is_dir():
+            shutil.copytree(
+                pyodide_root / path, xbuildenv_root / path, dirs_exist_ok=True
+            )
+        else:
+            (xbuildenv_root / path).parent.mkdir(exist_ok=True, parents=True)
+            shutil.copy(pyodide_root / path, xbuildenv_root / path)
+
+
+def _copy_emcc_patches(pyodide_root: Path, xbuildenv_root: Path):
+    shutil.copytree(pyodide_root / "emsdk/patches", xbuildenv_root / "emsdk/patches")
+
+
+def create(
+    path: str | Path,
+    pyodide_root: Path,
+    *,
+    skip_missing_files: bool = False,
+) -> None:
+    xbuildenv_path = Path(path) / "xbuildenv"
+    xbuildenv_root = xbuildenv_path / "pyodide-root"
+
+    unisolated_packages = get_unisolated_packages()
+    _check_unisolated_packages_match_dist(
+        pyodide_root, unisolated_packages, skip_missing_files
+    )
+
+    shutil.rmtree(xbuildenv_path, ignore_errors=True)
+    xbuildenv_path.mkdir(parents=True, exist_ok=True)
+    xbuildenv_root.mkdir()
+
+    _copy_xbuild_files(pyodide_root, xbuildenv_path, skip_missing_files)
+    _copy_wasm_libs(pyodide_root, xbuildenv_root, skip_missing_files)
+    _copy_emcc_patches(pyodide_root, xbuildenv_root)
+
+    (xbuildenv_root / "package.json").write_text("{}")
+
+    (xbuildenv_path / "requirements.txt").write_text(
+        "".join(
+            f"{name}=={version}\n"
+            for name, version in sorted(unisolated_packages.items())
+        )
+    )
+    (xbuildenv_root / "unisolated.txt").write_text("\n".join(unisolated_packages))
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Create cross-build environment for building packages for Pyodide."
+    )
+    parser.add_argument("path", help="path to cross-build environment directory")
+    parser.add_argument(
+        "--skip-missing-files",
+        action="store_true",
+        help="skip if cross build files are missing instead of raising an error. This is useful for testing.",
+    )
+
+    args = parser.parse_args()
+    return args
+
+
+def main():
+    args = parse_args()
+    root = Path(__file__).parent.parent
+
+    create(args.path, pyodide_root=root, skip_missing_files=args.skip_missing_files)
+
+    print(f"Pyodide cross-build environment created at {args.path}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,330 @@
+export PYVERSION ?= 3.14.2
+export PYODIDE_EMSCRIPTEN_VERSION ?= 5.0.3
+export PYODIDE_EMSDK_DIR=$(PYODIDE_ROOT)/emsdk/emsdk-$(PYODIDE_EMSCRIPTEN_VERSION)
+export PYODIDE_VERSION ?= 314.1.0.dev0
+export PYODIDE_ABI_VERSION ?= 2026_0
+# Initial size of the WebAssembly heap in bytes, also used by the JS runtime
+export INITIAL_MEMORY ?= 31457280
+
+export PYTHON_ARCHIVE_SHA256=c609e078adab90e2c6bacb6afafacd5eaf60cd94cf670f1e159565725fcd448d
+
+export SED ?= sed
+
+export RUST_TOOLCHAIN ?= 1.97.1
+export RUSTFLAGS =
+
+# URL to the prebuilt packages
+export PYODIDE_PREBUILT_PACKAGES_BASE=https://github.com/pyodide/pyodide-recipes/releases/download/314-20260911
+export PYODIDE_PREBUILT_PACKAGES_URL=$(PYODIDE_PREBUILT_PACKAGES_BASE)/packages.tar.gz
+export PYODIDE_PREBUILT_PACKAGES_LOCKFILE=$(PYODIDE_PREBUILT_PACKAGES_BASE)/pyodide-lock.json
+export ENABLE_PREBUILT_PACKAGES ?= 0
+
+ifdef CPYTHON_DEBUG
+	export CPYTHON_ABI_FLAGS=d
+endif
+
+export PLATFORM_TRIPLET=wasm32-emscripten
+export SYSCONFIG_NAME=_sysconfigdata_$(CPYTHON_ABI_FLAGS)_emscripten_$(PLATFORM_TRIPLET)
+
+# BASH_ENV tells bash to run pyodide_env.sh on startup, which sets various
+# environment variables. The next line instructs make to use bash to run each
+# command.
+export BASH_ENV := $(PYODIDE_ROOT)/pyodide_env.sh
+SHELL := /usr/bin/env bash
+
+version_tmp_1 := $(subst ., ,$(PYVERSION:v%=%))
+# Handle alpha, beta, and release candidate versions
+version_tmp_2 := $(subst a, ,$(version_tmp_1))
+version_tmp_3 := $(subst b, ,$(version_tmp_2))
+version_tuple := $(subst r, ,$(version_tmp_3))
+
+export PYMAJOR=$(word 1,$(version_tuple))
+export PYMINOR=$(word 2,$(version_tuple))
+export PYMICRO=$(word 3,$(version_tuple))
+export PYSTABLEVERSION=$(PYMAJOR).$(PYMINOR).$(PYMICRO)
+
+export HOSTPYTHONROOT=$(shell python${PYMAJOR}.${PYMINOR} -c "import sys; print(sys.prefix)")
+export HOSTPYTHON=$(HOSTPYTHONROOT)/bin/python$(PYMAJOR).$(PYMINOR)
+
+export PYTHON_ARCHIVE_URL=https://www.python.org/ftp/python/$(PYSTABLEVERSION)/Python-$(PYVERSION).tgz
+
+export CPYTHONROOT=$(PYODIDE_ROOT)/cpython
+export CPYTHONINSTALL=$(CPYTHONROOT)/installs/python-$(PYVERSION)
+export CPYTHONLIB=$(CPYTHONINSTALL)/lib/python$(PYMAJOR).$(PYMINOR)
+export SYSCONFIGDATA_DIR=$(CPYTHONINSTALL)/sysconfigdata/
+export CPYTHONBUILD=$(CPYTHONROOT)/build/Python-$(PYVERSION)/
+
+export TARGETINSTALLDIR=$(PYODIDE_ROOT)/cpython/installs/python-$(PYVERSION)
+
+export PYTHONINCLUDE=$(PYODIDE_ROOT)/cpython/installs/python-$(PYVERSION)/include/python$(PYMAJOR).$(PYMINOR)$(CPYTHON_ABI_FLAGS)
+
+# Use env variable if defined, otherwise fallback to './'
+export PYODIDE_BASE_URL?=./
+
+# The compression level used for zip files and wheels. When distributing via a
+# CDN it's more efficient to keep this value to 0, and let the CDN perform the
+# Brotli compression.
+export PYODIDE_ZIP_COMPRESSION_LEVEL?=6
+
+export PIP_CONSTRAINT=$(PYODIDE_ROOT)/tools/constraints.txt
+
+# List of modules to exclude from the zipped standard library
+export PYZIP_EXCLUDE_FILES=\
+	ensurepip/ \
+	venv/ \
+	lib2to3/ \
+	_osx_support.py \
+	_aix_support.py \
+	_android_support.py \
+	_ios_support.py \
+	_apple_support.py \
+	curses/ \
+	dbm/ \
+	idlelib/ \
+	tkinter/ \
+	turtle.py \
+	turtledemo/ \
+	test/ \
+	_pydecimal.py \
+	zoneinfo/_zoneinfo.py \
+	pydoc_data/ \
+  _sysconfig_vars__emscripten_wasm32-emscripten.json \
+  build-details.json
+
+
+# List of modules that we replace with a stub in the zipped standard library
+export PYZIP_JS_STUBS=\
+	webbrowser.py \
+	ssl.py \
+	_ssl.py
+
+export PYCOMPILE_EXCLUDE_FILES=\
+	RobotRaconteur- \
+	astropy- \
+	opencv_python- \
+	test-
+
+export DBGFLAGS_NODEBUG=-g0
+export DBGFLAGS_WASMDEBUG=-g2
+export DBGFLAGS_SOURCEMAPDEBUG=-g3
+export DBG_LDFLAGS_DYLINK=-sDYLINK_DEBUG=1 -sRUNTIME_DEBUG=2
+export DBG_LDFLAGS_SOURCEMAPDEBUG=-gseparate-dwarf
+
+export DBGFLAGS=$(DBGFLAGS_NODEBUG)
+
+ifdef PYODIDE_ASAN
+	export PYODIDE_SYMBOLS=1
+	# -fsanitize-recover=address makes it possible to continue on errors
+	# by setting ASAN_OPTIONS=halt_on_error=0.
+	# With the default halt_on_error=1 the runtime still aborts on the first error.
+	EXTRA_CFLAGS+= -fsanitize=address -fsanitize-recover=address
+	EXTRA_LDFLAGS+= -fsanitize=address
+endif
+
+ifdef PYODIDE_DEBUG
+	export PYODIDE_SYMBOLS=1
+	export PYODIDE_DEBUG_JS=1
+	export PYODIDE_ASSERTIONS=1
+endif
+
+ifdef PYODIDE_SOURCEMAP
+	# Debug with source maps (less useful than WASMDEBUG but easier if it helps)
+	export DBGFLAGS=$(DBGFLAGS_SOURCEMAPDEBUG)
+	export DBG_LDFLAGS=$(DBG_LDFLAGS_SOURCEMAPDEBUG) $(DBG_LDFLAGS_DYLINK)
+else
+	ifdef PYODIDE_SYMBOLS
+		# Include debug symbols but no source maps (most useful)
+		export DBGFLAGS=$(DBGFLAGS_WASMDEBUG)
+		export DBG_LDFLAGS=$(DBG_LDFLAGS_DYLINK)
+	endif
+endif
+
+ifdef PYODIDE_ASSERTIONS
+	EXTRA_CFLAGS+= -DDEBUG_F
+endif
+
+
+export OPTFLAGS=-O2
+export CFLAGS_BASE=\
+	$(OPTFLAGS) \
+	$(DBGFLAGS) \
+	-fPIC \
+	-fwasm-exceptions \
+	-sSUPPORT_LONGJMP=wasm \
+	$(EXTRA_CFLAGS)
+
+
+export LDFLAGS_BASE=\
+	$(OPTFLAGS) \
+	$(DBGFLAGS) \
+	$(DBG_LDFLAGS) \
+	-L$(CPYTHONROOT)/installs/python-$(PYVERSION)/lib/ \
+	-fwasm-exceptions \
+	-sSUPPORT_LONGJMP=wasm \
+	$(EXTRA_LDFLAGS) \
+
+export CXXFLAGS_BASE=
+
+# Flags shared by MAIN_MODULE_LDFLAGS in builds with and without dynamic linking
+export MAIN_MODULE_LDFLAGS_COMMON= $(LDFLAGS_BASE) \
+	-s EXPORT_NAME="'_createPyodideModule'" \
+	-s LZ4=1 \
+	-s USE_ZLIB \
+	-s USE_BZIP2 \
+	-s FORCE_FILESYSTEM=1 \
+	-s INITIAL_MEMORY=$(INITIAL_MEMORY) \
+	-s ALLOW_MEMORY_GROWTH=1 \
+	-s MAXIMUM_MEMORY=4GB \
+	-s IMPORTED_MEMORY \
+	-s FS_DEBUG=1 \
+	-s STACK_SIZE=10MB \
+	-s EXPORTED_FUNCTIONS='$(EXPORTS)' \
+	-sEXPORTED_RUNTIME_METHODS='$(EXPORTED_RUNTIME_METHODS)' \
+	\
+	-lpython$(PYMAJOR).$(PYMINOR)$(CPYTHON_ABI_FLAGS) \
+	-lffi \
+	-lhiwire \
+	-llzma \
+	-lsqlite3 \
+	-lzstd \
+	-lidbfs.js \
+	-lnodefs.js \
+	-lproxyfs.js
+
+EXPORTED_RUNTIME_METHODS=wasmTable,ERRNO_CODES,DNS
+
+export MAIN_MODULE_LDFLAGS= $(MAIN_MODULE_LDFLAGS_COMMON) \
+	-s ENVIRONMENT=web,webview,worker,node,shell \
+	-s MAIN_MODULE=1 \
+	-s EXPORT_EXCEPTION_HANDLING_HELPERS \
+	-s EXPORT_ALL=1 \
+	-s AUTO_JS_LIBRARIES=0 \
+	-s AUTO_NATIVE_LIBRARIES=0 \
+	-s NODEJS_CATCH_EXIT=0 \
+	-s NODEJS_CATCH_REJECTION=0 \
+	-s EXIT_RUNTIME \
+	\
+	-lstdc++ \
+	-lworkerfs.js \
+	-lwebsocket.js \
+	-leventloop.js \
+	\
+	-lGL \
+	-legl.js \
+	-lwebgl.js \
+	-lhtml5.js \
+	-lhtml5_webgl.js \
+	-lsdl.js \
+	--js-library=src/core/libjsverror.js \
+	-sMAX_WEBGL_VERSION=2  \
+	-sGL_WORKAROUND_SAFARI_GETCONTEXT_BUG=0 \
+	-Wl,--wrap=__syscall_connect \
+	-Wl,--wrap=__syscall_recvfrom \
+	-Wl,--wrap=__syscall_sendto \
+	-Wl,--wrap=__syscall_shutdown \
+	-Wl,--wrap=__syscall_fcntl64 \
+	-Wl,--wrap=__syscall_poll
+
+EXPORTS=_main \
+   ,_free \
+   \
+   ,_hiwire_new \
+   ,_hiwire_intern \
+   ,_hiwire_num_refs \
+   ,_hiwire_get \
+   ,_hiwire_incref \
+   ,_hiwire_decref \
+   ,_hiwire_pop \
+   ,__hiwire_get \
+   ,__hiwire_set \
+   ,__hiwire_immortal_get \
+   ,__hiwire_immortal_add \
+   ,_jslib_init \
+   ,_init_pyodide_proxy \
+   \
+   ,_print_stdout \
+   ,_print_stderr \
+   \
+   ,_PyBuffer_Release \
+   ,_Py_DecRef \
+   ,_PyDict_New \
+   ,_PyDict_SetItem \
+   ,__PyErr_CheckSignals \
+   ,_PyErr_CheckSignals \
+   ,_PyErr_Clear \
+   ,_PyErr_GetRaisedException \
+   ,_PyErr_Occurred \
+   ,_PyErr_Print \
+   ,_PyErr_SetRaisedException \
+   ,_PyErr_SetString \
+   ,_PyEval_SaveThread \
+   ,_PyEval_RestoreThread \
+   ,_PyFloat_FromDouble \
+   ,_PyGILState_Check \
+   ,_Py_IncRef \
+   ,_PyList_New \
+   ,_PyList_SetItem \
+   ,__PyLong_FromByteArray \
+   ,_PyLong_FromDouble \
+   ,_PyMem_Free \
+   ,_PyObject_GetAIter \
+   ,_PyObject_GetIter \
+   ,_PyObject_Size \
+   ,_PyRun_SimpleString \
+   ,__PyRuntime \
+   ,_PySet_Add \
+   ,_PySet_New \
+   ,__PyTraceback_Add \
+   ,_PyUnicode_Data \
+   ,_PyUnicode_New \
+   ,_emscripten_stack_get_current \
+   ,_Py_Version \
+   \
+   ,___stack_low \
+   ,___stack_high \
+
+
+ifeq ($(DISABLE_DYLINK), 1)
+	EXPORTED_RUNTIME_METHODS=wasmTable \
+		,ERRNO_CODES \
+		,FS \
+		,ENV \
+		,stringToNewUTF8 \
+		,stringToUTF8OnStack \
+		,addFunction \
+		,stackSave \
+		,stackRestore \
+		,runtimeKeepalivePush \
+		,SOCKFS \
+		,DNS \
+		,HEAP8 \
+		,HEAPU8 \
+		,HEAP16 \
+		,HEAPU16 \
+		,HEAP32 \
+		,HEAPU32 \
+		,HEAP64 \
+		,HEAPU64 \
+		,HEAPF32 \
+		,HEAPF64
+	export MAIN_MODULE_LDFLAGS= $(MAIN_MODULE_LDFLAGS_COMMON) \
+		-s ALLOW_TABLE_GROWTH \
+		-sERROR_ON_UNDEFINED_SYMBOLS=0
+
+endif
+
+export MAIN_MODULE_CFLAGS= $(CFLAGS_BASE) \
+	-Wall \
+	-Wno-warn-absolute-paths \
+	-Werror=unused-variable \
+	-Werror=sometimes-uninitialized \
+	-Werror=int-conversion \
+	-Werror=incompatible-pointer-types \
+	-Werror=unused-result \
+	-mreference-types \
+	-fdefer-ts \
+	-I$(PYTHONINCLUDE) \
+	-I$(PYTHONINCLUDE)/..
+
+.output_vars:
+	set

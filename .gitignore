@@ -41,3 +41,10 @@ Thumbs.db
 third_party/**/*.exe
 third_party/**/*.dmg
 third_party/**/*.zip
+
+# 例外：`build/` 是上游源码里构建脚本的目录名，不是本项目的编译产物；
+# SQLite 的 zip 是官方「完整 C 源码分发包」，用来自己编 sqlite3.wasm。
+# 两者都是"以后下载不到还能重建"的必要输入，必须入库。
+!third_party/**/build/
+!third_party/**/build/**
+!third_party/sqlite-wasm/sqlite-src-3540100.zip

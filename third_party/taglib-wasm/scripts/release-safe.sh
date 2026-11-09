@@ -1,0 +1,746 @@
+#!/bin/bash
+set -euo pipefail
+
+# Safe Release Script for TagLib-Wasm
+# Runs the gates, bumps and pushes the version, waits for CI on that commit, and
+# then dispatches the publish workflow. The tag and the GitHub release are
+# created by that workflow's finalize job, only after JSR, npm and GitHub
+# Packages all carry the version (taglib-rkx0).
+#
+# Usage:
+#   pnpm run release                       # Auto-increment patch version (0.0.1)
+#   pnpm run release -- 2.3.4              # Set specific version
+#   SKIP_PUBLISH_WATCH=1 pnpm run release  # Do not wait for the publish result
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Function to print colored output
+print_step() {
+    echo -e "${BLUE}==>${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}✓${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}✗${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}⚠${NC} $1"
+}
+
+# Put the pinned Emscripten on PATH for this run.
+#
+# Two traps this closes, both hit during the 2.3.1 release:
+#   * `build/emsdk` (the emsdk ROOT) on PATH breaks the native task runner's
+#     child spawn: the pre-commit hook's `vpr static` fails with
+#     "env: unknown error: execvp failed" (exit 126) on any cache miss — and a
+#     release always causes one, because the CHANGELOG retitle changes a task
+#     input. emsdk_env.sh exports exactly that root, so it must not be sourced
+#     here; add only the toolchain directories.
+#   * An emcc that is not the pin (installed-but-never-activated, or a Homebrew
+#     build shadowing it) produces a wasm that differs from the committed one,
+#     which surfaces two steps later at verify_wasm_freshness with a message
+#     that blames the binary. Assert the active version up front instead.
+setup_pinned_toolchain() {
+    local root emsdk pin active node_bin python_bin
+    root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+    emsdk="$root/build/emsdk"
+
+    # The pin's single source of truth for developers is the installer. An
+    # unreadable pin is its own error: nothing can be asserted without it, and a
+    # bare assignment would abort here with no output at all under
+    # `set -euo pipefail` (pipefail makes the grep's no-match failure the
+    # assignment's).
+    pin=$(grep -oE 'emsdk install [0-9]+\.[0-9]+\.[0-9]+' "$root/build/setup-dev-env.sh" 2>/dev/null |
+        head -1 | awk '{print $3}' || true)
+    if [ -z "$pin" ]; then
+        print_error "Could not read the emsdk pin from build/setup-dev-env.sh"
+        print_warning "Expected a line like: ./emsdk install <version>"
+        exit 1
+    fi
+
+    if [ ! -x "$emsdk/upstream/emscripten/emcc" ]; then
+        print_error "The pinned Emscripten SDK is not installed and activated at build/emsdk"
+        print_warning "Install and activate it: (cd build/emsdk && ./emsdk install $pin && ./emsdk activate $pin)"
+        print_warning "Do not source emsdk_env.sh for this: it puts the emsdk root on PATH (see above)."
+        exit 1
+    fi
+
+    # python first: emcc is python-driven and requires >= 3.10 (the system python
+    # is often older). The bundled node goes last, never first — prepending it
+    # would shadow the developer's node/npm/npx for the entire release, hook
+    # included, which is not this function's business.
+    node_bin=$(ls -d "$emsdk"/node/*/bin 2>/dev/null | tail -1 || true)
+    python_bin=$(ls -d "$emsdk"/python/*/bin 2>/dev/null | tail -1 || true)
+    PATH="$emsdk/upstream/emscripten${python_bin:+:$python_bin}:$PATH${node_bin:+:$node_bin}"
+    export PATH
+
+    active=$(emcc --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+    if [ -z "$active" ]; then
+        print_error "emcc exists at $emsdk but did not report a version — the SDK looks half-installed"
+        print_warning "Activate it — (cd build/emsdk && ./emsdk activate $pin) — then re-run."
+        exit 1
+    fi
+    if [ "$active" != "$pin" ]; then
+        print_error "Active emcc is $active, but this repository pins $pin"
+        print_warning "Activate the pin — (cd build/emsdk && ./emsdk activate $pin) — then re-run."
+        exit 1
+    fi
+    print_success "Emscripten $active active from build/emsdk (pin $pin)"
+}
+
+# Function to check if we're on main branch
+check_main_branch() {
+    # Split from the assignment: `local x=$(…)` returns local's own status, so a
+    # failing `git rev-parse` used to fall through to the "not on main" prompt with
+    # an empty branch name instead of failing.
+    local current_branch
+    current_branch=$(git rev-parse --abbrev-ref HEAD) || exit 1
+    if [[ "$current_branch" != "main" ]]; then
+        print_error "Not on main branch. Current branch: $current_branch"
+        print_warning "Releases should be created from the main branch."
+        read -p "Continue anyway? (y/N) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    fi
+}
+
+# Function to check for uncommitted changes
+check_clean_working_tree() {
+    if ! git diff-index --quiet HEAD --; then
+        print_error "Working tree is not clean. Please commit or stash your changes."
+        git status --short
+        exit 1
+    fi
+}
+
+# Function to check if local is up to date with remote
+check_up_to_date() {
+    print_step "Fetching latest changes from remote..."
+    git fetch origin main
+
+    # Both split from their assignments (`local x=$(…)` masks the status), so a
+    # failed `git rev-parse` aborts instead of silently comparing empty strings —
+    # which previously made the two look equal and passed the check.
+    local LOCAL
+    LOCAL=$(git rev-parse HEAD) || exit 1
+    local REMOTE
+    REMOTE=$(git rev-parse origin/main) || exit 1
+
+    if [[ "$LOCAL" != "$REMOTE" ]]; then
+        print_error "Local branch is not up to date with origin/main"
+        print_warning "Run 'git pull origin main' to update"
+        exit 1
+    fi
+}
+
+# Function to run comprehensive tests
+run_tests() {
+    print_step "Running comprehensive test suite..."
+
+    # Run format check
+    print_step "Checking code formatting..."
+    if ! pnpm exec vp fmt --check > /dev/null 2>&1; then
+        print_error "Code formatting check failed"
+        print_warning "Run 'pnpm exec vp fmt' to fix formatting"
+        exit 1
+    fi
+    print_success "Code formatting check passed"
+
+    # Run lint
+    print_step "Running linter..."
+    if ! pnpm exec vp lint --type-aware > /dev/null 2>&1; then
+        print_error "Linting failed"
+        print_warning "Fix linting errors before releasing"
+        exit 1
+    fi
+    print_success "Linting passed"
+
+    # Run type check
+    print_step "Running type check..."
+    if ! pnpm exec tsc --noEmit -p tsconfig.check.json > /dev/null 2>&1; then
+        print_error "Type checking failed"
+        exit 1
+    fi
+    print_success "Type checking passed"
+
+    # Run tests
+    print_step "Running test suite..."
+    if ! pnpm exec vp test; then
+        print_error "Tests failed"
+        exit 1
+    fi
+    print_success "All tests passed"
+
+    # Check if build works
+    print_step "Verifying build process..."
+    if ! pnpm run build:release > /dev/null 2>&1; then
+        print_error "Build failed"
+        exit 1
+    fi
+    print_success "Build successful"
+}
+
+# Function to verify WASM binaries are fresh
+verify_wasm_freshness() {
+    print_step "Verifying WASM binaries are up to date..."
+
+    # After build, Emscripten wasm in build/ should match what's committed
+    if ! git diff --quiet -- build/taglib-web.wasm; then
+        print_error "build/taglib-web.wasm differs from the committed binary!"
+        print_warning "Committed build/*.wasm are CI distribution artifacts — never commit a local rebuild."
+        print_warning "setup_pinned_toolchain already asserted the pinned emcc is active, so this is real"
+        print_warning "drift, not a PATH accident. Restore the artifact and investigate before releasing:"
+        print_warning "  git checkout -- build/taglib-web.wasm"
+        exit 1
+    fi
+    print_success "build/taglib-web.wasm matches fresh build"
+
+    # Same check for the WASI binary. `pnpm run build:release` now rebuilds both
+    # backends, so a stale committed binary shows up as a dirty working tree.
+    #
+    # This replaces an older cmp against dist/wasi/taglib-wasi.wasm, which
+    # could never fail: build-wasi.sh writes build/ and dist/wasi/ from the
+    # same run, so it compared a file to its own copy. Worse, when dist/wasi/
+    # was absent it fell through to an exists-and-over-100KB warning — so a
+    # WASI binary built from an older lib/taglib passed silently (taglib-mpw).
+    if [ ! -f build/taglib-wasi.wasm ]; then
+        print_error "build/taglib-wasi.wasm is missing!"
+        print_warning "Run: pnpm run build:wasm:wasi"
+        exit 1
+    fi
+    # The WASI reference binary is the CI/Linux build: wasi-sdk's clang emits
+    # different bytes per host platform (taglib-peml), so a macOS rebuild can
+    # never match the committed reference. CI's byte-compare gate is the
+    # authority (release waits for CI green before tagging), so the local
+    # compare only applies on Linux hosts.
+    if [[ "$(uname -s)" == "Linux" ]]; then
+        if ! git diff --quiet -- build/taglib-wasi.wasm; then
+            print_error "build/taglib-wasi.wasm differs from the committed binary!"
+            print_warning "Committed build/*.wasm are CI distribution artifacts — never commit a local rebuild."
+            print_warning "This reference is the CI/Linux build, so a local difference on Linux is real drift."
+            print_warning "Restore and investigate:  git checkout -- build/taglib-wasi.wasm"
+            exit 1
+        fi
+        print_success "build/taglib-wasi.wasm matches fresh build"
+    else
+        print_warning "Skipping local WASI byte-compare on $(uname -s) — the committed"
+        print_warning "reference is the CI/Linux build; CI validates freshness before tagging."
+    fi
+}
+
+# Function to run package publishing preflight checks
+run_preflight_checks() {
+    print_step "Running package publishing preflight checks..."
+
+    # Registry distribution guards. The npm one asserts the package.json
+    # `files` allowlist and the packed tarball; the JSR one dry-runs the
+    # publish and pins the file set jsr.json would ship.
+    print_step "Verifying npm package contents guard..."
+    if ! bash scripts/check-package-files.sh > /dev/null 2>&1; then
+        print_error "Package files guard failed"
+        print_warning "Run 'bash scripts/check-package-files.sh' to see details"
+        exit 1
+    fi
+    print_success "Package files guard passed"
+
+    print_step "Verifying JSR package contents guard..."
+    if ! bash scripts/check-jsr-package-files.sh > /dev/null 2>&1; then
+        print_error "JSR package files guard failed"
+        print_warning "Run 'bash scripts/check-jsr-package-files.sh' to see details"
+        exit 1
+    fi
+    print_success "JSR package files guard passed"
+
+    # The npm checks below lint the packed npm tarball, so dist/ must hold a
+    # complete package first. `pnpm run build:release` above does not produce one:
+    # its build:js is `vp pack`, which emits .js only — the .d.ts
+    # files come from tsc, which lives in the `build:ts` script. Without this step
+    # the checks lint whatever stale dist/ happened to be lying around (and
+    # fail outright once it is cleaned). The wasm is copied rather than
+    # rebuilt; `pnpm run build:release` already produced fresh binaries.
+    print_step "Building npm package artifacts..."
+    if ! (pnpm run build:clean && pnpm run build:copy-wasm && pnpm run build:ts \
+        && pnpm run postbuild) > /dev/null 2>&1; then
+        print_error "npm package build failed"
+        print_warning "Run 'pnpm run build' to see details"
+        exit 1
+    fi
+    print_success "npm package artifacts built"
+
+    # publint (verify package.json)
+    print_step "Running publint..."
+    # `pnpm exec` never fetches — it resolves only from the local install — so a
+    # missing local copy cannot be substituted from a cache with a different
+    # version. Require the pinned bins to be present rather than trusting resolution.
+    for tool in publint attw; do
+        if [ ! -x "node_modules/.bin/$tool" ]; then
+            print_error "node_modules/.bin/$tool is missing — run 'pnpm install' first"
+            exit 1
+        fi
+    done
+    if ! pnpm exec publint > /dev/null 2>&1; then
+        print_error "publint failed"
+        print_warning "Run 'pnpm exec publint' to see details"
+        exit 1
+    fi
+    print_success "publint passed"
+
+    # arethetypeswrong (verify type exports)
+    print_step "Checking TypeScript type exports..."
+    if ! pnpm exec attw --pack --profile esm-only > /dev/null 2>&1; then
+        print_error "arethetypeswrong check failed"
+        print_warning "Run 'pnpm exec attw --pack --profile esm-only' to see details"
+        exit 1
+    fi
+    print_success "Type exports check passed"
+
+    # NPM pack dry-run (verify package contents). The `if !` form is required:
+    # `local x=$(…)` followed by `[[ $? -ne 0 ]]` reads local's status, which made
+    # this failure branch dead — an npm pack failure could not fail the preflight.
+    print_step "Verifying NPM package contents..."
+    local pack_output
+    if ! pack_output=$(npm pack --dry-run 2>&1); then
+        print_error "NPM pack dry-run failed"
+        exit 1
+    fi
+    # Check for essential files
+    if ! echo "$pack_output" | grep -q "dist/index.js"; then
+        print_error "dist/index.js missing from NPM package"
+        exit 1
+    fi
+    if ! echo "$pack_output" | grep -q "dist/index.d.ts"; then
+        print_error "dist/index.d.ts missing from NPM package"
+        exit 1
+    fi
+    print_success "NPM package contents verified"
+}
+
+# Function to check version sync (delegates to sync-version.ts for the version files).
+# Human-facing lines go to stderr and the bare version to stdout, so the caller can
+# capture the version while the release log still shows the gate ran and passed.
+check_version_sync() {
+    print_step "Checking version synchronization..." >&2
+
+    if ! pnpm exec tsx scripts/sync-version.ts check >&2; then
+        print_error "Version mismatch detected!" >&2
+        print_warning "Run 'pnpm exec tsx scripts/sync-version.ts set <version>' to synchronize all version references" >&2
+        exit 1
+    fi
+
+    local pkg_version
+    pkg_version=$(node -p "require('./package.json').version")
+    print_success "Versions are synchronized: $pkg_version" >&2
+    echo "$pkg_version"
+}
+
+# Function to update versions (delegates to sync-version.ts for the version files)
+update_versions() {
+    local new_version=$1
+
+    print_step "Updating version to $new_version..."
+
+    if ! pnpm exec tsx scripts/sync-version.ts set "$new_version"; then
+        print_error "Failed to update versions"
+        exit 1
+    fi
+
+    cut_changelog_section "$new_version"
+}
+
+# Retitle the CHANGELOG's "## Unreleased" heading to "## <version>".
+#
+# The ledger is local and untracked, so it never reaches the publish workflow's
+# checkout: the release body travels with the dispatch instead. This retitle is
+# what the section reader below looks for ("## <version>"), and with no such
+# heading the dispatch carries no notes and the release falls back to a
+# one-line body plus a compare link (publish-everywhere.yml, "Publish GitHub
+# release"). That retitle used to be manual — fc58c99 did it by hand for 2.3.0 —
+# and nothing enforced it.
+#
+# Print the body of a version's section (heading excluded), which the dispatch
+# sends as the workflow's `notes` input. Same heading rule as the retitle:
+# "## 2.2.3" must not match "## 2.2.30".
+read_changelog_section() {
+    local version=$1
+    local changelog="CHANGELOG.md"
+
+    [ -f "$changelog" ] || return 0
+
+    awk -v ver="$version" '
+        $0 == "## " ver || index($0, "## " ver " ") == 1 { found = 1; next }
+        found && /^## / { exit }
+        found { print }
+    ' "$changelog"
+}
+
+cut_changelog_section() {
+    local new_version=$1
+    local changelog="CHANGELOG.md"
+
+    if [ ! -f "$changelog" ]; then
+        print_warning "$changelog not found — the release body will fall back to a compare link"
+        return 0
+    fi
+
+    # Exact heading, or the heading followed by a space (never "## 2.3.10" for
+    # "## 2.3.1") — the same rule the workflow's extractor applies.
+    if grep -qE "^## ${new_version//./\\.}( |$)" "$changelog"; then
+        print_success "CHANGELOG already has a '## $new_version' section"
+        return 0
+    fi
+
+    if ! grep -q "^## Unreleased$" "$changelog"; then
+        print_warning "CHANGELOG has no '## Unreleased' heading to cut for $new_version"
+        print_warning "The release body will fall back to a compare link — add the section first"
+        return 0
+    fi
+
+    # awk, not sed: the heading is a literal string, never a pattern.
+    local tmp
+    tmp=$(mktemp)
+    awk -v ver="$new_version" \
+        '$0 == "## Unreleased" { print "## " ver; next } { print }' \
+        "$changelog" > "$tmp"
+    mv "$tmp" "$changelog"
+    print_success "CHANGELOG: '## Unreleased' retitled to '## $new_version'"
+}
+
+# Function to wait for remote CI to pass on the current HEAD commit.
+# Required legs must succeed; flaky legs (Windows/macOS) are tolerated.
+# This blocks the release flow so we never tag a commit that hasn't validated.
+wait_for_remote_ci() {
+    local commit_sha
+    commit_sha=$(git rev-parse HEAD)
+
+    print_step "Waiting for remote CI to validate ${commit_sha:0:7}..."
+    print_warning "This typically takes 5–10 minutes; do not interrupt."
+
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+    if ! bash "${script_dir}/wait-for-ci.sh" "$commit_sha"; then
+        print_error "Remote CI failed for ${commit_sha:0:7}"
+        print_warning "The version-bump commit is on main, but no tag was created."
+        print_warning "Fix the failures, push another commit, and re-run the release."
+        exit 1
+    fi
+    print_success "Remote CI passed — safe to publish"
+}
+
+# A GitHub Environment with required reviewers pauses the publish run at the job
+# that references it. The run has not failed — it is waiting for a human — and
+# `gh run watch` below waits with it for as long as that takes (it has no timeout
+# of its own), so without this notice the pause is indistinguishable from a hung
+# job. Announced on every path that stops waiting: before the watch, before the
+# --skip-watch early return, and on the run-not-appeared return, which are the
+# three ways this script can leave a release sitting on a human instead of on CI.
+#
+# Both helpers are silent no-ops when there is no gate: the probe is a single
+# read-only API call (read access suffices) and a warning about an approval that
+# does not exist is how real warnings get ignored.
+release_environment_rules() {
+    # Protection-rule types on the 'release' environment, comma-joined. Empty when
+    # the environment does not exist yet, carries no rules, or the API is
+    # unreadable — each of which means "no approval gate to announce".
+    gh api "repos/CharlesWiltgen/TagLib-Wasm/environments" \
+        --jq '[.environments[] | select(.name == "release") | .protection_rules[].type] | join(",")' \
+        2>/dev/null || true
+}
+
+# Print what the approval pause looks like and how to clear it. $1 is the run id
+# — empty when the run has not appeared yet, in which case the guidance points at
+# the workflow's run list instead of a run the caller does not have. $2 is the
+# rules string from release_environment_rules, passed in so the caller probes
+# once and reuses the answer.
+announce_approval_gate() {
+    local run_id=${1:-}
+    [[ "${2:-}" == *required_reviewers* ]] || return 0
+
+    print_warning "The 'release' environment requires a reviewer: the run pauses before it publishes"
+    print_warning "anything to npm until someone approves that deployment. A pause is not a failure."
+    if [ -n "$run_id" ]; then
+        print_warning "Approve in the UI: https://github.com/CharlesWiltgen/TagLib-Wasm/actions/runs/$run_id"
+    else
+        print_warning "Approve in the UI: open the run for this version at"
+        print_warning "  https://github.com/CharlesWiltgen/TagLib-Wasm/actions/workflows/publish-everywhere.yml"
+    fi
+    print_warning "  (the run page shows 'Review deployments'; the approval names the workflow, ref and"
+    print_warning "  commit — check they are the intended release)"
+    if [ -n "$run_id" ]; then
+        print_warning "Or from the terminal (a required reviewer's own credentials; taken from the REST docs):"
+        print_warning "  gh api repos/CharlesWiltgen/TagLib-Wasm/actions/runs/$run_id/pending_deployments"
+        print_warning "  gh api -X POST repos/CharlesWiltgen/TagLib-Wasm/actions/runs/$run_id/pending_deployments \\"
+        print_warning "    --input - <<< '{\"environment_ids\":[<id from the GET above>],\"state\":\"approved\",\"comment\":\"approved\"}'"
+    fi
+}
+
+# Function to dispatch the publish workflow and report the outcome
+publish_release() {
+    local version=$1
+    local tag_name="v${version}"
+
+    # Check if tag already exists
+    if git rev-parse "$tag_name" >/dev/null 2>&1; then
+        print_error "Tag $tag_name already exists"
+        exit 1
+    fi
+
+    # Commit version changes (skip if already at target version). The list must
+    # name every file sync-version.ts writes (jsr.json included — CI's
+    # check-jsr-package-files.sh asserts it matches package.json, so a bump that
+    # leaves it behind fails Package Compatibility).
+    git add package.json src/version.ts jsr.json
+    if git diff --cached --quiet; then
+        print_warning "Version already at $version, skipping commit"
+    else
+        print_step "Committing version changes..."
+        git commit -m "chore: bump version to $version"
+        print_success "Version bump committed"
+    fi
+
+    # Push commit FIRST so CI runs against the exact commit we're about to tag.
+    print_step "Pushing version bump to remote..."
+    git push origin main
+    print_success "Version bump pushed to remote"
+
+    # Block until remote CI passes on this commit. Never tag an unvalidated commit.
+    wait_for_remote_ci
+
+    # Verify the npm publish path before tagging. A missing or mismatched
+    # trusted-publisher entry fails the npm leg of publish-everywhere.yml AFTER
+    # the tag and GitHub release exist (2.2.3, taglib-ljh6). An unverifiable
+    # check (no npm session, or the 2FA prompt) warns and continues.
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    print_step "Verifying the npm publish path..."
+    if ! bash "${script_dir}/check-publish-access.sh"; then
+        print_error "npm publish path is broken — fix it before tagging"
+        exit 1
+    fi
+
+    # Hand the release to CI. The tag and the GitHub release are created by the
+    # publish workflow's finalize job, and only after every registry has the
+    # version (taglib-rkx0): tagging locally publishes a release that a failed
+    # publish leg then strands on some registries.
+    #
+    # The release body is the ledger's section for this version, read here
+    # because the ledger is local and never reaches the CI checkout.
+    local notes dispatch_args
+    notes=$(read_changelog_section "$version")
+    dispatch_args=(-f "version=$version")
+    if [ -n "$notes" ]; then
+        dispatch_args+=(-f "notes=$notes")
+    else
+        print_warning "CHANGELOG has no '## $version' section — the release body falls back to a compare link"
+    fi
+
+    print_step "Dispatching the publish workflow for $version..."
+    if ! gh workflow run publish-everywhere.yml "${dispatch_args[@]}"; then
+        print_error "Could not dispatch the publish workflow"
+        print_warning "Dispatch it manually: gh workflow run publish-everywhere.yml -f version=$version -f notes=\"\$(the version's CHANGELOG section)\""
+        exit 1
+    fi
+
+    # Find the run we just queued: match the commit whose CI we waited on.
+    local commit_sha run_id=""
+    commit_sha=$(git rev-parse HEAD)
+
+    # Probed before the polling loop so every return path below can say whether
+    # an approval gate is on the critical path: the run-not-appeared path returns
+    # without a run id, and its operator is the one least likely to learn by
+    # other means that the release may be sitting on a human.
+    local gate_rules
+    gate_rules=$(release_environment_rules)
+
+    for _ in $(seq 1 12); do
+        run_id=$(gh run list --workflow=publish-everywhere.yml --limit 10 \
+            --json databaseId,headSha,event \
+            --jq "[.[] | select(.headSha == \"$commit_sha\" and .event == \"workflow_dispatch\")][0].databaseId // empty" 2>/dev/null || true)
+        [ -n "$run_id" ] && break
+        sleep 5
+    done
+
+    if [ -z "$run_id" ]; then
+        print_warning "Dispatched, but the run has not appeared yet."
+        print_warning "Monitor: https://github.com/CharlesWiltgen/TagLib-Wasm/actions/workflows/publish-everywhere.yml"
+        announce_approval_gate "" "$gate_rules"
+        return 0
+    fi
+
+    print_success "Publish run queued: https://github.com/CharlesWiltgen/TagLib-Wasm/actions/runs/$run_id"
+    print_warning "The workflow tags and releases v$version only after JSR, npm and GitHub Packages have it."
+    announce_approval_gate "$run_id" "$gate_rules"
+
+    if [ "${SKIP_PUBLISH_WATCH:-}" = "1" ]; then
+        print_warning "SKIP_PUBLISH_WATCH=1 — not waiting for the publish result"
+        if [[ "$gate_rules" == *required_reviewers* ]]; then
+            print_warning "That run still needs its deployment approved before the npm leg can publish;"
+            print_warning "nothing here will wait for it, and the release sits where it is until someone does."
+        fi
+        return 0
+    fi
+
+    print_step "Waiting for the publish result..."
+    if ! gh run watch "$run_id" --exit-status; then
+        print_error "Publish workflow failed — no release was created"
+        print_warning "The run's step summary says which legs published. Note the two cases it covers:"
+        print_warning "  • a post-publish verification failure blocks the tag while a version may already"
+        print_warning "    be live on npm (unpublish is restricted to a short window)"
+        print_warning "  • a tag conflict means a v$version tag already exists at another commit, so the"
+        print_warning "    registries may carry the version with no release to show for it"
+        print_warning "Read the summary, then either: gh run rerun $run_id --failed — or, for a tag"
+        print_warning "conflict, resolve the tag first; re-running alone would fail identically."
+        exit 1
+    fi
+
+    # A green run is not proof: the workflow's should-publish gate skips every
+    # publish job (and finalize) when npm already carries the version, and a
+    # skipped job does not fail a run. Verify the release object itself.
+    if gh release view "v$version" >/dev/null 2>&1; then
+        echo
+        print_success "🎉 v$version published to JSR, npm and GitHub Packages; tag and GitHub release created"
+    else
+        print_error "The run finished green but no GitHub release exists for v$version"
+        print_warning "That is what a fully skipped run looks like: the version is already on npm, so"
+        print_warning "every publish leg and finalize were skipped (expected idempotence — nothing to do)."
+        print_warning "If some registry is actually missing the version, re-run only the failed legs:"
+        print_warning "  gh run rerun $run_id --failed   (in the fully-skipped case there are none to re-run)"
+        print_warning "Run: https://github.com/CharlesWiltgen/TagLib-Wasm/actions/runs/$run_id"
+        exit 1
+    fi
+}
+
+# Main script
+main() {
+    echo "🚀 TagLib-Wasm Safe Release Script"
+    echo "=================================="
+    echo
+
+    setup_pinned_toolchain
+
+    # Flags, in any order, before the optional version argument.
+    while [[ "${1:-}" == --* ]]; do
+        case "$1" in
+            --skip-watch)
+                # Dispatch the publish workflow without waiting for the result.
+                # Exposed as `pnpm run release:quick`; every gate still runs (the
+                # old release:quick skipped them and then tagged before
+                # publishing, which is the 2.2.3 failure shape this script exists
+                # to prevent — review finding SEC-06).
+                SKIP_PUBLISH_WATCH=1
+                ;;
+            --dry-run)
+                # Run every gate with the real commands, then stop before any
+                # version bump, commit, push, CI wait or dispatch. Skips exactly:
+                # check_main_branch, check_clean_working_tree, check_up_to_date,
+                # the version prompt, update_versions, the post-update test
+                # re-run, and publish_release.
+                DRY_RUN=1
+                ;;
+            *)
+                print_error "Unknown flag: $1"
+                print_warning "Supported flags: --dry-run, --skip-watch"
+                exit 1
+                ;;
+        esac
+        shift
+    done
+
+    # Get version argument or auto-increment
+    local new_version=""
+
+    if [[ $# -eq 0 ]]; then
+        # No version specified, auto-increment patch version
+        local current_version
+        current_version=$(node -p "require('./package.json').version")
+
+        # Parse version components
+        IFS='.' read -ra VERSION_PARTS <<< "$current_version"
+        local major="${VERSION_PARTS[0]}"
+        local minor="${VERSION_PARTS[1]}"
+        local patch="${VERSION_PARTS[2]}"
+        
+        # Increment patch version
+        patch=$((patch + 1))
+        new_version="${major}.${minor}.${patch}"
+        
+        print_step "Auto-incrementing version: $current_version → $new_version"
+    else
+        new_version=$1
+        
+        # Validate version format (semver with optional pre-release)
+        if ! [[ "$new_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-.+)?$ ]]; then
+            print_error "Invalid version format: $new_version"
+            print_warning "Version must be in format X.Y.Z or X.Y.Z-pre (e.g., 2.2.5, 1.0.0-beta.5)"
+            exit 1
+        fi
+    fi
+
+    # Pre-release checks. A dry run runs no commit, push or CI wait, so branch
+    # and remote state cannot affect its outcome — and requiring main + a clean
+    # tree would make it unusable on the feature branch it is verified from.
+    if [[ "${DRY_RUN:-}" != "1" ]]; then
+        print_step "Running pre-release checks..."
+        check_main_branch
+        check_clean_working_tree
+        check_up_to_date
+    fi
+
+    # Check current version synchronization. The declaration is split from the
+    # assignment deliberately: `local x=$(cmd)` returns local's own status, which
+    # would mask a failing gate and let the release continue (this repo's "check
+    # that cannot fail" class — taglib review C14).
+    local current_version
+    current_version=$(check_version_sync) || exit 1
+
+    if [[ "${DRY_RUN:-}" == "1" ]]; then
+        run_tests
+        verify_wasm_freshness
+        run_preflight_checks
+        print_success "Dry run complete — all release gates passed (no commit, push or dispatch)."
+        exit 0
+    fi
+
+    # Show version change
+    echo
+    print_step "Version change: $current_version → $new_version"
+    read -p "Continue with this version change? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        print_warning "Release cancelled"
+        exit 0
+    fi
+
+    # Run comprehensive tests (includes build)
+    run_tests
+
+    # Verify WASM binaries match what's committed
+    verify_wasm_freshness
+
+    # Run preflight checks for package publishing
+    run_preflight_checks
+
+    # Update versions
+    update_versions "$new_version"
+
+    # Run tests again after version update
+    print_step "Running tests after version update..."
+    run_tests
+
+    # Publish: CI owns the tag and the GitHub release
+    publish_release "$new_version"
+}
+
+# Run main function
+main "$@"

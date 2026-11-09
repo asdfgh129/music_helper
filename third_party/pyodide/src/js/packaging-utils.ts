@@ -1,0 +1,73 @@
+/**
+ * Utility functions for packaging.
+ * This file contains some TypeScript port of Python's packaging library and some other functions.
+ **/
+
+const canonicalizeNameRegex = /[-_.]+/g;
+
+/**
+ * Normalize a package name. Port of Python's packaging.utils.canonicalize_name.
+ * @param name The package name to normalize.
+ * @returns The normalized package name.
+ * @private
+ */
+export function canonicalizePackageName(name: string): string {
+  return name.replace(canonicalizeNameRegex, "-").toLowerCase();
+}
+
+// Regexp for a bare package name, per the PEP 503 name format
+const packageNameRegex = /^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+
+/**
+ * Check whether a string is a bare package name, as opposed to a requirement specifier.
+ * @param name The string to check.
+ * @returns Whether the string is a valid bare package name.
+ * @private
+ */
+export function isValidPackageName(name: string): boolean {
+  return packageNameRegex.test(name);
+}
+
+type ParsedPackageData = {
+  name: string;
+  version: string;
+  fileName: string;
+};
+
+// Regexp for validating package name and URI
+const packageUriRegex = /^.*?([^\/]*)\.whl$/;
+
+/**
+ * Extract package name from a wheel URI.
+ * TODO: validate if the URI is a valid wheel URI.
+ * @param packageUri The wheel URI.
+ * @returns The package name.
+ * @private
+ */
+export function uriToPackageData(
+  packageUri: string,
+): ParsedPackageData | undefined {
+  const match = packageUriRegex.exec(packageUri);
+  if (match) {
+    let wheelName = match[1].toLowerCase().split("-");
+    return {
+      name: wheelName[0],
+      version: wheelName[1],
+      fileName: wheelName.join("-") + ".whl",
+    };
+  }
+}
+
+/**
+ * @private
+ */
+export function base16ToBase64(b16: string): string {
+  return btoa(
+    b16
+      .match(/\w{2}/g)!
+      .map(function (a) {
+        return String.fromCharCode(parseInt(a, 16));
+      })
+      .join(""),
+  );
+}

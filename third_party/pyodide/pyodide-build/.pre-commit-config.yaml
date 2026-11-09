@@ -1,0 +1,75 @@
+default_language_version:
+  python: "3.12"
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: "v6.0.0"
+    hooks:
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-yaml
+        exclude: .clang-format
+      - id: debug-statements
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: trailing-whitespace
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: "v0.16.10"
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pygrep-hooks
+    rev: "v1.10.0"
+    hooks:
+      - id: python-use-type-annotations
+      - id: rst-backticks
+      - id: rst-directive-colons
+      - id: rst-inline-touching-normal
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: "v0.11.0.1-1"
+    hooks:
+      - id: shellcheck
+        exclude: ^(integration_tests/scripts/pyodide_venv_test.sh)$
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: "v2.4.3"
+    hooks:
+      - id: codespell
+        args:
+          [
+            "--ignore-words-list",
+            "ags,aray,asend,ba,classs,crate,falsy,feld,inflight,lits,nd,slowy,te,oint,conveniant",
+          ]
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: "v2.4.0"
+    hooks:
+      - id: mypy
+        exclude: (.*test.*|pyodide_build/vendor)
+        args: []
+        additional_dependencies: &mypy-deps
+          - packaging
+          - types-docutils
+          - types-pyyaml
+          - types-setuptools
+          - types-requests
+          - numpy
+          - build
+          - pytest
+          - attrs
+          - cattrs
+          - unearth
+          - resolvelib
+          - rich
+          - auditwheel_emscripten~=0.3.0
+          - pyodide-lock~=0.2.0
+          - virtualenv
+          - sphinx
+
+ci:
+  autoupdate_schedule: "quarterly"

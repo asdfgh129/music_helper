@@ -1,0 +1,728 @@
+# Common functions shared by other modules.
+# Notes for contributors:
+#   This module should not import any other modules from pyodide-build except logger to avoid circular imports.
+
+import contextlib
+import hashlib
+import logging
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import textwrap
+import time
+import tomllib
+import warnings
+import zipfile
+from collections import deque
+from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from functools import cache
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import Any, NoReturn
+from urllib.parse import urlparse
+from urllib.request import url2pathname
+from zipfile import ZipFile
+
+import platformdirs
+import requests
+from packaging.tags import Tag
+from packaging.utils import canonicalize_name as canonicalize_package_name
+from packaging.utils import parse_wheel_filename
+
+from pyodide_build.logger import logger
+
+IS_WIN = sys.platform == "win32"
+
+
+def _xbuildenv_installation_id() -> str:
+    package_dir = Path(__file__).resolve().parent
+    installation_scope = f"{Path(sys.prefix).resolve()}\0{package_dir}"
+    return hashlib.sha256(installation_scope.encode()).hexdigest()[:12]
+
+
+def xbuildenv_dirname() -> str:
+    return f".pyodide-xbuildenv-{_xbuildenv_installation_id()}"
+
+
+@cache
+def default_xbuildenv_path() -> Path:
+    """
+    Return the default path to the cross-build environment directory. This directory
+    is used when no path is provided to `pyodide xbuildenv`'s subcommands.
+
+    The search order for determining the path is as follows:
+    1. the PYODIDE_XBUILDENV_PATH environment variable if set
+    2. the value provided by "pyodide config xbuildenv_path"
+    3. the default location based on platformdirs
+
+    Returns
+    -------
+    Path
+        The path to the cross-build environment directory
+    """
+
+    # 1. check "pyodide config xbuildenv_path"
+    try:
+        from pyodide_build.build_env import get_host_build_flag
+
+        config_path_str = get_host_build_flag("PYODIDE_XBUILDENV_PATH")
+
+        # we can skip to fallback options if the config path is empty
+        # as Path("") returns Path("."), which is not what we want.
+        if config_path_str:
+            config_path = Path(config_path_str).resolve()
+
+            if _has_write_access(config_path):
+                return config_path
+            else:
+                logger.error(
+                    "Error: the directory specified in pyproject.toml or PYODIDE_XBUILDENV_PATH (%s) is not writable. ",
+                    config_path,
+                )
+
+    except Exception as e:
+        logger.error("Error reading xbuildenv_path from config system: %s", e)
+
+    # 2. use default locations from platformdirs and elsewhere
+    dirname = xbuildenv_dirname()
+    candidates = []
+
+    # 2.1. default cache directory
+    candidates.append(Path(platformdirs.user_cache_dir("pyodide-build")) / dirname)
+    # 2.2. current working directory
+    candidates.append(Path.cwd() / dirname)
+
+    for candidate in candidates:
+        if _has_write_access(candidate):
+            return candidate
+
+    raise RuntimeError(
+        "Cannot find a writable directory for the cross-build environment. "
+        "Please check if you have write access to the following directories:\n"
+        f"  {', '.join(str(c) for c in candidates)}\n"
+    )
+
+
+def _has_write_access(folder: Path) -> bool:
+    """
+    Checks if the current user has write access to the given folder by creating
+    a file in it.
+    """
+    try:
+        if not folder.exists() and folder.parent != folder:
+            return _has_write_access(folder.parent)
+
+        probe = folder / f".write-probe-{os.urandom(8).hex()}"
+        probe.touch(exist_ok=False)
+        probe.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
+
+def _find_matching_wheels(
+    wheel_paths: Iterable[Path],
+    supported_tags: Sequence[Tag],
+    version: str | None = None,
+) -> Iterator[Path]:
+    """
+    Returns the sequence wheels whose tags match the Pyodide interpreter.
+
+    We don't bother ordering them carefully because we are only hoping to find one.
+
+    Parameters
+    ----------
+    wheel_paths
+        A list of paths to wheels
+    supported_tags
+        A list of tags that the environment supports
+
+    Returns
+    -------
+    The subset of wheel_paths that have tags that match the Pyodide interpreter.
+    """
+    for wheel_path in wheel_paths:
+        _, wheel_version, _, wheel_tags = parse_wheel_filename(wheel_path.name)
+        if version and version != str(wheel_version):
+            continue
+        for supported_tag in supported_tags:
+            if supported_tag in wheel_tags:
+                yield wheel_path
+                break
+
+
+def find_matching_wheel(
+    wheel_paths: Iterable[Path],
+    supported_tags: Sequence[Tag],
+    version: str | None = None,
+) -> Path | None:
+    """
+    Find a matching wheel or raise an error if none is present.
+
+    Parameters
+    ----------
+    wheel_paths
+        A list of paths to wheels
+    supported_tags
+        A list of tags that the environment supports
+
+    Returns
+    -------
+    The subset of wheel_paths that have tags that match the Pyodide interpreter.
+    """
+    result = list(_find_matching_wheels(wheel_paths, supported_tags, version))
+    if not result:
+        return None
+    if len(result) > 1:
+        raise RuntimeError(
+            "Found multiple matching wheels:\n" + "\n".join(w.name for w in result)
+        )
+    return result[0]
+
+
+def parse_top_level_import_name(whlfile: Path) -> list[str] | None:
+    """
+    Parse the top-level import names from a wheel file.
+    """
+
+    if not whlfile.name.endswith(".whl"):
+        raise RuntimeError(f"{whlfile} is not a wheel file.")
+
+    whlzip = zipfile.Path(whlfile)
+
+    def _valid_package_name(dirname: str) -> bool:
+        return all(invalid_chr not in dirname for invalid_chr in ".- ")
+
+    def _has_python_file(subdir: zipfile.Path) -> bool:
+        queue = deque([subdir])
+        while queue:
+            nested_subdir = queue.pop()
+            for subfile in nested_subdir.iterdir():
+                if subfile.is_file() and subfile.name.endswith(".py"):
+                    return True
+                elif subfile.is_dir() and _valid_package_name(subfile.name):
+                    queue.append(subfile)
+
+        return False
+
+    # If there is no top_level.txt file, we will find top level imports by
+    # 1) a python file on a top-level directory
+    # 2) a sub directory with __init__.py
+    # following: https://github.com/pypa/setuptools/blob/d680efc8b4cd9aa388d07d3e298b870d26e9e04b/setuptools/discovery.py#L122
+    top_level_imports = []
+    for subdir in whlzip.iterdir():
+        if subdir.is_file() and subdir.name.endswith(".py"):
+            top_level_imports.append(subdir.name[:-3])
+        elif subdir.is_dir() and _valid_package_name(subdir.name):
+            if _has_python_file(subdir):
+                top_level_imports.append(subdir.name)
+
+    if not top_level_imports:
+        logger.warning(
+            "WARNING: failed to parse top level import name from %s.", whlfile
+        )
+        return None
+
+    return top_level_imports
+
+
+def _environment_substitute_str(
+    string: str, env: Mapping[str, str] | None = None
+) -> str:
+    """
+    Substitute $(VAR) in string with the value of the environment variable VAR.
+
+    Parameters
+    ----------
+    string
+        A string
+
+    env
+        A dictionary of environment variables. If None, use os.environ.
+
+    Returns
+    -------
+    A string with the substitutions applied.
+    """
+    if env is None:
+        env = dict(os.environ)
+
+    def repl(match_: re.Match[str]) -> str:
+        name = match_.group(1)
+        return env.get(name, "")
+
+    return re.sub(r"\$\(([^)]+)\)", repl, string)
+
+
+def environment_substitute_args(
+    args: dict[str, str], env: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """
+    Substitute $(VAR) in args with the value of the environment variable VAR.
+
+    Parameters
+    ----------
+    args
+        A dictionary of arguments
+
+    env
+        A dictionary of environment variables. If None, use os.environ.
+
+    Returns
+    -------
+    A dictionary of arguments with the substitutions applied.
+    """
+    if env is None:
+        env = dict(os.environ)
+    subbed_args = {}
+    for arg, value in args.items():
+        if isinstance(value, str):
+            value = _environment_substitute_str(value, env)
+        subbed_args[arg] = value
+    return subbed_args
+
+
+@contextlib.contextmanager
+def replace_env(build_env: Mapping[str, str]) -> Generator[None, None, None]:
+    old_environ = dict(os.environ)
+    os.environ.clear()
+    os.environ.update(build_env)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(old_environ)
+
+
+def exit_with_stdio(result: subprocess.CompletedProcess[str]) -> NoReturn:
+    if result.stdout:
+        logger.error("  stdout:")
+        logger.error(textwrap.indent(result.stdout, "    "))
+    if result.stderr:
+        logger.error("  stderr:")
+        logger.error(textwrap.indent(result.stderr, "    "))
+    raise SystemExit(result.returncode)
+
+
+def run_command(
+    cmd: Sequence[str | Path],
+    *,
+    text: bool = True,
+    err_msg: str | tuple[Any, ...] | None = None,
+    capture_output: bool = True,
+    **kwargs: Any,
+) -> subprocess.CompletedProcess[str]:
+    """
+    Run command. If it returns a nonzero status code, log an error message and
+    exit.
+    """
+    logger.debug("Running command: %s", " ".join(str(c) for c in cmd))
+
+    result = subprocess.run(
+        cmd, text=text, capture_output=capture_output, check=False, **kwargs
+    )
+
+    if result.returncode == 0:
+        return result
+
+    if err_msg is None:
+        err_msg = ("ERROR: command failed %s", " ".join(str(c) for c in cmd))
+    elif not isinstance(err_msg, tuple):
+        err_msg = ("ERROR: %s", err_msg)
+
+    logger.error(*err_msg)
+    exit_with_stdio(result)
+
+
+def find_missing_executables(executables: list[str]) -> list[str]:
+    return list(filter(lambda exe: shutil.which(exe) is None, executables))
+
+
+def get_num_cores() -> int:
+    """
+    Return the number of CPUs the current process can use.
+    If the number of CPUs cannot be determined, return 1.
+    """
+    from pyodide_build.vendor.loky import cpu_count
+
+    return cpu_count()
+
+
+def _zip_compression(compression_level: int) -> int:
+    """Return the zipfile compression constant for the given compression level."""
+    return zipfile.ZIP_DEFLATED if compression_level > 0 else zipfile.ZIP_STORED
+
+
+def make_zip_archive(
+    archive_path: Path,
+    input_dir: Path,
+    compression_level: int = 6,
+) -> None:
+    """Create a zip archive out of a input folder
+
+    Parameters
+    ----------
+    archive_path
+       Path to the zip file that will be created
+    input_dir
+       input dir to compress
+    compression_level
+       compression level of the resulting zip file.
+    """
+    compression = _zip_compression(compression_level)
+
+    with zipfile.ZipFile(
+        archive_path, "w", compression=compression, compresslevel=compression_level
+    ) as zf:
+        for file in input_dir.rglob("*"):
+            zf.write(file, file.relative_to(input_dir))
+
+
+def repack_zip_archive(archive_path: Path, compression_level: int = 6) -> None:
+    """Repack zip archive with a different compression level"""
+    compression = _zip_compression(compression_level)
+
+    with TemporaryDirectory() as temp_dir:
+        input_path = Path(temp_dir) / archive_path.name
+        shutil.move(archive_path, input_path)
+        with (
+            zipfile.ZipFile(input_path) as fh_zip_in,
+            zipfile.ZipFile(
+                archive_path,
+                "w",
+                compression=compression,
+                compresslevel=compression_level,
+            ) as fh_zip_out,
+        ):
+            for name in fh_zip_in.namelist():
+                fh_zip_out.writestr(name, fh_zip_in.read(name))
+
+
+def _get_sha256_checksum(archive: Path) -> str:
+    """Compute the sha256 checksum of a file
+
+    Parameters
+    ----------
+    archive
+        the path to the archive we wish to checksum
+
+    Returns
+    -------
+    checksum
+         sha256 checksum of the archive
+    """
+    with open(archive, "rb") as fd:
+        return hashlib.file_digest(fd, "sha256").hexdigest()
+
+
+def _format_dep_chain(dep_chain: Sequence[str]) -> str:
+    return " -> ".join(dep.partition(";")[0].strip() for dep in dep_chain)
+
+
+def _format_missing_dependencies(missing: set[tuple[str, ...]]) -> str:
+    return "".join(
+        "\n\t" + dep
+        for deps in missing
+        for dep in (deps[0], _format_dep_chain(deps[1:]))
+        if dep
+    )
+
+
+def unpack_wheel(
+    wheel_path: Path, target_dir: Path | None = None, verbose: bool = True
+) -> None:
+    if target_dir is None:
+        target_dir = wheel_path.parent
+    run_command(
+        [sys.executable, "-m", "wheel", "unpack", wheel_path, "-d", target_dir],
+        capture_output=not verbose,
+        err_msg=("ERROR: Unpacking wheel %s failed", wheel_path.name),
+    )
+
+
+def pack_wheel(
+    wheel_dir: Path, target_dir: Path | None = None, verbose: bool = True
+) -> None:
+    if target_dir is None:
+        target_dir = wheel_dir.parent
+    run_command(
+        [sys.executable, "-m", "wheel", "pack", wheel_dir, "-d", target_dir],
+        capture_output=not verbose,
+        err_msg=("ERROR: Packing wheel %s failed", wheel_dir),
+    )
+
+
+@contextmanager
+def modify_wheel(wheel: Path, verbose: bool = True) -> Iterator[Path]:
+    """Unpacks the wheel into a temp directory and yields the path to the
+    unpacked directory.
+
+    The body of the with block is expected to inspect the wheel contents and
+    possibly change it. If the body of the "with" block is successful, on
+    exiting the with block the wheel contents are replaced with the updated
+    contents of unpacked directory. If an exception is raised, then the original
+    wheel is left unchanged.
+    """
+    with TemporaryDirectory() as temp_dir:
+        unpack_wheel(wheel, Path(temp_dir), verbose=verbose)
+        name, ver, _ = wheel.name.split("-", 2)
+        wheel_dir_name = f"{name}-{ver}"
+        wheel_dir = Path(temp_dir) / wheel_dir_name
+        yield wheel_dir
+        wheel.unlink()
+        pack_wheel(wheel_dir, wheel.parent, verbose=verbose)
+
+
+def retag_wheel(
+    wheel_path: Path,
+    platform: str,
+    *,
+    python: str | None = None,
+    abi: str | None = None,
+) -> Path:
+    extra_flags = []
+    if python:
+        extra_flags += ["--python-tag", python]
+    if abi:
+        extra_flags += ["--abi-tag", abi]
+    result = run_command(
+        [
+            sys.executable,
+            "-m",
+            "wheel",
+            "tags",
+            wheel_path,
+            "--platform-tag",
+            platform,
+            "--remove",
+            *extra_flags,
+        ],
+        err_msg=("ERROR: Retagging wheel %s to %s failed", wheel_path, platform),
+    )
+    return wheel_path.parent / result.stdout.splitlines()[-1].strip()
+
+
+def extract_wheel_metadata_file(wheel_path: Path, output_path: Path) -> None:
+    """Extracts the METADATA file from the given wheel and writes it to the
+    output path.
+
+    Raises a RuntimeError if the METADATA file does not exist.
+
+    For a wheel called "NAME-VERSION-...", the METADATA file is expected to be
+    found in a directory inside the wheel archive, whose name starts with NAME
+    and ends with ".dist-info". See:
+    https://packaging.python.org/en/latest/specifications/binary-distribution-format/#file-contents
+    """
+    with ZipFile(wheel_path, mode="r") as wheel:
+        pkg_name = wheel_path.name.split("-", 1)[0]
+        dist_info_dir = get_wheel_dist_info_dir(wheel, pkg_name)
+        metadata_path = f"{dist_info_dir}/METADATA"
+        try:
+            wheel.getinfo(metadata_path).filename = output_path.name
+            wheel.extract(metadata_path, output_path.parent)
+        except KeyError as err:
+            raise RuntimeError(f"METADATA file not found for {pkg_name}") from err
+
+
+def get_wheel_dist_info_dir(wheel: ZipFile, pkg_name: str) -> str:
+    """Returns the path of the contained .dist-info directory.
+
+    Raises a RuntimeError if the directory is not found, more than
+    one is found, or it does not match the provided `pkg_name`.
+
+    Adapted from:
+    https://github.com/pypa/pip/blob/ea727e4d6ab598f34f97c50a22350febc1214a97/src/pip/_internal/utils/wheel.py#L38
+    """
+
+    # Zip file path separators must be /
+    subdirs = {name.split("/", 1)[0] for name in wheel.namelist()}
+    info_dirs = [subdir for subdir in subdirs if subdir.endswith(".dist-info")]
+
+    if len(info_dirs) == 0:
+        raise RuntimeError(f".dist-info directory not found for {pkg_name}")
+
+    if len(info_dirs) > 1:
+        raise RuntimeError(
+            f"multiple .dist-info directories found for {pkg_name}: {', '.join(info_dirs)}"
+        )
+
+    (info_dir,) = info_dirs
+
+    info_dir_name = canonicalize_package_name(info_dir)
+    canonical_name = canonicalize_package_name(pkg_name)
+
+    if not info_dir_name.startswith(canonical_name):
+        raise RuntimeError(
+            f".dist-info directory {info_dir!r} does not start with {canonical_name!r}"
+        )
+
+    return info_dir
+
+
+def check_wasm_magic_number(file_path: Path) -> bool:
+    WASM_BINARY_MAGIC = b"\0asm"
+    with file_path.open(mode="rb") as file:
+        return file.read(4) == WASM_BINARY_MAGIC
+
+
+def search_pyproject_toml(
+    curdir: str | Path, max_depth: int = 10
+) -> tuple[Path, dict[str, Any]] | tuple[None, None]:
+    """
+    Recursively search for the pyproject.toml file in the parent directories.
+    """
+
+    # We want to include "curdir" in parent_dirs, so add a garbage suffix
+    parent_dirs = (Path(curdir) / "garbage").parents[:max_depth]
+
+    for base in parent_dirs:
+        pyproject_file = base / "pyproject.toml"
+
+        if not pyproject_file.is_file():
+            continue
+
+        try:
+            with pyproject_file.open("rb") as f:
+                configs = tomllib.load(f)
+                return pyproject_file, configs
+        except tomllib.TOMLDecodeError as e:
+            raise ValueError(f"Could not parse {pyproject_file}.") from e
+
+    return None, None
+
+
+def to_bool(value: str) -> bool:
+    """
+    Convert a string to a boolean value. Useful for parsing environment variables.
+    """
+    return value.lower() not in {"", "0", "false", "no", "off"}
+
+
+@contextmanager
+def _suppress_urllib3_logging() -> Iterator[None]:
+    """
+    Temporarily raise the urllib3 log level.
+
+    pyodide-build runs its own logger at DEBUG level, and urllib3 would log
+    every connection and redirect at that level, which is noise for a download.
+    See https://github.com/pyodide/pyodide/issues/4810
+    """
+    urllib3_logger = logging.getLogger("urllib3")
+    original_level = urllib3_logger.level
+    urllib3_logger.setLevel(logging.WARNING)
+    try:
+        yield
+    finally:
+        urllib3_logger.setLevel(original_level)
+
+
+def _write_chunks(chunks: Iterable[bytes], dest: Path, digest: "hashlib._Hash") -> None:
+    """Write ``chunks`` to ``dest`` while feeding them to ``digest``."""
+    with dest.open("wb") as f:
+        for chunk in chunks:
+            f.write(chunk)
+            digest.update(chunk)
+
+
+def download_and_unpack_archive(
+    url: str,
+    path: Path,
+    descr: str,
+    *,
+    exists_ok: bool = False,
+    sha256: str | None = None,
+) -> None:
+    """
+    Download the cross-build environment from the given URL and extract it to the given path.
+
+    Parameters
+    ----------
+    url
+        URL to download the cross-build environment from.
+    path
+        Path to extract the cross-build environment to.
+        If the path already exists, raise an error.
+    descr
+        Human readable description of what is being downloaded, for log messages.
+    exists_ok
+        If True, do not fail when ``path`` already exists.
+    sha256
+        Expected sha256 hex digest of the archive. When given, the download is
+        checked against it before anything is extracted, and a mismatch raises
+        ``ValueError``. When None, no verification is done.
+    """
+    logger.info("Downloading %s from %s", descr, url)
+
+    if not exists_ok and path.exists():
+        raise FileExistsError(f"Path {path} already exists")
+
+    with TemporaryDirectory() as temp_dir:
+        f_path = Path(temp_dir) / "temp.tar"
+        digest = hashlib.sha256()
+        try:
+            if urlparse(url).scheme == "file":
+                # A local archive, for example one built with
+                # create_xbuildenv.py. requests does not handle file URLs.
+                with Path(url2pathname(urlparse(url).path)).open("rb") as src:
+                    chunks = iter(lambda: src.read(1 << 20), b"")
+                    _write_chunks(chunks, f_path, digest)
+            else:
+                # requests verifies TLS against certifi (or REQUESTS_CA_BUNDLE),
+                # the same way the release metadata is fetched, rather than
+                # against the host OpenSSL's default CA file like urllib does.
+                with (
+                    _suppress_urllib3_logging(),
+                    requests.get(url, stream=True) as resp,
+                ):
+                    resp.raise_for_status()
+                    _write_chunks(resp.iter_content(chunk_size=1 << 20), f_path, digest)
+        except Exception as e:
+            raise ValueError(f"Failed to download {descr} from {url}") from e
+
+        if sha256 is not None:
+            actual = digest.hexdigest()
+            if actual != sha256:
+                raise ValueError(
+                    f"Invalid sha256 checksum for {descr} downloaded from {url}: "
+                    f"{actual} != {sha256} (expected)"
+                )
+            logger.debug("Verified sha256 checksum of %s: %s", descr, actual)
+
+        with warnings.catch_warnings():
+            # Python 3.12-3.13 emits a DeprecationWarning when using shutil.unpack_archive without a filter,
+            # but filter doesn't work well for zip files, so we suppress the warning until we find a better solution.
+            # https://github.com/python/cpython/issues/112760
+            warnings.simplefilter("ignore")
+            shutil.unpack_archive(str(f_path), path)
+
+
+def retrying_rmtree(d):
+    """Sometimes rmtree fails with OSError: Directory not empty
+
+    Try again a few times if this happens.
+    See: https://github.com/python/cpython/issues/128076
+    """
+    for _ in range(3):
+        try:
+            return shutil.rmtree(d)
+        except OSError as e:
+            if e.strerror == "Directory not empty":
+                # wait a bit and try again up to 3 tries
+                time.sleep(0.01)
+            else:
+                raise
+    raise RuntimeError(f"shutil.rmtree('{d}') failed with ENOTEMPTY three times")
+
+
+def remove_readonly(func, path, _):
+    """Clear the readonly bit and reattempt removal.
+
+    Needed on Windows to remove read-only files like `git` objects.
+    Use with: `shutil.rmtree(path, onexc=remove_readonly)`
+    """
+    os.chmod(path, stat.S_IWRITE)
+    func(path)

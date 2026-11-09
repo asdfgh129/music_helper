@@ -1,0 +1,160 @@
+(testing)=
+
+# Testing and benchmarking
+
+## Testing
+
+### Running the Python test suite
+
+1. Install the following dependencies into the default Python installation:
+
+```bash
+pip install pytest-pyodide pytest-httpserver
+```
+
+`pytest-pyodide` is a pytest plugin for testing Pyodide
+and third-party applications that use Pyodide.
+
+> See: [pytest-pyodide](https://github.com/pyodide/pytest-pyodide) for more information.
+
+2. Install [geckodriver](https://github.com/mozilla/geckodriver/releases) or
+   [chromedriver](https://developer.chrome.com/docs/chromedriver/downloads)
+   and check that they are in your `PATH`.
+
+3. To run the test suite, run `pytest` from the root directory of Pyodide:
+
+```bash
+pytest
+```
+
+There are 2 test locations that are collected by pytest,
+
+- `src/tests/`: general Pyodide tests and tests running the CPython test suite
+- `packages/*/test_*`: package specific tests.
+
+You can run the tests from a specific file with:
+
+```bash
+pytest path/to/test/file.py
+```
+
+Some browsers sometimes produce informative errors than others
+so if you are getting confusing errors it is worth rerunning the test on each
+browser. You can use `--runtime` commandline option to specify the browser runtime.
+
+```bash
+pytest --runtime firefox
+pytest --runtime chrome
+pytest --runtime node
+```
+
+#### Custom test marks
+
+We support custom test marks:
+
+`@pytest.mark.skip_refcount_check` and `pytest.mark.skip_pyproxy_check` disable
+respectively the check for JavaScript references and the check for PyProxies.
+If a test creates JavaScript references or PyProxies and does not clean them up,
+by default the tests will fail. If a test is known to leak objects, it is
+possible to disable these checks with these markers.
+
+### Running the JavaScript test suite
+
+To run tests on the JavaScript Pyodide package, run the following
+commands,
+
+```sh
+cd src/js
+npm test
+```
+
+To check TypeScript type definitions run,
+
+```sh
+npx tsd
+```
+
+(manual-testing)=
+
+### Manual interactive testing
+
+To run tests manually:
+
+1. Build Pyodide, perhaps in the docker image
+
+2. From outside of the docker image, `cd` into the `dist` directory and run
+   `python -m http.server`.
+
+3. Once the webserver is running, simple interactive testing can be run by
+   visiting the URL: `http://localhost:<PORT>/console.html`. It's recommended to
+   use `pyodide.runPython` in the browser console rather than using the repl.
+
+## Benchmarking
+
+To run common benchmarks to understand Pyodide's performance, begin by
+installing the same prerequisites as for testing. Then run:
+
+```bash
+PYODIDE_PACKAGES="numpy,matplotlib" make benchmark
+```
+
+### Node.js benchmarks
+
+Microbenchmarks of the Pyodide runtime itself live in
+`benchmark/node/` and run in Node.js against a built `dist` directory. They
+don't need any packages to be built. To print the timings for a build, run:
+
+```bash
+node benchmark/node/run.mjs dist
+```
+
+To compare two builds, pass the baseline first. The `ratio` columns show the
+time of the second build relative to the baseline (new time / baseline time),
+so values below 1 mean the second build is faster. A build can also be
+given as the URL of a Pyodide distribution, e.g. to compare against the latest
+build of the `main` branch:
+
+```bash
+node benchmark/node/run.mjs https://cdn.jsdelivr.net/pyodide/dev/full/ dist
+```
+
+Use `--list` to see the available suites, `--suite NAME` to run a single
+suite, `--filter REGEX` to select cases by their `suite/case` name and
+`--json FILE` to save the results. The benchmarks run on CI for every PR,
+including a comparison with `main`.
+
+To add a benchmark, add a module to `benchmark/node/suites/`. It is picked up
+automatically and runs in a fresh Node.js process for each build. See the
+comment at the top of `benchmark/node/run.mjs` for the interface a suite needs
+to implement, and `benchmark/node/suites/string_conversion.mjs` for an example.
+
+## Linting
+
+We lint with `prek`.
+
+Python is linted with `ruff` (for linting and formatting) and `mypy`.
+JavaScript and TypeScript are linted with `biome`.
+C is linted with `clang-format`.
+
+To lint the code, run:
+
+```bash
+prek -a
+```
+
+You can have the linter automatically run whenever you commit by running
+
+```bash
+pip install prek
+prek install
+```
+
+and this can later be disabled with
+
+```bash
+prek uninstall
+```
+
+If you don't lint your code, certain lint errors will be fixed automatically by
+`pre-commit.ci` which will push fixes to your branch. If you want to push more
+commits, you will either have to pull in the remote changes or force push.

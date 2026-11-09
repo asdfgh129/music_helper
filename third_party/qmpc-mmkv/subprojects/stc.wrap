@@ -1,0 +1,5 @@
+[wrap-git]
+directory = stc-v6.0-rc7
+url = https://github.com/stclib/STC.git
+revision = 8d861281c2a3c9b7a92ed2e9a5b97c5d92ea90de
+depth = 1

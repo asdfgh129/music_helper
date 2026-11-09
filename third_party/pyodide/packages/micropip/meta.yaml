@@ -1,0 +1,16 @@
+package:
+  name: micropip
+  version: 0.11.1
+  tag:
+    - always
+  top-level:
+    - micropip
+
+source:
+  sha256: 768de165adb8e66906039d8fec4127a57f522dfdf8e6fbff877a4616941ecfd3
+  url: https://files.pythonhosted.org/packages/py3/m/micropip/micropip-0.11.1-py3-none-any.whl
+
+about:
+  home: https://github.com/pyodide/micropip
+  PyPI: https://pypi.org/project/micropip
+  license: MPL-2.0

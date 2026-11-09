@@ -1,0 +1,15 @@
+package:
+  name: pycparser
+  version: "3.0"
+  top-level:
+    - pycparser
+source:
+  url: https://files.pythonhosted.org/packages/py3/p/pycparser/pycparser-3.0-py3-none-any.whl
+  sha256: b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992
+build:
+  cross-build-env: true
+about:
+  home: https://github.com/eliben/pycparser
+  PyPI: https://pypi.org/project/pycparser
+  summary: C parser in Python
+  license: BSD-3-Clause

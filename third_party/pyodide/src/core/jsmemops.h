@@ -1,0 +1,66 @@
+// Macros to access memory from JavaScript
+//
+// `addr` is a WASM byte pointer that arrives here as a signed JS Number (the
+// WASM JS API converts i32 → Number via signed ToInt32). For addresses with
+// the high bit set (i.e., heap > 2 GB, which Pyodide allows via
+// MAXIMUM_MEMORY=4GB), the value is negative. We must use *unsigned* right
+// shift `>>>` to convert byte address → element index, otherwise the
+// arithmetic shift sign-extends and produces a wildly wrong index.
+// In U8/I8 case, use an explicit >>>0 to force correct sign.
+
+#define HEAP_INDEX_8(addr) ((addr) >>> 0)
+#define HEAP_INDEX_16(addr) ((addr) >>> 1)
+#define HEAP_INDEX_32(addr) ((addr) >>> 2)
+#define HEAP_INDEX_64(addr) ((addr) >>> 3)
+
+#define DEREF_U8(addr, offset) HEAPU8[HEAP_INDEX_8(addr) + offset]
+#define DEREF_I8(addr, offset) HEAP8[HEAP_INDEX_8(addr) + offset]
+
+#define DEREF_U16(addr, offset) HEAPU16[HEAP_INDEX_16(addr) + offset]
+#define DEREF_I16(addr, offset) HEAP16[HEAP_INDEX_16(addr) + offset]
+
+#define DEREF_U32(addr, offset) HEAPU32[HEAP_INDEX_32(addr) + offset]
+#define DEREF_I32(addr, offset) HEAP32[HEAP_INDEX_32(addr) + offset]
+
+#define DEREF_F32(addr, offset) HEAPF32[HEAP_INDEX_32(addr) + offset]
+#define DEREF_F64(addr, offset) HEAPF64[HEAP_INDEX_64(addr) + offset]
+
+#define ASSIGN_U8(addr, offset, value) DEREF_U8(addr, offset) = value
+#define ASSIGN_U16(addr, offset, value) DEREF_U16(addr, offset) = value
+#define ASSIGN_U32(addr, offset, value) DEREF_U32(addr, offset) = value
+#define ASSIGN_I32(addr, offset, value) DEREF_I32(addr, offset) = value
+#if WASM_BIGINT
+// We have HEAPU64 / HEAPI64 in this case.
+#define DEREF_U64(addr, offset) HEAPU64[HEAP_INDEX_64(addr) + offset]
+#define DEREF_I64(addr, offset) HEAP64[HEAP_INDEX_64(addr) + offset]
+
+#define LOAD_U64(addr, offset) DEREF_U64(addr, offset)
+#define LOAD_I64(addr, offset) DEREF_I64(addr, offset)
+
+#define STORE_U64(addr, offset, val) (DEREF_U64(addr, offset) = val)
+#define STORE_I64(addr, offset, val) (DEREF_U64(addr, offset) = val)
+
+#else
+
+// No BigUint64Array, have to manually split / join lower and upper byte
+//
+#define BIGINT_LOWER(x) (Number((x) & BigInt(0xffffffff)) | 0)
+#define BIGINT_UPPER(x) (Number((x) >> BigInt(32)) | 0)
+#define UBIGINT_FROM_PAIR(lower, upper)                                        \
+  (BigInt(lower) | (BigInt(upper) << BigInt(32)))
+
+#define IBIGINT_FROM_PAIR(lower, upper)                                        \
+  (BigInt(lower) | (BigInt(upper + 2 * (upper & 0x80000000)) << BigInt(32)))
+
+#define LOAD_U64(addr, offset)                                                 \
+  UBIGINT_FROM_PAIR(DEREF_U32(addr, offset * 2),                               \
+                    DEREF_U32(addr, offset * 2 + 1))
+#define LOAD_I64(addr, offset)                                                 \
+  IBIGINT_FROM_PAIR(DEREF_U32(addr, offset * 2),                               \
+                    DEREF_U32(addr, offset * 2 + 1))
+
+#define STORE_U64(addr, offset, val)                                           \
+  ((DEREF_U32(addr, offset * 2) = BIGINT_LOWER(val)),                          \
+   (DEREF_U32(addr, offset * 2 + 1) = BIGINT_UPPER(val)))
+#define STORE_I64 STORE_U64
+#endif

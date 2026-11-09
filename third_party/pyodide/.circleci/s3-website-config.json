@@ -1,0 +1,8 @@
+{
+  "Bucket": "pyodide-cdn2.iodide.io",
+  "WebsiteConfiguration": {
+    "IndexDocument": {
+      "Suffix": "index.html"
+    }
+  }
+}

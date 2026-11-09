@@ -1,0 +1,135 @@
+package go_mmkv
+
+import (
+	"os"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestMMKVReader(t *testing.T) {
+	t.Run("Default", func(t *testing.T) {
+		mmkv, err := os.Open("./testdata/mmkv.default")
+		assert.NoError(t, err)
+		assert.NotNil(t, mmkv)
+		defer mmkv.Close()
+
+		r, err := NewMMKVReader(mmkv, -1, nil, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, r)
+
+		key1, err := r.ReadKey()
+		assert.NoError(t, err)
+		assert.Equal(t, "world", key1)
+		val1, err := r.ReadStringValue()
+		assert.NoError(t, err)
+		assert.Equal(t, "hello", val1)
+
+		key2, err := r.ReadKey()
+		assert.NoError(t, err)
+		assert.Equal(t, "test", key2)
+		val2, err := r.ReadStringValue()
+		assert.NoError(t, err)
+		assert.Equal(t, "unit", val2)
+	})
+
+	t.Run("ReadStringWithOverlap", func(t *testing.T) {
+		mmkv, err := os.Open("./testdata/mmkv.string_overlap")
+		assert.NoError(t, err)
+		assert.NotNil(t, mmkv)
+		defer mmkv.Close()
+
+		r, err := NewMMKVReader(mmkv, -1, nil, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, r)
+
+		key1, err := r.ReadKey()
+		assert.NoError(t, err)
+		assert.Equal(t, "world", key1)
+		val1, err := r.ReadStringValue()
+		assert.NoError(t, err)
+		assert.Equal(t, "hello", val1)
+
+		key2, err := r.ReadKey()
+		assert.NoError(t, err)
+		assert.Equal(t, "test", key2)
+		val2, err := r.ReadStringValue()
+		assert.NoError(t, err)
+		assert.Equal(t, "unit", val2)
+
+		key3, err := r.ReadKey()
+		assert.NoError(t, err)
+		assert.Equal(t, "A", key3)
+		val3, err := r.ReadStringValue()
+		assert.NoError(t, err)
+		assert.Equal(t, "", val3)
+	})
+
+	t.Run("ReadIntValue", func(t *testing.T) {
+		mmkv, err := os.Open("./testdata/mmkv_int")
+		assert.NoError(t, err)
+		assert.NotNil(t, mmkv)
+		defer mmkv.Close()
+
+		r, err := NewMMKVReader(mmkv, -1, nil, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, r)
+
+		key1, err := r.ReadInt()
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(0x16e), key1)
+		val1, err := r.ReadInt()
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(0x16c), val1)
+	})
+
+	t.Run("Crypto", func(t *testing.T) {
+		mmkv, err := os.Open("./testdata/crypto")
+		assert.NoError(t, err)
+		assert.NotNil(t, mmkv)
+		defer mmkv.Close()
+
+		crc, err := os.Open("./testdata/crypto.crc")
+		assert.NoError(t, err)
+		assert.NotNil(t, crc)
+		defer crc.Close()
+
+		r, err := NewMMKVReader(mmkv, -1, []byte("unlock-music:key"), crc)
+		assert.NoError(t, err)
+		assert.NotNil(t, r)
+		assert.NotNil(t, r.Info)
+		assert.Equal(t, uint32(4), r.Info.Version)
+		assert.Equal(t, uint32(0x1c), r.Info.ActualSize)
+		assert.Equal(t, uint32(4), r.Info.LastActualSize)
+		assert.Equal(t, uint32(0x59c57f88), r.Info.LastCRCDigest)
+		assert.Equal(t, uint64(0), r.Info.Flags)
+
+		key1, err := r.ReadKey()
+		assert.NoError(t, err)
+		assert.Equal(t, "world", key1)
+		val1, err := r.ReadStringValue()
+		assert.NoError(t, err)
+		assert.Equal(t, "hello", val1)
+
+		key2, err := r.ReadKey()
+		assert.NoError(t, err)
+		assert.Equal(t, "test", key2)
+		val2, err := r.ReadStringValue()
+		assert.NoError(t, err)
+		assert.Equal(t, "unit", val2)
+	})
+
+	t.Run("ToMap", func(t *testing.T) {
+		mmkv, err := os.Open("./testdata/mmkv.default")
+		assert.NoError(t, err)
+		assert.NotNil(t, mmkv)
+		defer mmkv.Close()
+
+		m, err := MMKVToMap(mmkv, nil, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, m)
+		assert.Equal(t, 2, len(m))
+		assert.Equal(t, "hello", m["world"])
+		assert.Equal(t, "unit", m["test"])
+	})
+}

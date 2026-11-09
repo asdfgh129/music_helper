@@ -1,0 +1,265 @@
+import type {
+  AudioProperties,
+  FileType,
+  Picture,
+  PropertyMap,
+} from "../types.ts";
+import type { TypedAudioProperties } from "../types/audio-formats.ts";
+import type {
+  Id3v2Frame,
+  Rating,
+  UnsyncedLyrics,
+} from "../constants/complex-properties.ts";
+import type { MutableTag } from "./mutable-tag.ts";
+import type {
+  MediaChecksum,
+  MediaChecksumOptions,
+} from "./audio-file-checksum.ts";
+import type { FormatPropertyKey } from "../types/format-property-keys.ts";
+import type { NormalizedRating } from "../utils/rating.ts";
+
+/**
+ * Represents an audio file with metadata and audio properties.
+ * Provides methods for reading and writing metadata, accessing audio properties,
+ * and managing format-specific features.
+ */
+export interface AudioFile {
+  /** Get the audio file format. */
+  getFormat(): FileType;
+
+  /** Get the tag object for reading/writing basic metadata. */
+  tag(): MutableTag;
+
+  /** Get audio properties (duration, bitrate, sample rate, etc.). */
+  audioProperties(): AudioProperties | undefined;
+
+  /** Get all metadata properties as a key-value map. */
+  properties(): PropertyMap;
+
+  /** Set multiple properties at once from a PropertyMap. */
+  setProperties(properties: PropertyMap): void;
+
+  /**
+   * Get a property's values by key (typed version).
+   *
+   * Returns ALL values for the key — tag reads are arrays (taglib-sip2); the
+   * scalar convenience lives in the typed accessors (`tag().title`). `undefined`
+   * means the key is absent. Use `?.[0]` for the first value.
+   */
+  getProperty<K extends import("../constants.ts").PropertyKey>(
+    key: K,
+  ): import("../constants.ts").PropertyValue<K>[] | undefined;
+
+  /**
+   * Get a property's values by key (string version).
+   *
+   * Returns ALL values for the key — tag reads are arrays (taglib-sip2); the
+   * scalar convenience lives in the typed accessors (`tag().title`). `undefined`
+   * means the key is absent. Use `?.[0]` for the first value.
+   */
+  getProperty(key: string): string[] | undefined;
+
+  /** Set a single property value (typed version). */
+  setProperty<K extends import("../constants.ts").PropertyKey>(
+    key: K,
+    value: import("../constants.ts").PropertyValue<K>,
+  ): void;
+
+  /** Set a single property value (string version). */
+  setProperty(key: string, value: string): void;
+
+  /**
+   * Remove a single property by key.
+   *
+   * Equivalent to `setProperty(key, "")` — the empty-string clearing contract,
+   * made explicit (taglib-qyw2). On both backends an empty write removes the
+   * property from the file on save.
+   */
+  removeProperty(key: string): void;
+
+  /** Type-narrowing check: returns true if this file matches the given format. */
+  isFormat<F extends FileType>(format: F): this is TypedAudioFile<F>;
+
+  /** Check if this is an MP4/M4A file. */
+  isMP4(): boolean;
+
+  /** Get an MP4-specific metadata item. */
+  getMP4Item(key: string): string | undefined;
+
+  /** Set an MP4-specific metadata item. */
+  setMP4Item(key: string, value: string): void;
+
+  /** Remove an MP4-specific metadata item. */
+  removeMP4Item(key: string): void;
+
+  /** Save all changes to the in-memory buffer. */
+  save(): boolean;
+
+  /**
+   * Get the current file data as a buffer, including any modifications.
+   * @throws {FileOperationError} If the data lives on disk (WASI path mode)
+   * and cannot be read back — never returns an empty buffer on failure.
+   */
+  getFileBuffer(): Uint8Array;
+
+  /**
+   * SHA-256 of the file's encoded media payload — the bytes that are the audio,
+   * not the tags around them — so the digest survives a tag edit, with one
+   * boundary: an ID3v2 tag appended after a FLAC's audio is inside the payload,
+   * so editing it does move the hash. Formats whose payload cannot be delimited
+   * answer the whole file instead and say so (`source: "file"`), where a tag
+   * edit does move the hash.
+   *
+   * Pass `{ basis: "pcm" }` for FLAC's STREAMINFO MD5 — the digest of the
+   * *uncompressed* stream, read straight from the file's first metadata block.
+   * Other formats throw {@link UnsupportedFormatError}.
+   *
+   * @throws {MetadataError} If the handle holds no file bytes and has no
+   * readable source (a partial handle that has already been saved).
+   */
+  mediaChecksum(options?: MediaChecksumOptions): Promise<MediaChecksum>;
+
+  /**
+   * Save all changes to a file on disk.
+   * @param path - Optional file path. If not provided, saves to the original path.
+   */
+  saveToFile(path?: string): Promise<void>;
+
+  /** Check if the file was loaded successfully and is valid. */
+  isValid(): boolean;
+
+  /** Get all pictures/cover art from the audio file. */
+  getPictures(): Picture[];
+
+  /** Set pictures/cover art in the audio file (replaces all existing). */
+  setPictures(pictures: Picture[]): void;
+
+  /** Add a single picture to the audio file. */
+  addPicture(picture: Picture): void;
+
+  /** Remove all pictures from the audio file. */
+  removePictures(): void;
+
+  /**
+   * Get all chapter markers, ordered by start time. Empty array if the file
+   * has none. Read from ID3v2 CHAP frames (MP3) or, for MP4, QuickTime chapter
+   * tracks (preferred) or Nero `chpl` atoms.
+   */
+  getChapters(): import("../types/chapters.ts").Chapter[];
+
+  /**
+   * Replace all chapter markers in the file with `chapters`. Only MP3 (ID3v2
+   * CHAP) and MP4 are supported; other formats throw. See
+   * {@link import("../types/chapters.ts").SetChaptersOptions} for MP4 options.
+   */
+  setChapters(
+    chapters: import("../types/chapters.ts").Chapter[],
+    options?: import("../types/chapters.ts").SetChaptersOptions,
+  ): void;
+
+  /**
+   * Parsed BWF `bext` (Broadcast Audio Extension) chunk, or `undefined` if the
+   * file has none / the chunk is too short to parse. WAV and FLAC only.
+   */
+  getBext(): import("../types/bwf.ts").BroadcastAudioExtension | undefined;
+
+  /** Encode and write a `bext` chunk. Throws UnsupportedFormatError for non-WAV/FLAC. */
+  setBext(bext: import("../types/bwf.ts").BroadcastAudioExtension): void;
+
+  /** Raw `bext` chunk bytes (escape hatch for vendor extensions), or `undefined` if absent. */
+  getBextData(): Uint8Array | undefined;
+
+  /** Write raw `bext` chunk bytes; `null` removes the chunk. Throws for non-WAV/FLAC. */
+  setBextData(data: Uint8Array | null): void;
+
+  /** Raw iXML chunk as a string, or `undefined` if absent. WAV and FLAC only. */
+  getIxml(): string | undefined;
+
+  /** Write the iXML chunk; `null` removes it. Throws for non-WAV/FLAC. */
+  setIxml(data: string | null): void;
+
+  /** Get all ratings (normalized 0.0-1.0) from the audio file. */
+  getRatings(): Rating[];
+
+  /** Set ratings in the audio file (replaces all existing). */
+  setRatings(ratings: Rating[]): void;
+
+  /** Get the primary rating (first one found, normalized 0.0-1.0), or undefined. */
+  getRating(): NormalizedRating | undefined;
+
+  /** Set the primary rating (normalized 0.0-1.0). */
+  setRating(rating: number, email?: string): void;
+
+  /**
+   * Raw ID3v2 frame bodies by frame ID (MP3 only) — the escape hatch for
+   * vendor/unmodeled frames (RGAD, NCON, SYTC, custom TXXX...). Reads reflect
+   * persisted file state plus staged raw-frame changes; pending typed edits
+   * may not be visible until save (backend-dependent for modeled IDs).
+   */
+  getId3v2Frames(id?: string): Id3v2Frame[];
+
+  /**
+   * Replace ALL frames carrying `id` with the given bodies (per-ID list
+   * replace; empty array removes them all). Bytes round-trip verbatim for
+   * IDs TagLib does not model. MP3 only.
+   */
+  setId3v2Frames(id: string, data: Uint8Array[]): void;
+
+  /** Remove every frame with this ID. Equivalent to setId3v2Frames(id, []). */
+  removeId3v2Frames(id: string): void;
+
+  /**
+   * Get unsynchronized lyrics (ID3v2 USLT / Vorbis LYRICS). Returned identically
+   * on both backends; `description`/`language` are not round-tripped (text-only).
+   */
+  getLyrics(): UnsyncedLyrics[];
+
+  /** Set unsynchronized lyrics (replaces all existing). Pass `[]` to clear. */
+  setLyrics(lyrics: UnsyncedLyrics[]): void;
+
+  /**
+   * Detect spurious ID3v1/ID3v2 tags on a FLAC file. Returns
+   * `{ v1: false, v2: false }` for non-FLAC files (their ID3 tags, if any,
+   * are the native format and should not be stripped).
+   */
+  hasId3Tags(): { v1: boolean; v2: boolean };
+
+  /**
+   * Remove ID3v1 and/or ID3v2 tags from a FLAC file, preserving Vorbis
+   * Comments and audio. No-op on non-FLAC files. Defaults to stripping both.
+   */
+  stripId3Tags(opts?: { v1?: boolean; v2?: boolean }): void;
+
+  /** Release all resources associated with this file. */
+  dispose(): void;
+
+  /** Enable `using file = ...` for automatic cleanup. */
+  [Symbol.dispose](): void;
+}
+
+/**
+ * An AudioFile narrowed to a specific format, constraining getProperty/setProperty
+ * to only accept property keys valid for that format's tag system.
+ *
+ * Note: The string-accepting overloads are intentionally removed. If you need
+ * arbitrary string keys (e.g. custom tags), use the un-narrowed AudioFile reference.
+ */
+export interface TypedAudioFile<F extends FileType> extends Omit<
+  AudioFile,
+  "getProperty" | "setProperty" | "removeProperty" | "audioProperties"
+> {
+  getFormat(): F;
+
+  audioProperties(): TypedAudioProperties<F> | undefined;
+
+  getProperty<K extends FormatPropertyKey<F>>(
+    key: K,
+  ): import("../constants.ts").PropertyValue<K>[] | undefined;
+
+  setProperty<K extends FormatPropertyKey<F>>(
+    key: K,
+    value: import("../constants.ts").PropertyValue<K>,
+  ): void;
+
+  removeProperty<K extends FormatPropertyKey<F>>(key: K): void;
+}

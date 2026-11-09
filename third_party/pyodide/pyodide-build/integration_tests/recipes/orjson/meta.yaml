@@ -1,0 +1,18 @@
+package:
+  name: orjson
+  version: 3.11.5
+  top-level:
+    - orjson
+source:
+  url: https://files.pythonhosted.org/packages/source/o/orjson/orjson-3.11.5.tar.gz
+  sha256: 82393ab47b4fe44ffd0a7659fa9cfaacc717eb617c93cde83795f14af5c2e9d5
+requirements:
+  executable:
+    - rustup
+about:
+  home: https://github.com/ijl/orjson
+  PyPI: https://pypi.org/project/orjson
+  summary:
+    Fast, correct Python JSON library supporting dataclasses, datetimes, and
+    numpy
+  license: Apache-2.0 OR MIT

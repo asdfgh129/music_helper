@@ -1,0 +1,228 @@
+/**
+ * @fileoverview Main module exports for TagLib-Wasm
+ *
+ * TagLib v2.3.2 compiled to WebAssembly with TypeScript bindings
+ * for universal audio metadata handling across all JavaScript runtimes.
+ *
+ * @module TagLib-Wasm
+ *
+ * @example
+ * ```typescript
+ * // Using the Full API
+ * import { TagLib } from "taglib-wasm";
+ *
+ * const taglib = await TagLib.initialize();
+ * const file = await taglib.open(audioBuffer);
+ * const tag = file.tag();
+ * console.log(tag.title);
+ * file.dispose();
+ * ```
+ *
+ * @example
+ * ```typescript
+ * // Using the Simple API
+ * import { readTags, applyTags } from "taglib-wasm/simple";
+ *
+ * const tags = await readTags("song.mp3");
+ * console.log(tags.artist);
+ *
+ * const modified = await applyTags("song.mp3", {
+ *   artist: "New Artist",
+ *   album: "New Album"
+ * });
+ * ```
+ */
+
+// Full API
+export type {
+  AudioFile,
+  TypedAudioFile,
+} from "./taglib/audio-file-interface.ts";
+export { AudioFileImpl, createTagLib, TagLib } from "./taglib.ts";
+export type { MutableTag } from "./taglib.ts";
+export { isNamedAudioInput } from "./types/audio-formats.ts";
+
+// Error types
+export {
+  EnvironmentError,
+  FileOperationError,
+  InvalidFormatError,
+  isEnvironmentError,
+  isFileOperationError,
+  isInvalidFormatError,
+  isMemoryError,
+  isMetadataError,
+  isTagLibError,
+  isUnsupportedFormatError,
+  MemoryError,
+  MetadataError,
+  SUPPORTED_FORMATS,
+  TagLibError,
+  TagLibInitializationError,
+  UnsupportedFormatError,
+} from "./errors.ts";
+export type { TagLibErrorCode } from "./errors.ts";
+
+// Deno compile support
+export {
+  initializeForDenoCompile,
+  isDenoCompiled,
+  prepareWasmForEmbedding,
+} from "./deno-compile.ts";
+
+// Simple API
+export {
+  addPicture,
+  applyCoverArt,
+  applyPictures,
+  applyTags,
+  applyTagsToFile,
+  type BatchItem,
+  type BatchOptions,
+  type BatchResult,
+  clearPictures,
+  clearTags,
+  type FileMetadata,
+  findPictureByType,
+  isValidAudioFile,
+  readCoverArt,
+  readFormat,
+  readMediaChecksum,
+  readMetadata,
+  readMetadataBatch,
+  readPictureMetadata,
+  readPictures,
+  readProperties,
+  readPropertiesBatch,
+  readTags,
+  readTagsBatch,
+  replacePictureByType,
+  setBufferMode,
+} from "./simple/index.ts";
+export type {
+  ChecksumAlgorithm,
+  ChecksumSource,
+  MediaChecksum,
+  MediaChecksumOptions,
+} from "./taglib/audio-file-checksum.ts";
+
+// Property constants and utilities
+export {
+  FormatMappings,
+  getAllProperties,
+  getAllPropertyKeys,
+  getPropertiesByFormat,
+  getPropertyMetadata,
+  isValidProperty,
+  PROPERTIES,
+  propertyValue,
+  propertyValues,
+} from "./constants.ts";
+export type { PropertyMetadata } from "./constants/property-types.ts";
+
+// File I/O utilities for cover art
+export {
+  copyCoverArt,
+  exportAllPictures,
+  exportCoverArt,
+  exportPictureByType,
+  findCoverArtFiles,
+  importCoverArt,
+  importPictureWithType,
+  loadPictureFromFile,
+  savePictureToFile,
+} from "./file-utils/index.ts";
+
+// Folder/batch operations
+export {
+  type AlbumDisc,
+  type AlbumGroup,
+  type AlbumGroupingResult,
+  type AlbumGroupItem,
+  type AlbumGroupKey,
+  type AudioDynamics,
+  type AudioFileMetadata,
+  type DiscConfidence,
+  type DiscFolderInfo,
+  discFolderInfo,
+  type DuplicateGroup,
+  exportFolderMetadata,
+  findDuplicates,
+  type FolderScanItem,
+  type FolderScanOptions,
+  type FolderScanResult,
+  groupAlbums,
+  type GroupAlbumsOptions,
+  scanFolder,
+  scanForAlbums,
+  type ScanForAlbumsOptions,
+} from "./folder-api/index.ts";
+
+// Web browser utilities
+export {
+  canvasToPicture,
+  createPictureDownloadURL,
+  createPictureGallery,
+  dataURLToPicture,
+  displayPicture,
+  imageFileToPicture,
+  pictureToDataURL,
+  setCoverArtFromCanvas,
+} from "./web-utils/index.ts";
+
+// Core types
+export type {
+  AudioCodec,
+  AudioFileInput,
+  AudioProperties,
+  BitrateControlMode,
+  BroadcastAudioExtension,
+  Chapter,
+  ContainerFormat,
+  ExtendedTag,
+  FieldMapping,
+  FileType,
+  NamedAudioInput,
+  OpenOptions,
+  Picture,
+  PictureType,
+  PropertyMap,
+  SetChaptersOptions,
+  Tag,
+  TagInput,
+} from "./types.ts";
+export {
+  BITRATE_CONTROL_MODE_NAMES,
+  BITRATE_CONTROL_MODE_VALUES,
+  PICTURE_TYPE_NAMES,
+  PICTURE_TYPE_VALUES,
+} from "./types.ts";
+
+export type { PropertyKey, PropertyValue } from "./constants.ts";
+export type {
+  FormatPropertyKey,
+  TagFormat,
+} from "./types/format-property-keys.ts";
+export type { TypedAudioProperties } from "./types/audio-formats.ts";
+
+// Complex property TYPES (the COMPLEX_PROPERTIES/COMPLEX_PROPERTY_KEY value
+// exports were removed in 2.0.0 — they described a generic accessor pattern
+// that was never built; the real API is the typed accessors, taglib-ivq).
+export type {
+  Id3v2Frame,
+  Rating,
+  UnsyncedLyrics,
+  VariantMap,
+} from "./constants/complex-properties.ts";
+
+// Rating conversion utilities (individual functions available via taglib-wasm/rating)
+export { RatingUtils } from "./utils/rating.ts";
+export type { NormalizedRating, PopmRating } from "./utils/rating.ts";
+
+// BWF `bext` chunk codec — for working with raw bext bytes without a file handle
+export * as bwf from "./bwf/bext.ts";
+
+// Wasm module types and loader
+export type { TagLibModule, WasmModule } from "./wasm.ts";
+export type { LoadTagLibOptions } from "./runtime/loader-types.ts";
+export { loadTagLibModule } from "./runtime/module-loader.ts";
