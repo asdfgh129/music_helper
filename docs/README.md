@@ -22,8 +22,21 @@
 | 跑测试 | [../tests/README.md](../tests/README.md) | 项目整体使用 |
 | 推不上 GitHub | [git-proxy.md](git-proxy.md) | 音乐流水线 |
 | 规划「纯服务器 Web + 浏览器本机实现」分支 | [browser-local-roadmap.md](browser-local-roadmap.md) | 主干现有行为 |
-| 浏览全部文档（可搜索、可离线打开） | [index.html](index.html) | 单篇规则细节 |
+| 浏览项目文档（侧栏直达、首页总览、状态看板、离线阅读） | [index.html](index.html) | 单篇规则细节、第三方源码自带文档 |
+| 打包免 Python 绿色版 / 查绿色版参数 | [../README.md](../README.md)「绿色版」一节、[usage.md](usage.md) 第 9 节 | 源码模式安装依赖 |
 | 看历史决策 | [history/](history/) | 当前行为 |
+
+## 项目文档分类
+
+[index.html](index.html) 的侧栏把 `docs/` 下 14 篇文档按用途分成四类，首页状态表也有「分类」列与
+分类筛选。分类映射的唯一来源是 `scripts/build_docs_index.py` 的 `DOC_CATEGORY_OF`。
+
+| 分类 | 面向 | 文档 |
+|---|---|---|
+| 使用与操作 | 跑流程、点界面、查参数、改配置 | [README.md](README.md)、[workflow.md](workflow.md)、[usage.md](usage.md)、[web-guide.md](web-guide.md)、[web-wizard.md](web-wizard.md)、[configuration.md](configuration.md) |
+| 开发与规则 | 改代码、改判定规则、查算法与声纹原理 | [architecture.md](architecture.md)、[rules.md](rules.md)、[algorithms.md](algorithms.md)、[fingerprint.md](fingerprint.md) |
+| 排错与运维 | 自检、故障排查、推拉失败 | [self-check.md](self-check.md)、[troubleshooting.md](troubleshooting.md)、[git-proxy.md](git-proxy.md) |
+| 规划与路线 | 下一个分支的路线与待决决策 | [browser-local-roadmap.md](browser-local-roadmap.md) |
 
 ## 每篇文档的边界
 
@@ -71,6 +84,15 @@
 - 表格优先于长段落，命令示例必须可直接复制执行；
 - 每篇文档开头三行说明「负责 / 不负责 / 权威来源」；
 - 新增或移动文档后先运行 `python scripts/build_docs_index.py` 重新生成 [index.html](index.html)，
-  再运行 `python scripts/check_docs.py`，CI 会拦住死链与失效路径；
-- [index.html](index.html) 是生成产物，覆盖仓库内全部 Markdown（含历史归档与第三方自带文档），
-  不要手工编辑；`python scripts/build_docs_index.py --check` 可在 CI 里检查索引是否过期。
+  再运行 `python scripts/check_docs.py`，CI 会拦住死链与失效路径；新增项目文档还要在
+  `scripts/build_docs_index.py` 的 `DOC_CATEGORY_OF` 补分类并登记到上面的分类表，
+  否则索引里会显示「未分类」并在生成时告警；
+- [index.html](index.html) 是生成产物，不要手工编辑。页面是单文件离线文档站：只收录项目自身
+  维护的 Markdown（含历史归档；`third_party/` 下的上游源码自带文档不纳入），左侧栏按分组直达
+  任意文档并在页内阅读正文，无需起服务器；首页汇总文档总数、生命周期状态、校验结果与最近提交日期，
+  并提供状态筛选、全表检索与常用入口；正文里指向第三方文档的链接仍指向原文件（另开标签）；
+- 状态口径：现行维护 / 规划中（[browser-local-roadmap.md](browser-local-roadmap.md)）/
+  历史归档只读；每篇文档另标「校验通过 / N 处问题 / 免校验」。
+  校验复用 `scripts/check_docs.py` 的唯一实现，历史归档与 `CHANGELOG.md` 按约定免校验；
+- `python scripts/build_docs_index.py --check` 可在 CI 里检查索引是否过期：比较时忽略生成时间、
+  git 日期与字节数（浅克隆、不同换行符不会误报），但正文已内嵌，任何 Markdown 改动都会让索引过期。
