@@ -77,7 +77,10 @@ class TestSoundalike(unittest.TestCase):
         self.assertIn('超时', result.message)
 
     def test_missing_executable(self):
-        with patch.object(config, 'SOUNDALIKE_EXE', os.path.join('Z:', 'nope', 'soundalike.exe')):
+        # resolve_tool 会兜底到 PATH 里的同名程序；构建机若恰好装了 soundalike，
+        # 用例就会被本机环境带偏。固定 PATH 查找为「找不到」，只验证缺失分支。
+        with patch.object(config, 'SOUNDALIKE_EXE', os.path.join('Z:', 'nope', 'soundalike.exe')), \
+                patch('utils.shutil.which', return_value=None):
             result = soundalike.check()
         self.assertFalse(result.ok)
         self.assertIn('找不到', result.message)
