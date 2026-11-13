@@ -12,6 +12,18 @@
 
 ### 新增
 
+- **免 Python 绿色版打包**：新增 `scripts/build_exe.py` 与根目录 `build_exe.bat`，用
+  PyInstaller onedir 把 CLI 与 Web 打进一个 exe，`dist/` 同时带上 `_internal/`（Python
+  运行时与 requests / mutagen / frida / pycryptodomex / fastapi / uvicorn / pydantic /
+  OpenCC）、当前平台所需的 `tools/` 外部程序、Web 静态资源、配置模板、日志目录与一键
+  启动脚本；`--all-tools` 可附带全平台二进制，打包后自动做版本 / 帮助 / Web 页面自检。
+  文档校验跳过 `dist/` 与 `build/`（PyInstaller 会带进第三方包自带的 README），
+  打包脚本也会清掉这些非项目文档。
+- **冻结态路径统一**：新增 `runtime_paths.py`，冻结后以 exe 所在目录为项目根，
+  `config.py`、`web/api.py`、`decrypto/`、`fingerprint/fpcalc.py` 不再用 `__file__`
+  推导 tools / web / config.ini / log 位置；`main.py --web` 提供 Web 八步向导入口，
+  打包后无需 `python -m uvicorn`。
+
 - **声纹库成为入库查重的必要信号**：第 6 步 `core.dedupe.match_against(fp_pool=...)`
   叠加声纹判定（只读 `music.db` + 现场 `fpcalc -raw`），可识别不同文件名、不同标签的
   同一录音；声纹库缺失/空库/工具不可用时一律不下发 `archive_ok`，第 8 步拒绝入库。
@@ -29,6 +41,9 @@
   都要求歌曲名/歌手/专辑/年份/封面齐全，缺任一项移入 `INCOMPLETE_DIR`；歌词仍只报告。
   封面探测统一走 `core/tags.py` 的 `has_embedded_cover()`。
 - README「已知限制」改为 Windows/macOS 双平台的 QQ 解密说明，不再写「仅 Windows」。
+- `test_missing_executable` 固定 PATH 兜底查找：构建机 `PATH` 里若恰好装了同名
+  `soundalike`，`utils.resolve_tool()` 会绕过被 patch 的缺失路径、真实执行外部程序，
+  导致「找不到」断言落空；现在该用例不再依赖本机装了什么。
 
 ### 文档
 
@@ -38,8 +53,20 @@
 - 新增 [docs/browser-local-roadmap.md](docs/browser-local-roadmap.md)：下一个分支（纯服务器
   Web + 浏览器本机实现）的基石文档与可行性研究报告，记录目标、现状基线、问题与方案、
   技术选型、必须保持的行为契约、分期路线、验收策略、补充事项与待决决策。
-- 新增全仓文档可浏览索引 [docs/index.html](docs/index.html) 与生成脚本
-  `scripts/build_docs_index.py`；`docs/README.md`、`scripts/README.md`、`AGENTS.md` 同步登记。
+- 新增并升级 [docs/index.html](docs/index.html) 与生成脚本 `scripts/build_docs_index.py`：
+  单文件离线文档站，左侧栏按分组直达项目自身 24 篇文档并在页内阅读渲染后的正文，首页给出
+  文档总数、生命周期状态、`check_docs.py` 校验结果、最近提交日期与可筛选的状态总表；
+  `third_party/` 下的上游源码自带文档不纳入索引，正文里指向它们的链接仍指向原文件。
+  状态口径为现行维护 / 规划中 / 历史归档只读，另标校验通过、问题数或免校验。生成脚本内嵌
+  Markdown 渲染并复用 `check_docs.py` 的唯一实现，`--check` 忽略时间、日期与字节数以免跨平台
+  误报；`docs/README.md`、`scripts/README.md`、`AGENTS.md` 同步登记，新增
+  `tests/test_build_docs_index.py` 覆盖状态判定、收录范围、链接重写、正文渲染与索引新鲜度。
+- 文档索引的项目文档按用途分为「使用与操作 / 开发与规则 / 排错与运维 / 规划与路线」四类：
+  侧栏二级分组、文档页面包屑、首页状态表新增「分类」列与可点击的分类筛选；
+  映射集中在 `scripts/build_docs_index.py` 的 `DOC_CATEGORY_OF`，漏配的项目文档会落进
+  「未分类」并在生成时告警；`docs/README.md`、`scripts/README.md` 同步登记分类表与维护约定。
+- 绿色版的打包与运行说明同步到 `README.md`、`docs/usage.md` 第 9 节、`CONTRIBUTING.md`、
+  `scripts/README.md` 与 `AGENTS.md`（含项目根目录唯一判定约束）；`docs/index.html` 重新生成。
 
 ### 计划中
 

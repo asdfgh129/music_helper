@@ -50,9 +50,11 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if PROJECT_DIR not in sys.path:
-    sys.path.insert(0, PROJECT_DIR)
+# 源码模式先把仓库根放进 sys.path（从任意 CWD 启动都能 import config）；
+# 冻结模式下 sys._MEIPASS 已在其中，config.PROJECT_DIR 由 runtime_paths 指向 exe 所在目录。
+_SOURCE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _SOURCE_ROOT not in sys.path:
+    sys.path.insert(0, _SOURCE_ROOT)
 
 import config  # noqa: E402
 import core.check as checker  # noqa: E402
@@ -62,13 +64,18 @@ import utils  # noqa: E402
 from services import steps  # noqa: E402
 from web.tasks import manager, supported_actions  # noqa: E402
 
+PROJECT_DIR = config.PROJECT_DIR
+if PROJECT_DIR not in sys.path:
+    sys.path.insert(0, PROJECT_DIR)
+
 # 初始化日志（供解密等需要 logger 的流程使用；失败也降级，不阻塞启动）
 try:
     utils.setup_logging()
 except Exception:  # noqa: BLE001
     pass
 
-WEB_DIR = os.path.dirname(os.path.abspath(__file__))
+# 冻结后 __file__ 指向 _internal/，静态资源实际在 exe 旁的 web/ 目录
+WEB_DIR = os.path.join(PROJECT_DIR, "web")
 STATIC_DIR = os.path.join(WEB_DIR, "static")
 LEGACY_INDEX = os.path.join(WEB_DIR, "index.html")
 

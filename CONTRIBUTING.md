@@ -27,6 +27,19 @@ python -m pip install -r requirements-dev.txt
 - 外部程序按平台放在 `tools/`：Windows 用 `tools/um.exe`、`tools/soundalike.exe`，
   macOS 用 `<名字>-darwin-<架构>` 命名的对应产物；缺失时功能降级，不影响程序启动与测试。
 
+## 打包绿色版（可选）
+
+构建机额外装一次构建期依赖，再运行打包脚本；产物在 `dist/`（已被 `.gitignore` 忽略，
+不要手工编辑），可以整目录拷到没装 Python 的机器上：
+
+```bash
+python -m pip install -r requirements-build.txt
+python scripts/build_exe.py
+```
+
+脚本会重新生成产物但保留 `dist/` 里用户改过的配置与日志，并自动启动 exe 做冒烟自检。
+详见 [README.md](README.md) 的「绿色版」一节与 [scripts/README.md](scripts/README.md)。
+
 ## 运行与测试
 
 ```bash

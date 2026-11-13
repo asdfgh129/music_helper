@@ -55,6 +55,42 @@ python main.py --manual-archive
 默认最终库是 `D:\music`，工作区是 `G:\Temp`。改路径、换盘符、调阈值见
 [docs/configuration.md](docs/configuration.md)。
 
+## 绿色版（免 Python 环境）
+
+目标机器不想装 Python 时，用打包脚本生成一个可直接运行的绿色目录：
+
+```bash
+python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-build.txt
+python scripts/build_exe.py
+```
+
+Windows 上也可以直接双击 `build_exe.bat`。产物固定放在仓库的 `dist/`，整目录拷走即可，
+不需要 Python、pip、联网装依赖，也不要把主程序单独拿出来：
+
+```text
+dist/
+├── music_helper.exe        CLI 与 Web 共用的主程序，参数同 python main.py
+├── _internal/              自带 Python 运行时 + 全部第三方 Python 依赖
+├── tools/                  当前平台所需外部程序（um / soundalike / fpcalc / Frida hook / QQ 安装包）
+├── web/                    八步向导页面与 Vue 运行时
+├── config.ini              本机配置（重复打包不覆盖）
+├── log/                    日志、报告、journal、回收站
+├── 启动Web向导.bat / 命令行.bat
+└── 使用说明.txt / 使用文档.html / 打包清单.txt
+```
+
+常用命令（在 `dist/` 目录里执行）：
+
+```text
+music_helper.exe --help
+music_helper.exe --dry-run
+music_helper.exe --web --web-port 8001
+```
+
+打包脚本 `scripts/build_exe.py` 每次重建产物但保留用户改过的配置与日志，完成后自动启动
+exe 验证版本、帮助与 Web 页面；`--all-tools` 附带全平台二进制、`--skip-verify` 跳过自检。
+构建机需要 Python 3.11+ 与上述依赖，产物本身不需要。
+
 ## 流水线
 
 ```

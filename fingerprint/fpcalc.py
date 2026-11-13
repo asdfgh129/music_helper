@@ -20,8 +20,10 @@ from .models import AcoustIDConfig, FingerprintResult
 
 logger = logging.getLogger(__name__)
 
-# 允许作为脚本或包导入两种方式下都能找到项目根目录的 config.py
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 允许作为脚本或包导入两种方式下都能找到项目根目录的 config.py；
+# 冻结后 config 已在 PYZ 里，__file__ 也不是项目根，不需要再插路径
+if not getattr(sys, 'frozen', False):
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     from config import FPCALC_LENGTH

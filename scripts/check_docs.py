@@ -20,7 +20,10 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SKIP_DIRS = {'.git', '.workbuddy', '.sisyphus', '.omo', 'tmp', '__pycache__', '.pytest_cache', 'log', 'node_modules', 'history'}
+# dist/ 与 build/ 是打包产物（PyInstaller 会把第三方包自带的 README.md 一起收进来），
+# 里面的 .md 不是项目文档，不参与校验
+SKIP_DIRS = {'.git', '.workbuddy', '.sisyphus', '.omo', 'tmp', '__pycache__',
+             '.pytest_cache', 'log', 'node_modules', 'history', 'dist', 'build'}
 # 允许指向「将来会生成」的路径（运行产物）
 IGNORE_PREFIXES = ('log/', 'music.db')
 

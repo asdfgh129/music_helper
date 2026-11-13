@@ -25,13 +25,17 @@ import platform
 import re
 import sys
 
+import runtime_paths
+
 # ==================== 版本信息 ====================
 # 手工维护，与仓库根目录的 CHANGELOG.md 对齐；不再用时间戳动态生成
 __version__ = '0.7.0'
 VERSION = __version__
 
 # ==================== 项目目录 ====================
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+# 源码模式是仓库根；PyInstaller 冻结后是 exe 所在目录（dist/），
+# tools/、web/、config.ini、log/ 都随 exe 分发，唯一判定见 runtime_paths
+PROJECT_DIR = runtime_paths.project_dir()
 TOOLS_DIR = os.path.join(PROJECT_DIR, 'tools')
 LOG_DIR = os.path.join(PROJECT_DIR, 'log')
 REPORT_DIR = os.path.join(PROJECT_DIR, 'log', 'reports')

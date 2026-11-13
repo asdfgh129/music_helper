@@ -29,14 +29,17 @@ import sys
 import tempfile
 from datetime import datetime
 
+from runtime_paths import project_dir
+
 try:
     from .source_finder import guess_song_url
 except Exception:
     def guess_song_url(_):
         return None
 
-# Frida 脚本统一放在 tools/；路径按 __file__ 定位，避免依赖 CWD。
-_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Frida 脚本统一放在 tools/；项目根由 runtime_paths 统一判定（冻结后是 exe 所在目录），
+# 不再用 __file__，否则打包后会指到 _internal/。
+_PROJECT_DIR = project_dir()
 
 
 def _hook_path():

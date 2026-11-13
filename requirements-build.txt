@@ -1,0 +1,7 @@
+# 构建期依赖：仅用于生成 dist/ 里的免 Python 绿色包。
+# 运行 dist/music_helper.exe 不需要 Python、pip 或本文件里的任何包。
+#
+# 用法（仅构建机需要）：
+#   python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-build.txt
+#   python scripts/build_exe.py
+pyinstaller>=6.11,<7

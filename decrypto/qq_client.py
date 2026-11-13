@@ -24,7 +24,10 @@ import tempfile
 import time
 import zipfile
 
-_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from runtime_paths import project_dir
+
+# 客户端安装包 / 屏蔽更新补丁都在 tools/；冻结后不能用 __file__ 定位
+_PROJECT_DIR = project_dir()
 
 # Windows 常见安装位置：注册表读不到时的兜底
 _WIN_GUESS = (

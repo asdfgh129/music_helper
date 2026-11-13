@@ -23,6 +23,7 @@ QQ 解密前的客户端安装 / 启动 / 登录检查在 `decrypto/qq_client.py
 | 改配置项 | [docs/configuration.md](docs/configuration.md) |
 | 写文档/移动文档 | [docs/README.md](docs/README.md)、[CONTRIBUTING.md](CONTRIBUTING.md) |
 | 开发「纯服务器 Web + 浏览器本机实现」分支 | [docs/browser-local-roadmap.md](docs/browser-local-roadmap.md)（基石文档、行为契约与待决决策） |
+| 打包免 Python 绿色版 / 改项目路径定位 | [README.md](README.md)「绿色版」一节、[docs/usage.md](docs/usage.md) 第 9 节、`runtime_paths.py` | 流水线判定规则 |
 | 推不上 GitHub | [docs/git-proxy.md](docs/git-proxy.md)（`scripts/git_uplink.py`） |
 
 ## 常用命令
@@ -35,7 +36,9 @@ python -m ruff check .                               # 静态检查（CI lint jo
 python -m compileall -q core services tagger decrypto fingerprint scripts tests main.py config.py utils.py
 python -c "import config, utils, main"               # 导入冒烟
 python scripts/check_docs.py                         # 文档校验：链接 / 路径 / 命令
+python scripts/build_docs_index.py --check          # 索引是否过期
 python main.py --check --dry-run                     # 用真实配置预览
+python scripts/build_exe.py                          # 生成 dist/ 免 Python 绿色包（需 requirements-build.txt）
 ```
 
 ## 硬约束
@@ -78,6 +81,11 @@ python main.py --check --dry-run                     # 用真实配置预览
     两类记录靠传播进同一份 `log/Music-*.log`。**不要在模块或包初始化里调 `logging.basicConfig`**
     ——它会多挂一个只写 stderr 的 handler，子模块日志从此绕过文件（`fingerprint` 曾因此
     整条链路不进日志）。`--debug` 只调 handler 与 `music_manager` 的级别，不要另建日志系统。
+13. **项目根目录只有一处判定**：`runtime_paths.project_dir()`。源码模式返回仓库根，PyInstaller
+    冻结后返回 exe 所在目录；`config.py`、`web/api.py`、`decrypto/`、`fingerprint/fpcalc.py`
+    都通过它定位 tools / web / config.ini / log。**新模块不要用 `__file__` 拼项目根**，
+    否则打包后配置和日志会落进依赖目录、外部程序全部找不到；绿色版由
+    `scripts/build_exe.py` 组装，`main.py --web` 是打包后的 Web 入口。
 
 ## 测试
 

@@ -42,6 +42,7 @@ EPILOG = '''
   python main.py --init                  # 初始化/更新声纹库
   python main.py --checkdb               # 检查声纹库与文件一致性
   python main.py --soundalike-report     # 只列出重复候选组，不移动文件
+  python main.py --web                   # 启动 Web 八步向导（127.0.0.1:8000）
 '''
 
 
@@ -58,6 +59,33 @@ def _ensure_console_encoding():
             pass
 
 
+def run_web(host, port, open_browser=True):
+    """启动内置 Web 八步向导。
+
+    冻结后的 exe 也走这里：不能再用 ``python -m uvicorn``，所以把 app 对象
+    直接交给 uvicorn.run（避免字符串形式的动态导入在打包后找不到模块）。
+    """
+    try:
+        import uvicorn
+
+        from web.api import app
+    except ImportError as exc:
+        print(f'Web 依赖缺失: {exc}；源码模式请先执行 '
+              'pip install -r requirements-dev.txt', file=sys.stderr)
+        return 1
+
+    url = f'http://{host}:{port}/'
+    print(f'Web 八步向导: {url}   按 Ctrl+C 退出', flush=True)
+    if open_browser:
+        import threading
+        import webbrowser
+
+        # 等服务真正起来再开浏览器，否则会先弹一个连接失败页
+        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+    uvicorn.run(app, host=host, port=port, log_level='info')
+    return 0
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description=f'音乐文件管理系统 v{config.__version__}',
@@ -65,6 +93,14 @@ def build_parser():
         epilog=EPILOG,
     )
     parser.add_argument('--version', action='version', version=f'%(prog)s v{config.__version__}')
+    parser.add_argument('--web', action='store_true',
+                        help='启动 Web 八步向导（内置 FastAPI 服务，打包后的 exe 同样可用）')
+    parser.add_argument('--web-host', default=os.environ.get('MUSIC_HELPER_WEB_HOST', '127.0.0.1'),
+                        help='--web 监听地址（默认 127.0.0.1，仅本机）')
+    parser.add_argument('--web-port', type=int,
+                        default=int(os.environ.get('MUSIC_HELPER_WEB_PORT', '8000')),
+                        help='--web 监听端口（默认 8000）')
+    parser.add_argument('--no-browser', action='store_true', help='--web 时不自动打开浏览器')
     parser.add_argument('--debug', action='store_true', help='输出详细运行信息')
     parser.add_argument('--month', type=str, default=None, help='指定月份 (YYYYMM，默认当前月)')
     parser.add_argument('--dry-run', action='store_true', help='只生成操作计划，不实际移动/改名')
@@ -466,6 +502,10 @@ def main(argv=None):
     _ensure_console_encoding()
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.web:
+        return run_web(host=args.web_host, port=args.web_port,
+                       open_browser=not args.no_browser)
 
     utils.setup_logging(debug_mode=args.debug)
     utils.main_logger.info(f'配置: {config.as_dict()}')

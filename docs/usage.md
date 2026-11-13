@@ -209,3 +209,22 @@ python -m uvicorn web.api:app --host 127.0.0.1 --port 8000
 - 所有破坏性动作都走 `core.ops.Plan` + `log/journal.jsonl`，Web 没有自己的删除/移动实现。
 - 删除永远是「移入 `log/_trash/`」，不调用 `os.remove`。
 - 任务队列单线程串行；跑任务期间不允许改目录设置（界面会禁用，接口返回 409）。
+
+## 9. 绿色版（免 Python 环境）
+
+打包方式见 [项目 README](../README.md)。生成的 `dist/` 可以整体拷到没装 Python 的机器，
+主程序自带 Python 运行时与全部依赖，参数与本手册的 `python main.py` 完全一致：
+
+```text
+music_helper.exe --help
+music_helper.exe --dry-run
+music_helper.exe --web                  # 启动八步向导，自动打开浏览器
+music_helper.exe --web --web-port 8001  # 8000 被占用时换端口
+music_helper.exe --web --no-browser     # 不自动打开浏览器
+```
+
+源码模式启动 Web 用 `python -m uvicorn ...`（见 8.1），绿色版一律用 `--web`。
+`--web-host` / `--web-port` 也可用环境变量 `MUSIC_HELPER_WEB_HOST` /
+`MUSIC_HELPER_WEB_PORT` 设定。外部程序在程序目录的 `tools/`，配置写在程序目录的
+config.ini，日志、报告与回收站写到程序目录的 `log/`；这些路径由
+`runtime_paths.py` 定位，与当前工作目录无关。
