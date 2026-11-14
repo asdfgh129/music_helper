@@ -517,6 +517,34 @@ class TestTrackAccess(StepsTestCase):
         self.assertIn('晴天', data['lyric'])
         self.assertEqual(data['consistency']['file']['artist'], '周杰伦')
 
+    def test_detail_reads_gbk_lyric_without_mojibake(self):
+        """旧 _read_lrc 固定 utf-8 errors=replace，GBK 中文歌词会整篇乱码"""
+        from core import lyrics as lyrics_core
+
+        audio = self._touch('workspace', '周杰伦 - 晴天.flac')
+        lrc = os.path.join(self.workspace, '周杰伦 - 晴天.lrc')
+        with open(lrc, 'wb') as handle:
+            handle.write('[00:01.00]故事的小黄花'.encode('gb18030'))
+        lyrics_core.clear_lrc_cache()
+        data = steps.track_detail(audio)
+        self.assertIn('故事的小黄花', data['lyric'])
+        self.assertNotIn('\ufffd', data['lyric'])
+
+    def test_detail_and_save_use_uppercase_lrc(self):
+        from core import lyrics as lyrics_core
+
+        audio = self._touch('workspace', '周杰伦 - 晴天.flac')
+        self._touch('workspace', '周杰伦 - 晴天.LRC', content='[00:01]晴天')
+        lyrics_core.clear_lrc_cache()
+        self.assertTrue(steps.track_detail(audio)['has_lrc'])
+        steps.save_track(audio, lyric='[00:02]新歌词')
+        # 写回必须沿用已有的大写文件名，不许再造出第二个同名歌词
+        lrc_files = [name for name in os.listdir(self.workspace)
+                     if os.path.splitext(name)[1].lower() == '.lrc']
+        self.assertEqual(len(lrc_files), 1)
+        with open(os.path.join(self.workspace, lrc_files[0]), encoding='utf-8') as handle:
+            self.assertIn('新歌词', handle.read())
+
 
 class TestFingerprintGate(StepsTestCase):
     """声纹库是入库必要前置：缺库/空库拦截、跨名称标签命中、归档后补录"""

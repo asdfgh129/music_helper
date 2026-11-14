@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import sys
 from datetime import datetime
 
@@ -194,3 +195,18 @@ def validate_month_format(month_str):
 def get_current_month():
     """当前月份（YYYYMM）"""
     return datetime.now().strftime('%Y%m')
+
+
+def open_with_default_app(path):
+    """用系统默认程序打开一个已校验的文件路径（试听的降级出口）
+
+    只接单个文件路径，不拼命令、不接用户参数。平台分支集中在这里：
+    业务模块 ``services/media.py`` 只管校验路径，不自己判断 ``sys.platform``
+    （与「外部程序统一按平台挑选」的约定一致）。
+    """
+    if os.name == 'nt':
+        os.startfile(path)  # type: ignore[attr-defined]  Windows 专用
+        return
+    command = 'open' if sys.platform == 'darwin' else 'xdg-open'
+    subprocess.Popen([command, path], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

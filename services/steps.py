@@ -22,6 +22,7 @@ import core.scan as scanner
 import core.tags as core_tags
 import utils
 from core import dedupe as dedupe_mod
+from core import lyrics as lyrics_core
 from core import naming, quality
 from core.model import Track
 from services import decrypt as decrypt_service
@@ -495,15 +496,13 @@ def _audio_in_workspace(path):
 
 
 def _read_lrc(path):
-    """读同名 .lrc 全文；没有或读不了返回空串"""
-    lrc_path = os.path.splitext(path)[0] + '.lrc'
-    if not os.path.exists(lrc_path):
-        return ''
-    try:
-        with open(lrc_path, 'r', encoding='utf-8', errors='replace') as handle:
-            return handle.read()
-    except OSError:
-        return ''
+    """读同名 .lrc 全文；没有或读不了返回空串
+
+    编码探测与大小写不敏感的路径解析只在 core.lyrics 一处实现，
+    旧版固定 utf-8 errors=replace 会把 GBK 中文歌词读成乱码。
+    """
+    text, _encoding = lyrics_core.read_lrc_text(lyrics_core.lrc_path_for(path))
+    return text
 
 
 def track_detail(path):
@@ -557,10 +556,12 @@ def save_track(path, tags=None, lyric=None):
 
     lyric_saved = None
     if lyric is not None:
-        lrc_path = os.path.splitext(target)[0] + '.lrc'
+        # 已有大写 .LRC 时沿用原文件名，别再生成一个小写的重复歌词
+        lrc_path = lyrics_core.lrc_path_for(target)
         try:
             with open(lrc_path, 'w', encoding='utf-8') as handle:
                 handle.write(str(lyric))
+            lyrics_core.clear_lrc_cache()
             lyric_saved = True
         except OSError as exc:
             return {'ok': False, 'path': target, 'changed': written,

@@ -30,6 +30,12 @@ music_helper Web UI —— FastAPI 后端
   POST /api/archive/run       第 8 步执行 → 后台任务
   GET  /api/workspace/files   工作区文件列表（拷贝/解密页右栏）
 
+试听旁路（只读，不属于八步，也不进后台任务队列）：
+  GET       /api/media/info    音频元数据 + 浏览器可播判定
+  GET|HEAD  /api/media/stream  Range 206 字节流（浏览器拖动进度条必需）
+  GET       /api/media/lyric   结构化 LRC（编码探测 / 时间戳 / 双语）
+  POST      /api/media/open    用系统默认播放器打开不可播格式
+
 保留的旧接口（CLI 时代的仪表盘与脚本仍可用）：
   GET  /api/config /api/platform /api/scan /api/reports /api/reports/view
   POST /api/check /api/plan/preview /api/plan/execute /api/decrypt
@@ -45,8 +51,8 @@ import sys
 from datetime import datetime
 from typing import Optional  # noqa: F401  （保留给旧接口的类型注解）
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -61,6 +67,7 @@ import core.check as checker  # noqa: E402
 import core.ops as ops  # noqa: E402
 import core.scan as scanner  # noqa: E402
 import utils  # noqa: E402
+from services import media as media_service  # noqa: E402  顶层导入，PyInstaller 才扫得到
 from services import steps  # noqa: E402
 from web.tasks import manager, supported_actions  # noqa: E402
 
@@ -172,6 +179,10 @@ class ArchiveRunReq(BaseModel):
 
 
 class MkdirReq(BaseModel):
+    path: str = ""
+
+
+class MediaOpenReq(BaseModel):
     path: str = ""
 
 
@@ -574,6 +585,75 @@ def api_archive_run(req: ArchiveRunReq):
     return _submit("archive", {"into_library": req.into_library,
                                "move_incomplete": req.move_incomplete,
                                "write_fingerprints": req.write_fingerprints})
+
+
+# --------------------------------------------------------------------------- #
+# 试听旁路（只读媒体层；契约见 docs/media-player.md）                          #
+# --------------------------------------------------------------------------- #
+
+def _media_target(path):
+    """四个媒体接口共用同一套白名单校验"""
+    try:
+        return media_service.resolve_media(path)
+    except media_service.MediaError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/media/info")
+def api_media_info(path: str = ""):
+    return {"ok": True, **media_service.media_info(_media_target(path))}
+
+
+@app.api_route("/api/media/stream", methods=["GET", "HEAD"])
+def api_media_stream(request: Request, path: str = ""):
+    """自行实现 Range：Starlette 各版本 FileResponse 的行为不一致，指望不上。
+
+    只返回单段 206；多段 Range 由 services.media.parse_range 取第一段。
+    HEAD 只回响应头，不读文件体。流式响应不打逐块日志。
+    """
+    target = _media_target(path)
+    size = os.path.getsize(target)
+    mime = media_service.mime_for(target)
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-store",
+        "Content-Type": mime,
+    }
+    if request.method == "HEAD":
+        return Response(status_code=200,
+                        headers={**headers, "Content-Length": str(size)})
+    try:
+        start, end, partial = media_service.parse_range(
+            request.headers.get("range"), size)
+    except media_service.RangeError as exc:
+        return JSONResponse(
+            {"detail": str(exc)}, status_code=416,
+            headers={"Accept-Ranges": "bytes",
+                     "Content-Range": f"bytes */{size}"})
+    body_headers = {**headers, "Content-Length": str(end - start + 1)}
+    if partial:
+        body_headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    return StreamingResponse(
+        media_service.iter_chunks(target, start, end),
+        status_code=206 if partial else 200,
+        headers=body_headers,
+    )
+
+
+@app.get("/api/media/lyric")
+def api_media_lyric(path: str = ""):
+    return media_service.lyric_payload(_media_target(path))
+
+
+@app.post("/api/media/open")
+def api_media_open(req: MediaOpenReq):
+    """把不可播格式交给本机系统播放器；路径已由白名单校验，且必须用户点击触发"""
+    target = _media_target(req.path)
+    try:
+        utils.open_with_default_app(target)
+    except OSError as exc:
+        raise HTTPException(status_code=502, detail=f"打不开系统播放器: {exc}")
+    return {"ok": True, "launched": True, "path": target}
 
 
 # --------------------------------------------------------------------------- #

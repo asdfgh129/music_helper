@@ -10,6 +10,7 @@
 | 30 秒跑起来 | [../README.md](../README.md) | 参数细节 |
 | 照着界面一步步操作 | [web-guide.md](web-guide.md) | 判定规则原理 |
 | 用浏览器走一遍完整流程 | [web-wizard.md](web-wizard.md) | 单条判定规则 |
+| 改试听、歌词显示或媒体接口 | [media-player.md](media-player.md) | 判定规则、纯服务器分支方案 |
 | 看一条文件从下载到入库的完整路径 | [workflow.md](workflow.md) | 单条规则的算法 |
 | 弄清「为什么这个文件被判重复/未入库」 | [rules.md](rules.md) | 流程顺序 |
 | 看某个判定背后的算法、公式、阈值与流程图 | [algorithms.md](algorithms.md) | 界面操作步骤 |
@@ -28,12 +29,12 @@
 
 ## 项目文档分类
 
-[index.html](index.html) 的侧栏把 `docs/` 下 14 篇文档按用途分成四类，首页状态表也有「分类」列与
+[index.html](index.html) 的侧栏把 `docs/` 下 15 篇文档按用途分成四类，首页状态表也有「分类」列与
 分类筛选。分类映射的唯一来源是 `scripts/build_docs_index.py` 的 `DOC_CATEGORY_OF`。
 
 | 分类 | 面向 | 文档 |
 |---|---|---|
-| 使用与操作 | 跑流程、点界面、查参数、改配置 | [README.md](README.md)、[workflow.md](workflow.md)、[usage.md](usage.md)、[web-guide.md](web-guide.md)、[web-wizard.md](web-wizard.md)、[configuration.md](configuration.md) |
+| 使用与操作 | 跑流程、点界面、查参数、改配置 | [README.md](README.md)、[workflow.md](workflow.md)、[usage.md](usage.md)、[web-guide.md](web-guide.md)、[web-wizard.md](web-wizard.md)、[media-player.md](media-player.md)、[configuration.md](configuration.md) |
 | 开发与规则 | 改代码、改判定规则、查算法与声纹原理 | [architecture.md](architecture.md)、[rules.md](rules.md)、[algorithms.md](algorithms.md)、[fingerprint.md](fingerprint.md) |
 | 排错与运维 | 自检、故障排查、推拉失败 | [self-check.md](self-check.md)、[troubleshooting.md](troubleshooting.md)、[git-proxy.md](git-proxy.md) |
 | 规划与路线 | 下一个分支的路线与待决决策 | [browser-local-roadmap.md](browser-local-roadmap.md) |
@@ -50,6 +51,7 @@
 | [usage.md](usage.md) | CLI 全参数、流程入口、参数优先级、退出码、使用禁忌 | 规则为什么这样定 |
 | [configuration.md](configuration.md) | 配置来源与优先级、目录语义、外部程序、阈值、扩展名 | 规则怎么使用这些配置 |
 | [web-wizard.md](web-wizard.md) | Web 向导八步做了什么、初始化判定、查重与自检、跳过/回退语义、接口与文件清单、um 跨盘核实结论 | 单条判定规则、CLI 参数 |
+| [media-player.md](media-player.md) | 本机临时 Web 服务的部署口径、只读媒体层、Range 流式、LRC 解析口径、格式矩阵、播放器交互与分期 | 判定规则、未来纯服务器分支的解码方案 |
 | [architecture.md](architecture.md) | 分层边界、模块职责、数据流、`Plan` 机制、扩展指南、设计决策 | 具体判定规则 |
 | [fingerprint.md](fingerprint.md) | 指纹原理、AcoustID/MusicBrainz、声纹查重（soundalike）的流程与算法、阈值、平台支持、同曲不同版本的碰撞策略与审核结论 | 本地查重流程 |
 | [troubleshooting.md](troubleshooting.md) | 症状 → 原因 → 处理、日志与 journal、数据恢复 | 正常流程说明 |

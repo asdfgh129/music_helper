@@ -218,6 +218,18 @@
   手工编辑只负责把标签改对。
 - 接口只接受工作区内的音频路径（`steps._audio_in_workspace`），越权直接 400。
 
+### 5.4.1 试听与同步歌词
+
+表格每行与编辑抽屉都提供「试听」：调根组件的 `playTrack(path, name)`，由挂在
+`web/static/js/app.js` 根模板里的全局播放器接管，**切到第 6、7 步不会中断播放**。
+播放器先取 `/api/media/info` 与 `/api/media/lyric`，再让 `<audio>` 指向 `/api/media/stream`；
+歌词高亮由 `timeupdate` 驱动，点歌词行会发起新的 Range 请求跳转进度。
+
+播放器本身**不写任何文件**：歌词偏移只存内存，写回仍走 `POST /api/track/save`，
+因此库目录里的文件只能听、不能改。`.ape/.wma/.dsf` 在 `info` 里被标为
+`browser_playable=false`，播放器明确提示并提供「用系统播放器打开」按钮，不静默失败。
+详见 [media-player.md](media-player.md)。
+
 ### 5.5 判定来源
 
 「是否可入库」仍是 `core.check.readiness_problems()`，没有第二套规则。
@@ -445,6 +457,12 @@
 | GET/POST | `/selfcheck/preview`、`/selfcheck/run` | 第 7 步 |
 | GET/POST | `/archive/preview`、`/archive/run` | 第 8 步 |
 | GET | `/workspace/files` | 工作区文件列表（拷贝/解密页右栏） |
+| GET | `/media/info`、`/media/lyric` | 试听前的只读元数据与结构化歌词 |
+| GET/HEAD | `/media/stream` | 音频字节流（支持 Range 206） |
+| POST | `/media/open` | 用系统默认播放器打开不可播格式 |
+
+媒体接口不属于八步，全部只读（`/media/open` 只启动本机播放器，不改文件），也不进
+`web/tasks.py` 串行队列。契约与格式矩阵见 [media-player.md](media-player.md)。
 
 ## 11. 边界（明确不做）
 

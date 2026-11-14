@@ -213,6 +213,9 @@
         </main>
 
         <div class="toast" :class="toastTone" v-if="toast">{{ toast }}</div>
+
+        <!-- 全局播放器挂在根模板：步骤组件用 <component :is> 切换，放子页面里会被卸载 -->
+        <mh-player></mh-player>
       </div>`,
   };
 
@@ -229,6 +232,13 @@
           detail: { text: String(text), tone: tone || '' },
         }));
       },
+      /* 任何步骤都能唤起底部试听播放器（事件由 MH.Player 监听） */
+      playTrack: function (path, name) {
+        if (!path) return;
+        window.dispatchEvent(new CustomEvent('mh-play', {
+          detail: { path: path, name: name || '' },
+        }));
+      },
     },
   });
 
@@ -236,6 +246,7 @@
   app.component('mh-result', MH.ResultDialog);
   app.component('mh-confirm', MH.ConfirmDialog);
   app.component('mh-dir-picker', MH.DirPicker);
+  app.component('mh-player', MH.Player);
   app.component('step-dirs', MH.StepDirs);
   app.component('step-actions', MH.StepActions);
   app.component('step-init', MH.StepInit);

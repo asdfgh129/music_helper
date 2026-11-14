@@ -44,7 +44,10 @@ class Track:
 
     @property
     def lrc_path(self):
-        return os.path.splitext(self.path)[0] + '.lrc'
+        # 函数内导入：core.lyrics -> core.scan -> core.model 会形成循环导入。
+        # 与 core.lyrics.orphan_lrc 共用同一套大小写不敏感的配对口径。
+        from core.lyrics import lrc_path_for
+        return lrc_path_for(self.path)
 
     @property
     def has_lrc(self):

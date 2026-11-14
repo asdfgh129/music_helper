@@ -169,7 +169,7 @@ MSVC 修饰导出名），实际解密固定走 `um` 离线；登录态无法程
 ### 8.1 启动
 
 ```bash
-pip install -r requirements-dev.txt      # 仅需首次：安装 fastapi / uvicorn
+pip install -r requirements-dev.txt      # 仅需首次：安装 fastapi / uvicorn / httpx（接口测试）
 cd /path/to/music_helper
 python -m uvicorn web.api:app --host 127.0.0.1 --port 8000
 # 浏览器打开 http://127.0.0.1:8000/         八步向导

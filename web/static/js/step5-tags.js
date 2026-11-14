@@ -373,7 +373,7 @@
                 <th style="width:44px">封面</th>
                 <th style="width:44px">歌词</th>
                 <th class="sortable" @click="sortBy('state', $event)">状态 <i class="arrow">{{ arrow('state') }}</i></th>
-                <th style="width:52px"></th>
+                <th style="width:100px"></th>
               </tr>
             </thead>
             <tbody>
@@ -391,7 +391,10 @@
                 <td>
                   <span :class="rowState(item).cls" style="font-size:12px">{{ rowState(item).text }}</span>
                 </td>
-                <td><button class="btn link" @click="openEdit(item)" :disabled="taskRunning">编辑</button></td>
+                <td>
+                  <button class="btn link" @click="playTrack(item.path, item.name)" title="试听并显示歌词">▶ 试听</button>
+                  <button class="btn link" @click="openEdit(item)" :disabled="taskRunning">编辑</button>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -474,6 +477,10 @@
             <footer>
               <button class="btn ghost" @click="fetchOnline" :disabled="drawerBusy">
                 <span v-if="drawerBusy" class="spin"></span> 在线取标签
+              </button>
+              <button class="btn ghost" @click="playTrack(editing.path, editing.name)"
+                      :disabled="!editing || !editing.path" title="试听并对照歌词校准时间轴">
+                试听并校准歌词
               </button>
               <span class="spacer"></span>
               <button class="btn ghost" @click="closeEdit" :disabled="drawerBusy">取消</button>

@@ -46,7 +46,7 @@
 | `core/scan.py` | 一次遍历建索引 | `scan(paths, month, month_from, month_to, with_tags, recursive, extensions)` |
 | `core/naming.py` | 文件名规则（唯一实现） | `parse_filename`、`canonicalize`、`format_filename`、`version_key` |
 | `core/tags.py` | 标签读写 + 封面 + 时长 + 音频规格（唯一实现） | `read_meta`、`read_tags`、`read_quality`、`write_tags`、`write_cover`、`has_cover`、`duration` |
-| `core/lyrics.py` | 歌词缺失 / 孤立 | `missing_lrc`、`orphan_lrc` |
+| `core/lyrics.py` | 歌词缺失 / 孤立 + LRC 读取与解析（唯一实现） | `missing_lrc`、`orphan_lrc`、`lrc_path_for`、`read_lrc_text`、`parse_lrc` |
 | `core/dedupe.py` | 本地重复判定 + 跨集合比对（含声纹信号，唯一实现） | `find_by_tag`、`find_by_filename`、`find_duplicates`、`match_against`、`fingerprint_similarity`、`fingerprint_candidates`、`version_markers_conflict` |
 | `core/quality.py` | 音质比较（同一录音该留哪一份） | `is_lossless`、`compare`、`describe` |
 | `core/organize.py` | 年代/年份归档 | `plan_organize(tracks, base_dir, plan)` |
@@ -63,6 +63,7 @@
 | `services/decrypt.py` | 网易云 / QQ 解密编排 | `tools/um`（三平台；macOS 与旧版 QQ 走它）、`decrypto`（Frida，仅 Windows） |
 | `services/soundalike.py` | 声纹去重、库一致性、建库/补库（`init_db` / `refresh_db`）、只读查询库指纹（`library_fingerprints`）、现场算指纹（`fingerprint_of`） | `tools/soundalike`（Windows 为 `soundalike.exe`）、`fpcalc` |
 | `services/steps.py` | Web 向导八步编排（CLI 与 Web 共用） | `core/*`、`services/*`、`tagger/` |
+| `services/media.py` | 试听只读媒体层：路径白名单、Range 解析、分块迭代、MIME 矩阵、系统播放器调用（见 [media-player.md](media-player.md)） | `core/tags.py`、`core/lyrics.py`、标准库 |
 | `services/settings_store.py` | `config.ini [paths]` 的唯一写入点（校验 + 落盘 + `config.reload()`） | 标准库 |
 
 ### `tagger/`
@@ -91,9 +92,9 @@
 
 | 模块 | 职责 | 关键接口 |
 |---|---|---|
-| `web/api.py` | FastAPI 应用：向导八步 + 只读配置/扫描/报告 + 检查/计划/执行 + OS 感知解密 + 任务提交/查询 | 全部 `GET/POST /api/*` 路由（如 `GET /api/wizard/state`、`POST /api/copy/run`、`GET /api/tasks/{id}`） |
+| `web/api.py` | FastAPI 应用：向导八步 + 只读配置/扫描/报告 + 检查/计划/执行 + OS 感知解密 + 任务提交/查询 + 试听只读旁路 `/api/media/*` | 全部 `GET/POST /api/*` 路由（如 `GET /api/wizard/state`、`POST /api/copy/run`、`GET /api/tasks/{id}`、`GET /api/media/stream`） |
 | `web/tasks.py` | 单工作者串行任务队列；既能按日志关键字推断阶段（CLI 流程），也能接收逐条进度（`Task.set_progress`，向导流程） | `TaskManager.submit` / `busy`、`_dispatch_wizard` |
-| `web/static/` | Vue 3 八步向导：`index.html` + `css/app.css` + `js/*.js`（每步一个组件），Vue 运行时在 `vendor/`，无构建链 | — |
+| `web/static/` | Vue 3 八步向导：`index.html` + `css/app.css` + `js/*.js`（每步一个组件），`web/static/js/player.js` 是挂在根模板的全局试听播放器，Vue 运行时在 `vendor/`，无构建链 | — |
 | `web/index.html` | 旧版深色单页仪表盘，仍在 `/legacy` 提供 | — |
 
 设计要点：
@@ -306,3 +307,14 @@ Web 端没有自己的删除/移动实现，所有破坏性动作都走 `core.op
 ### 8.4 解密随运行机器 OS 分支
 
 Web 不假设「只有 Windows 能解密」。`/api/platform` 返回运行平台（macOS / Windows / 其它）与对应解密能力；`/api/decrypt` 把动作交给 `services.decrypt`，由 `decrypto/qq.py:decrypt_backend()` 按本机 OS 选 Frida（Windows，需客户端已登录）或 um（macOS 离线免密钥）。纯服务器环境只处理离线可解的文件。
+
+### 8.5 试听是只读旁路，不是第九步
+
+`main.py --web` 起的是**本机临时服务**：页面、浏览器、音乐库与 Python 进程同在一台机器上，
+唯一的边界是浏览器沙箱（`<audio>` 不能直接读 `file://`），字节经回环 HTTP 从 Python 进程
+送入浏览器，不是上传。因此 WASM 解码在主干没有立论，它属于
+[browser-local-roadmap.md](browser-local-roadmap.md) 那个「音频字节零上行」的未来分支。
+
+试听链路（`/api/media/*`）整条只读：不生成 `Plan`、不移动文件、不进 `web/tasks.py` 的
+单工作者队列（否则一首歌会堵住八步流水线）。`<audio>` 挂在根组件模板而非步骤组件里，
+保证切步骤不中断播放。完整契约、格式矩阵与分期见 [media-player.md](media-player.md)。

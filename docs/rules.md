@@ -196,7 +196,14 @@ m4a / wma / dsf。
 - `orphan_lrc()` 找出没有对应音频的 `.lrc`（按 `config.AUDIO_EXTENSIONS` 判断）；
 - **已有 `.lrc` 不覆盖**；
 - QQ 音乐同时返回原文与翻译时，写成「原文 + 空行 + `[翻译]` + 译文」；
+- 扩展名大小写不敏感：同名 `.LRC` 也算有歌词，路径解析的唯一实现是
+  `core.lyrics.lrc_path_for()`，`Track.lrc_path` 与单曲编辑都复用它；
 - 音频移动/改名时，`core.ops.Plan` 会同步搬运同名 `.lrc`（搬歌词失败不影响主文件）。
+
+Web 试听时的**读取与解析口径**统一在 `core/lyrics.py`（编码探测、`[mm:ss.xx]` 时间戳、
+一行多时间戳、`[offset:]`、双语 `[翻译]` 段、无时间戳降级），完整契约见
+[media-player.md](media-player.md) §5。解析结果只用于展示与同步高亮，**不参与**待补全判定：
+`core.check.readiness_problems()` 从来不看歌词，这一条不因播放功能改变。
 
 ### 2.10 单曲手工编辑
 

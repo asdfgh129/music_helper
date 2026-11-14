@@ -13,3 +13,4 @@ opencc-python-reimplemented>=0.1.7
 # 启动：python -m uvicorn web.api:app --host 127.0.0.1 --port 8000
 fastapi>=0.110.0
 uvicorn>=0.27.0
+httpx>=0.27.0          # fastapi.testclient.TestClient：Web 接口的 HTTP 冒烟/回归测试

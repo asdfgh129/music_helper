@@ -12,6 +12,14 @@
 
 ### 新增
 
+- **Web 试听与同步歌词**：新增只读媒体层 `services/media.py` 与四个接口
+  `/api/media/{info,stream,lyric,open}`，音频流自行实现 HTTP Range（206 / 416 / HEAD、
+  1 MiB 分块）以支持拖动进度条，路径经白名单 + `realpath` + `commonpath` 校验。
+  LRC 读取与结构化解析收敛到 `core/lyrics.py`（编码探测、多时间戳、offset、双语
+  `[翻译]` 段、无时间戳降级），前端新增挂在根组件的全局播放器
+  `web/static/js/player.js`，切步骤不中断播放；第 5 步表格与编辑抽屉提供试听入口。
+  `.ape/.wma/.dsf` 明确提示浏览器无法解码并给出「用系统播放器打开」降级按钮。
+  设计契约见 [docs/media-player.md](docs/media-player.md)。
 - **免 Python 绿色版打包**：新增 `scripts/build_exe.py` 与根目录 `build_exe.bat`，用
   PyInstaller onedir 把 CLI 与 Web 打进一个 exe，`dist/` 同时带上 `_internal/`（Python
   运行时与 requests / mutagen / frida / pycryptodomex / fastapi / uvicorn / pydantic /
@@ -35,6 +43,12 @@
 
 ### 修复
 
+- **GBK 中文歌词不再乱码**：`services/steps.py:_read_lrc()` 原来固定用
+  `utf-8 errors=replace`，现改为复用 `core.lyrics.read_lrc_text()` 的编码探测
+  （BOM → utf-8 → gb18030 → 兜底），`track_detail()` 与试听页读到同一份文本。
+- **同名歌词大小写口径统一**：`Track.lrc_path` 原本只认小写 `.lrc`，而
+  `core.lyrics.orphan_lrc()` 认 `.LRC`，导致大写扩展名在两处结论相反；现在统一走
+  `core.lyrics.lrc_path_for()`，单曲编辑写回时也会沿用已有的大写文件名。
 - **集合内查重留更小文件**：`core/dedupe.pick_keep()` 在格式优先级相同时保留体积更小的
   那份（省磁盘）；跨集合 `storage_preference()` 不变。
 - **待补全判定纳入内嵌封面**：`core/check.readiness_problems()` 与 `KIND_TAGS` 的 `severe`
