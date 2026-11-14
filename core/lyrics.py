@@ -5,6 +5,7 @@
     lrc_path_for(path)   同名 .lrc 的实际路径（扩展名大小写不敏感）
     read_lrc_text(path)  (全文, 实际编码)，编码按 BOM / utf-8 / gb18030 回退
     parse_lrc(text)      结构化歌词（时间戳、元数据、offset、双语、纯文本降级）
+    set_offset(text, ms) 改 [offset:] 后的 LRC 全文（纯文本变换，不读写文件）
 
 Web 试听、单曲编辑与自检都复用这里，前端不再解析一遍 LRC。
 """
@@ -24,6 +25,7 @@ _TIME_TAG_RE = re.compile(r'\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]')
 _META_RE = re.compile(r'^\[\s*(ti|ar|al|by|offset|re|ve)\s*:\s*([^\]]*)\]\s*$', re.I)
 _TRANS_MARK_RE = re.compile(r'^\[\s*(?:翻译|trans|translate|译文)\s*\]\s*$', re.I)
 _OFFSET_RE = re.compile(r'^[+-]?\d+(?:\.\d+)?$')
+_OFFSET_LINE_RE = re.compile(r'^\[\s*offset\s*:\s*[+-]?\d+(?:\.\d+)?\s*\]\s*$', re.I)
 
 # 目录清单缓存：lrc_path_for 在「精确小写 .lrc 不存在」时要扫一次目录，
 # 大库扫描时不能对每个音频都 listdir 一遍。key 为目录，value 为 (mtime_ns, 映射)。
@@ -185,6 +187,33 @@ def parse_lrc(text):
         'lines': lines,
         'plain': '\n'.join(plain_parts),
     }
+
+
+def set_offset(text, offset_ms):
+    """返回把 ``[offset:N]`` 改成指定毫秒数后的 LRC 全文（纯文本变换，不读写文件）
+
+    已有 offset 行就地替换以保留原位置；没有则插到开头的元数据之后、第一行歌词之前。
+    Web 播放器的「±0.5s 微调」用这里生成新文本，再由已有的
+    ``POST /api/track/save`` 落盘，媒体层不新增写接口。
+    """
+    source = str(text or '')
+    value = int(offset_ms)
+    lines = source.splitlines()
+    replacement = '[offset:%d]' % value
+    for index, line in enumerate(lines):
+        if _OFFSET_LINE_RE.match(line.strip()):
+            lines[index] = replacement
+            return '\n'.join(lines) + ('\n' if source.endswith('\n') else '')
+    insert_at = 0
+    for index, line in enumerate(lines):
+        if not line.strip():
+            continue
+        if _META_RE.match(line.strip()):
+            insert_at = index + 1
+        else:
+            break
+    lines.insert(insert_at, replacement)
+    return '\n'.join(lines) + '\n'
 
 
 def missing_lrc(tracks):

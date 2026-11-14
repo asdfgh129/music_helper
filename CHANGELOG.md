@@ -20,6 +20,14 @@
   `web/static/js/player.js`，切步骤不中断播放；第 5 步表格与编辑抽屉提供试听入口。
   `.ape/.wma/.dsf` 明确提示浏览器无法解码并给出「用系统播放器打开」降级按钮。
   设计契约见 [docs/media-player.md](docs/media-player.md)。
+- **试听 P1：封面、队列、偏移与实时预览**：`core/tags.py` 新增 `read_cover()`（9 种格式的
+  内嵌封面读取，与 `has_cover()` / `write_cover()` 同源分派），新增
+  `GET /api/media/cover` 与两个纯计算接口 `POST /api/media/lyric/{parse,offset}`；
+  `core/lyrics.py` 的 `set_offset()` 只改 `[offset:]` 行，落盘仍走既有
+  `POST /api/track/save`（`info.writable` 限定工作区）。播放器新增封面、上一曲/下一曲与
+  播完自动续播、歌词 `±0.5s` 微调；第 6 步两栏加试听；第 5 步编辑抽屉歌词实时预览并联动
+  底部播放器。`requirements-dev.txt` 补 `httpx`，新增 `tests/test_media_api.py` 走真实
+  FastAPI 路由回归响应头与 206 / 416 / 404。
 - **免 Python 绿色版打包**：新增 `scripts/build_exe.py` 与根目录 `build_exe.bat`，用
   PyInstaller onedir 把 CLI 与 Web 打进一个 exe，`dist/` 同时带上 `_internal/`（Python
   运行时与 requests / mutagen / frida / pycryptodomex / fastapi / uvicorn / pydantic /

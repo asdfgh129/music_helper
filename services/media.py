@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """Web 试听的只读媒体层
 
-只做四件事：路径白名单、Range 参数解析、分块迭代、只读元数据与歌词。
-**不写任何文件**，不生成 ``core.ops.Plan``，不进 ``web/tasks.py`` 串行队列。
+只做五件事：路径白名单、Range 参数解析、分块迭代、只读元数据与歌词封面、
+LRC 纯文本变换。**不写任何文件**，不生成 ``core.ops.Plan``，不进
+``web/tasks.py`` 串行队列。歌词落盘仍只走 ``services.steps.save_track()``。
 
 本模块只依赖标准库 + ``config`` / ``core``，不 import Web 框架：组装
 ``StreamingResponse`` 是 ``web/api.py`` 的职责。契约见 docs/media-player.md。
@@ -88,6 +89,19 @@ def _in_allowed_dir(target, roots):
             # 不同盘符（Windows）会抛，换下一个根目录继续比
             continue
     return False
+
+
+def in_workspace(target):
+    """是否落在工作区内：决定前端能否显示「歌词偏移写回」按钮
+
+    与 ``services.steps._audio_in_workspace`` 用的是同一套 commonpath 口径；
+    这里不 import steps，避免只读媒体层被八步编排的依赖拖进来。
+    """
+    root = getattr(config, 'WORKSPACE_DIR', '')
+    if not root:
+        return False
+    return _in_allowed_dir(target,
+                           (os.path.realpath(os.path.abspath(root)),))
 
 
 def resolve_media(path):
@@ -180,16 +194,44 @@ def media_info(target):
         'playable_reason': NOT_PLAYABLE_REASON.get(ext, ''),
         'has_lrc': os.path.isfile(lyrics.lrc_path_for(target)),
         'has_cover': has_cover,
+        'writable': in_workspace(target),
     }
 
 
+def cover_payload(target):
+    """内嵌封面 -> ``(bytes, mime)``；没有返回 ``(None, '')``
+
+    与 ``has_cover()`` 同源分派，只读，不找同目录的 cover.jpg。
+    """
+    return tags_reader.read_cover(target)
+
+
 def lyric_payload(target):
-    """结构化歌词；解析口径的唯一实现是 core.lyrics.parse_lrc"""
+    """结构化歌词；解析口径的唯一实现是 core.lyrics.parse_lrc
+
+    ``raw`` 是编码探测后的 LRC 全文，供 P1 的 offset 微调生成新文本，
+    前端不自己做 LRC 解析。
+    """
     lrc_path = lyrics.lrc_path_for(target)
     text, encoding = lyrics.read_lrc_text(lrc_path)
     return {
         'ok': True,
         'exists': os.path.isfile(lrc_path),
         'encoding': encoding,
+        'raw': text,
         **lyrics.parse_lrc(text),
     }
+
+
+def parse_lyric_text(text):
+    """编辑抽屉的实时预览：纯文本 -> 结构化歌词，不读写任何文件"""
+    return {'ok': True, **lyrics.parse_lrc(text)}
+
+
+def lyric_with_offset(text, offset_ms):
+    """偏移微调：返回改写后的 LRC 全文，由前端交给 POST /api/track/save 落盘
+
+    限幅 ±60 秒，避免一次误点击把歌词整体推到音轨之外。
+    """
+    value = max(-60000, min(60000, int(offset_ms)))
+    return {'ok': True, 'text': lyrics.set_offset(text, value), 'offset': value}

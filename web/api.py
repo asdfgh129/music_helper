@@ -34,6 +34,9 @@ music_helper Web UI —— FastAPI 后端
   GET       /api/media/info    音频元数据 + 浏览器可播判定
   GET|HEAD  /api/media/stream  Range 206 字节流（浏览器拖动进度条必需）
   GET       /api/media/lyric   结构化 LRC（编码探测 / 时间戳 / 双语）
+  GET       /api/media/cover   内嵌封面字节（无封面 404）
+  POST      /api/media/lyric/parse   纯文本 -> 结构化歌词（抽屉实时预览，不写盘）
+  POST      /api/media/lyric/offset  改写 [offset:] 后的全文（不写盘，落盘走 track/save）
   POST      /api/media/open    用系统默认播放器打开不可播格式
 
 保留的旧接口（CLI 时代的仪表盘与脚本仍可用）：
@@ -184,6 +187,15 @@ class MkdirReq(BaseModel):
 
 class MediaOpenReq(BaseModel):
     path: str = ""
+
+
+class LyricParseReq(BaseModel):
+    text: str = ""
+
+
+class LyricOffsetReq(BaseModel):
+    text: str = ""
+    offset: int = 0
 
 
 # --------------------------------------------------------------------------- #
@@ -643,6 +655,28 @@ def api_media_stream(request: Request, path: str = ""):
 @app.get("/api/media/lyric")
 def api_media_lyric(path: str = ""):
     return media_service.lyric_payload(_media_target(path))
+
+
+@app.get("/api/media/cover")
+def api_media_cover(path: str = ""):
+    """内嵌封面字节；无封面 / 读不出时 404，前端显示占位图"""
+    data, mime = media_service.cover_payload(_media_target(path))
+    if not data:
+        raise HTTPException(status_code=404, detail='该文件没有内嵌封面')
+    return Response(content=data, media_type=mime,
+                    headers={'Cache-Control': 'no-store'})
+
+
+@app.post("/api/media/lyric/parse")
+def api_media_lyric_parse(req: LyricParseReq):
+    """编辑抽屉实时预览：只解析前端传来的文本，不读盘、不写盘"""
+    return media_service.parse_lyric_text(req.text)
+
+
+@app.post("/api/media/lyric/offset")
+def api_media_lyric_offset(req: LyricOffsetReq):
+    """偏移微调：返回改写后的 LRC 全文；落盘由前端调 POST /api/track/save 完成"""
+    return media_service.lyric_with_offset(req.text, req.offset)
 
 
 @app.post("/api/media/open")

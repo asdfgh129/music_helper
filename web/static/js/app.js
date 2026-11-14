@@ -232,11 +232,12 @@
           detail: { text: String(text), tone: tone || '' },
         }));
       },
-      /* 任何步骤都能唤起底部试听播放器（事件由 MH.Player 监听） */
-      playTrack: function (path, name) {
+      /* 任何步骤都能唤起底部试听播放器（事件由 MH.Player 监听）
+         queue 为可选的 [{path, name}] 列表，传入后播放器支持上一曲/下一曲 */
+      playTrack: function (path, name, queue) {
         if (!path) return;
         window.dispatchEvent(new CustomEvent('mh-play', {
-          detail: { path: path, name: name || '' },
+          detail: { path: path, name: name || '', queue: queue || [] },
         }));
       },
     },

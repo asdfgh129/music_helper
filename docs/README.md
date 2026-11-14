@@ -51,7 +51,7 @@
 | [usage.md](usage.md) | CLI 全参数、流程入口、参数优先级、退出码、使用禁忌 | 规则为什么这样定 |
 | [configuration.md](configuration.md) | 配置来源与优先级、目录语义、外部程序、阈值、扩展名 | 规则怎么使用这些配置 |
 | [web-wizard.md](web-wizard.md) | Web 向导八步做了什么、初始化判定、查重与自检、跳过/回退语义、接口与文件清单、um 跨盘核实结论 | 单条判定规则、CLI 参数 |
-| [media-player.md](media-player.md) | 本机临时 Web 服务的部署口径、只读媒体层、Range 流式、LRC 解析口径、格式矩阵、播放器交互与分期 | 判定规则、未来纯服务器分支的解码方案 |
+| [media-player.md](media-player.md) | 本机临时 Web 服务的部署口径、只读媒体层、Range 流式、LRC 解析口径、封面与播放队列、歌词偏移写回、格式矩阵、播放器交互与分期 | 判定规则、未来纯服务器分支的解码方案 |
 | [architecture.md](architecture.md) | 分层边界、模块职责、数据流、`Plan` 机制、扩展指南、设计决策 | 具体判定规则 |
 | [fingerprint.md](fingerprint.md) | 指纹原理、AcoustID/MusicBrainz、声纹查重（soundalike）的流程与算法、阈值、平台支持、同曲不同版本的碰撞策略与审核结论 | 本地查重流程 |
 | [troubleshooting.md](troubleshooting.md) | 症状 → 原因 → 处理、日志与 journal、数据恢复 | 正常流程说明 |

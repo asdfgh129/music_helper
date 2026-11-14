@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""core.lyrics 的单元测试：缺失歌词与孤立歌词"""
+"""core.lyrics 的单元测试：缺失/孤立歌词、同名路径、编码探测、LRC 解析与 offset 改写"""
 
 import os
 import shutil
@@ -211,6 +211,36 @@ class TestParseLrc(unittest.TestCase):
         self.assertFalse(data['has_timing'])
         self.assertEqual(data['lines'], [])
         self.assertEqual(data['plain'], '')
+
+
+class TestSetOffset(unittest.TestCase):
+    """P1 偏移微调：只做纯文本变换，不读写文件"""
+
+    def test_replaces_existing_offset_in_place(self):
+        raw = '[ti:晴天]\n[offset:-200]\n[00:01.00]故事的小黄花\n'
+        result = lyrics.set_offset(raw, 500)
+        self.assertEqual(result, '[ti:晴天]\n[offset:500]\n[00:01.00]故事的小黄花\n')
+        self.assertEqual(lyrics.parse_lrc(result)['offset'], 500)
+
+    def test_inserts_after_metadata_before_first_lyric(self):
+        raw = '[ti:A]\n[ar:B]\n[00:01.00]x\n[00:02.00]y\n'
+        self.assertEqual(lyrics.set_offset(raw, -500),
+                         '[ti:A]\n[ar:B]\n[offset:-500]\n[00:01.00]x\n[00:02.00]y\n')
+
+    def test_inserts_at_top_without_metadata(self):
+        raw = '[00:01.00]x\n'
+        self.assertEqual(lyrics.set_offset(raw, 0), '[offset:0]\n[00:01.00]x\n')
+
+    def test_empty_text_and_idempotent(self):
+        self.assertEqual(lyrics.set_offset('', 0), '[offset:0]\n')
+        once = lyrics.set_offset('[00:01.00]x\n', 250)
+        self.assertEqual(lyrics.set_offset(once, 250), once)
+
+    def test_preserves_untimed_text(self):
+        raw = '纯文本歌词\n第二行\n'
+        result = lyrics.set_offset(raw, 100)
+        self.assertIn('纯文本歌词', result)
+        self.assertEqual(lyrics.parse_lrc(result)['plain'], '纯文本歌词\n第二行')
 
 
 if __name__ == '__main__':

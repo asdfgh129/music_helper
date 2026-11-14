@@ -9,10 +9,10 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | P0 已实现：只读试听、Range 拖动、结构化歌词、同步高亮、不可播格式降级 |
+| 状态 | P0 + P1 已实现：只读试听、Range 拖动、结构化歌词、同步高亮、不可播格式降级、内嵌封面、播放队列、歌词偏移写回、编辑抽屉实时预览 |
 | 日期 | 2026-11-14 |
 | 适用分支 | `master`（主干） |
-| 权威实现 | `services/media.py`、`core/lyrics.py`、`web/static/js/player.js`、`web/api.py` |
+| 权威实现 | `services/media.py`、`core/lyrics.py`、`core/tags.py`、`web/static/js/player.js`、`web/api.py` |
 
 ---
 
@@ -43,16 +43,19 @@ FastAPI/uvicorn 服务，默认只监听 `127.0.0.1:8000`，Web 页面、音乐�
 
 | 层 | 新增职责 |
 |---|---|
-| `core/lyrics.py` | 纯解析：编码探测、LRC 结构化、同名歌词路径解析（**唯一实现**） |
-| `core/tags.py` | 已有的 `duration()` / `has_cover()` 提供只读元数据，不改判定 |
-| `services/media.py` | 文件读写：路径白名单、Range 参数解析、分块迭代、MIME 矩阵、系统播放器调用 |
-| `web/api.py` | 只做参数校验、组装 `StreamingResponse`、序列化 JSON |
+| `core/lyrics.py` | 纯解析：编码探测、LRC 结构化、同名歌词路径、`[offset:]` 改写（**唯一实现**） |
+| `core/tags.py` | `duration()` / `has_cover()` / `read_cover()` 提供只读元数据，不改判定 |
+| `services/media.py` | 文件读取：路径白名单、Range 参数解析、分块迭代、MIME 矩阵、封面字节、LRC 纯文本变换、系统播放器调用 |
+| `web/api.py` | 只做参数校验、组装 `StreamingResponse` / `Response`、序列化 JSON |
 | `web/static/js/player.js` | 播放器组件与歌词同步，只消费后端结构化结果 |
+| `web/static/js/step5-tags.js` / `step6-dedupe.js` | 试听入口、播放队列、编辑抽屉实时预览 |
 
 硬约束（与 [AGENTS.md](../AGENTS.md) 一致）：
 
-- **整条链路只读**：不新增写接口、不生成 `core.ops.Plan`、不移动/删除任何文件。
-  歌词写回仍只走已有的 `POST /api/track/save`（它自己校验工作区）。
+- **媒体接口不写任何文件**：不生成 `core.ops.Plan`、不移动/删除任何文件。
+  `POST /api/media/lyric/parse` 与 `/api/media/lyric/offset` 是纯文本变换（连磁盘都不读），
+  `POST /api/media/open` 只启动外部播放器。歌词**落盘仍只走**已有的
+  `POST /api/track/save`（它自己校验工作区；`info.writable` 决定前端是否放开偏移按钮）。
 - **不进 `web/tasks.py` 串行队列**：试听与流式响应是同步短请求，塞进单工作者队列会让
   一首歌堵住八步流水线。
 - **判定规则零改动**：歌词是否齐全、是否孤立、待补全判定都不受播放功能影响。
@@ -63,19 +66,27 @@ FastAPI/uvicorn 服务，默认只监听 `127.0.0.1:8000`，Web 页面、音乐�
 
 ## 3. 接口契约
 
-`info` / `stream` / `lyric` 三个路径接受 `?path=<绝对路径>`（`stream` 另支持 `HEAD`），
-`/api/media/open` 用 JSON body 传同一个字段；路径校验都由
-`services/media.py:resolve_media()` 统一完成，返回值是 JSON 或字节流。
+`info` / `stream` / `lyric` / `cover` 四个路径接受 `?path=<绝对路径>`（`stream` 另支持
+`HEAD`），经白名单校验；三个 POST 用 JSON body，其中只有 `open` 带 `path`。
+文件类路径校验都由 `services/media.py:resolve_media()` 统一完成。
 
 | 接口 | 方法 | 返回 |
 |---|---|---|
-| `/api/media/info` | GET | `ok / path / name / ext / mime / size / duration / browser_playable / playable_reason / has_lrc / has_cover` |
+| `/api/media/info` | GET | `ok / path / name / ext / mime / size / duration / browser_playable / playable_reason / has_lrc / has_cover / writable` |
 | `/api/media/stream` | GET / HEAD | `200` 或 `206`，带 `Accept-Ranges`、`Content-Range`、`Content-Length` |
-| `/api/media/lyric` | GET | `ok / exists / encoding / has_timing / offset / meta / lines / plain` |
-| `/api/media/open` | POST | `{ok, launched, path}`，用系统默认播放器打开该文件 |
+| `/api/media/lyric` | GET | `ok / exists / encoding / raw / has_timing / offset / meta / lines / plain` |
+| `/api/media/cover` | GET | 内嵌封面字节 + MIME；无封面 `404` |
+| `/api/media/lyric/parse` | POST `{text}` | 结构化歌词（编辑抽屉实时预览，纯计算） |
+| `/api/media/lyric/offset` | POST `{text, offset}` | `{ok, text, offset}`，改写 `[offset:]` 后的全文（纯计算） |
+| `/api/media/open` | POST `{path}` | `{ok, launched, path}`，用系统默认播放器打开该文件 |
 
 `info` 的 `duration` 来自 `core.tags.duration()`（mutagen 不可用或读不出时降级为 `0`），
-`has_cover` 来自 `core.tags.has_cover()`，两者都只是展示信息，不参与可入库判定。
+`has_cover` 来自 `core.tags.has_cover()`、`writable` 来自
+`services/media.py:in_workspace()`，都只是展示信息，不参与可入库判定。
+`lyric.raw` 是编码探测后的 LRC 全文，供偏移微调生成新文本；前端不自己解析 LRC。
+封面由 `core/tags.py:read_cover()` 读取，与 `has_cover()` / `write_cover()` 共用同一份
+格式分派（`_COVER_EXTRACTORS`），只读内嵌图、不找同目录 `cover.jpg`，响应带
+`Cache-Control: no-store`；读不出时前端显示「无封面」占位。
 
 **路径白名单**：只允许 `config` 声明的库目录、工作区、待补全、重复文件、下载目录及其
 VIP / 暂存子目录。归档后文件位于库目录的 `<年代>/<年份>` 子目录，用 `commonpath` 递归
@@ -143,8 +154,14 @@ VIP / 暂存子目录。归档后文件位于库目录的 `<年代>/<年份>` �
 ```
 
 `GET /api/media/lyric` 由 `services/media.py:lyric_payload()` 在上面结果之外再包
-`ok`（恒 true）、`exists`（同名 `.lrc` 是否存在）、`encoding`（实际采用的编码）。
-三者属于接口层，不是 `parse_lrc()` 的返回值。
+`ok`（恒 true）、`exists`（同名 `.lrc` 是否存在）、`encoding`（实际采用的编码）、
+`raw`（编码探测后的全文）。这四项属于接口层，不是 `parse_lrc()` 的返回值。
+
+**偏移改写**（`set_offset(text, ms)`）：只改 `[offset:±毫秒]` 这一行——已有则就地替换，
+没有则插到开头元数据之后、第一行歌词之前；时间戳与歌词正文不动。它是纯文本变换，
+不读写文件；`POST /api/media/lyric/offset` 把结果返回给前端，由前端再调
+`POST /api/track/save` 落盘。偏移限幅 ±60 秒（`services/media.py:lyric_with_offset()`），
+避免一次误点击把整首歌词推出音轨。
 
 ## 6. 格式矩阵
 
@@ -177,31 +194,41 @@ FFmpeg，把结果落成临时 mp3 再复用同一套 Range 接口（管道流�
 切换步骤组件，播放器若放在第 5 步组件内，切到第 6 步就被卸载、播放中断。
 
 - `web/static/js/player.js` 暴露 `MH.Player` 组件：音频对象、播放/暂停、进度与音量、
-  歌词面板、错误降级。挂载在 `.shell` 底部，是全局底部条而非抽屉。
-- 根组件全局 mixin 增加 `playTrack(path, name)`，通过 `mh-play` 事件通知播放器；
-  第 5 步表格每行与编辑抽屉都能直接调用。
+  内嵌封面、播放队列、歌词面板、错误降级。挂载在 `.shell` 底部，是全局底部条而非抽屉。
+- 根组件全局 mixin 增加 `playTrack(path, name, queue)`，通过 `mh-play` 事件通知播放器。
+  `queue` 是可选的 `[{path, name}]`：第 5 步按当前排序后的表格、第 6 步按左栏筛选结果
+  或右栏聚焦文件的库内副本各传一份，播放器据此显示上一曲/下一曲，播放结束自动续播。
 - 同步逻辑只消费后端结构化歌词：`activeIndex = upperBound(lines, currentTime + offset/1000) - 1`，
   由 `timeupdate` 驱动高亮与自动居中滚动；用户手动滚动时暂停自动跟随；点击歌词行设
   `audio.currentTime`，由浏览器发起新的 Range 请求。
-- **前端不写回歌词**。`[offset:]` 只用于显示与同步高亮，不落盘；要改歌词必须走已有的
-  `POST /api/track/save`，而它只允许工作区内文件，库目录里的文件只能听、不能改。
-  P1 才会提供偏移微调按钮与写回入口。
+- **歌词偏移写回**是唯一落盘动作：`±0.5s` 按钮先调纯计算的
+  `POST /api/media/lyric/offset` 拿到新全文，再交给既有的 `POST /api/track/save`。
+  `info.writable=false`（库目录等非工作区文件）或抽屉里有未保存预览时按钮置灰，
+  避免把库内文件或未保存的编辑覆盖掉。
+- **编辑抽屉实时预览**：`step5-tags.js` 的歌词输入框 debounce 250ms 调
+  `POST /api/media/lyric/parse`，抽屉内显示结构化预览，同时用 `mh-player-lyric` 事件把
+  解析结果推进正在播放同一文件的播放器（预览只覆盖解析字段，`raw/exists` 仍取自落盘版本）；
+  关抽屉或保存成功后发空事件，播放器重新 GET `/api/media/lyric` 恢复落盘版本。
+- 内嵌封面走 `/api/media/cover`，加载失败或 `has_cover=false` 时显示「无封面」占位。
 
 降级路径必须在 UI 里说清楚：`browser_playable=false`（提示用本地播放器）、
 `exists=false`（显示「无歌词」）、`has_timing=false`（静态全文）、`audio` 的 `error`
-事件（解码失败而非网络问题）。
+事件（解码失败而非网络问题）、封面 `404`（占位图）。
 
 ## 8. 分期与验收
 
-- **P0（本轮）**：`services/media.py` + 4 个媒体接口、`core/lyrics.py` 解析与编码回退、
+- **P0（已实现）**：`services/media.py` + 4 个媒体接口、`core/lyrics.py` 解析与编码回退、
   全局播放器与同步歌词、第 5 步试听入口、系统播放器降级、顺带修 GBK 与 `.LRC` 口径。
-- **P1**：内嵌封面接口、第 6 步查重试听、歌词偏移写回、播放列表与上下曲、
-  编辑抽屉内实时预览。
+- **P1（已实现）**：内嵌封面接口与展示、第 6 步两栏试听、歌词偏移写回、播放队列与
+  上下曲（含播完自动续播）、编辑抽屉实时预览并联动播放器。
 - **P2（需决策）**：本机 ffmpeg 解码子进程覆盖 `.ape/.wma/.dsf`、逐字歌词、桌面歌词。
 
 测试用 `tempfile`，不碰真实音乐库、网络与外部程序：`tests/test_lyrics.py` 覆盖多时间戳、
-翻译段、offset、GBK、BOM、无时间戳、大小写路径；`tests/test_media.py` 覆盖白名单越界、
-Range 三种写法与 416、MIME 表覆盖扩展名全集；`tests/test_steps.py` 回归歌词读取。
+翻译段、offset、GBK、BOM、无时间戳、大小写路径与 `set_offset()`；`tests/test_media.py`
+覆盖白名单越界、Range 三种写法与 416、MIME 表覆盖扩展名全集、`writable`、封面与纯文本
+变换；`tests/test_tags.py` 覆盖 9 种格式的封面读取表与 flac/wav 写读往返；
+`tests/test_media_api.py` 用 FastAPI TestClient 走真实路由和响应头（含 206 / 416 /
+404 / 纯计算不落盘）；`tests/test_steps.py` 回归歌词读取。
 验收跑 `pytest -q`、`ruff check .`、`compileall`、`scripts/check_docs.py`、
 `scripts/build_docs_index.py --check`，再手工验：拖动进度条、大文件流式、切步骤不中断、
 GBK 歌词、`.ape` 提示。

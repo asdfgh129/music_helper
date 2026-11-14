@@ -45,7 +45,7 @@
 | `core/model.py` | 统一的 `Track` 抽象 | `Track(dirpath, ext, stem, key, year_int, has_lrc, tag())` |
 | `core/scan.py` | 一次遍历建索引 | `scan(paths, month, month_from, month_to, with_tags, recursive, extensions)` |
 | `core/naming.py` | 文件名规则（唯一实现） | `parse_filename`、`canonicalize`、`format_filename`、`version_key` |
-| `core/tags.py` | 标签读写 + 封面 + 时长 + 音频规格（唯一实现） | `read_meta`、`read_tags`、`read_quality`、`write_tags`、`write_cover`、`has_cover`、`duration` |
+| `core/tags.py` | 标签读写 + 封面 + 时长 + 音频规格（唯一实现） | `read_meta`、`read_tags`、`read_quality`、`write_tags`、`write_cover`、`has_cover`、`read_cover`、`duration` |
 | `core/lyrics.py` | 歌词缺失 / 孤立 + LRC 读取与解析（唯一实现） | `missing_lrc`、`orphan_lrc`、`lrc_path_for`、`read_lrc_text`、`parse_lrc` |
 | `core/dedupe.py` | 本地重复判定 + 跨集合比对（含声纹信号，唯一实现） | `find_by_tag`、`find_by_filename`、`find_duplicates`、`match_against`、`fingerprint_similarity`、`fingerprint_candidates`、`version_markers_conflict` |
 | `core/quality.py` | 音质比较（同一录音该留哪一份） | `is_lossless`、`compare`、`describe` |
@@ -63,7 +63,7 @@
 | `services/decrypt.py` | 网易云 / QQ 解密编排 | `tools/um`（三平台；macOS 与旧版 QQ 走它）、`decrypto`（Frida，仅 Windows） |
 | `services/soundalike.py` | 声纹去重、库一致性、建库/补库（`init_db` / `refresh_db`）、只读查询库指纹（`library_fingerprints`）、现场算指纹（`fingerprint_of`） | `tools/soundalike`（Windows 为 `soundalike.exe`）、`fpcalc` |
 | `services/steps.py` | Web 向导八步编排（CLI 与 Web 共用） | `core/*`、`services/*`、`tagger/` |
-| `services/media.py` | 试听只读媒体层：路径白名单、Range 解析、分块迭代、MIME 矩阵、系统播放器调用（见 [media-player.md](media-player.md)） | `core/tags.py`、`core/lyrics.py`、标准库 |
+| `services/media.py` | 试听只读媒体层：路径白名单、Range 解析、分块迭代、MIME 矩阵、封面字节、LRC 纯文本变换、系统播放器调用（见 [media-player.md](media-player.md)） | `core/tags.py`、`core/lyrics.py`、标准库 |
 | `services/settings_store.py` | `config.ini [paths]` 的唯一写入点（校验 + 落盘 + `config.reload()`） | 标准库 |
 
 ### `tagger/`
@@ -315,6 +315,8 @@ Web 不假设「只有 Windows 能解密」。`/api/platform` 返回运行平台
 送入浏览器，不是上传。因此 WASM 解码在主干没有立论，它属于
 [browser-local-roadmap.md](browser-local-roadmap.md) 那个「音频字节零上行」的未来分支。
 
-试听链路（`/api/media/*`）整条只读：不生成 `Plan`、不移动文件、不进 `web/tasks.py` 的
-单工作者队列（否则一首歌会堵住八步流水线）。`<audio>` 挂在根组件模板而非步骤组件里，
-保证切步骤不中断播放。完整契约、格式矩阵与分期见 [media-player.md](media-player.md)。
+试听链路（`/api/media/*`）不写文件：不生成 `Plan`、不移动文件、不进 `web/tasks.py` 的
+单工作者队列（否则一首歌会堵住八步流水线）。P1 的歌词偏移微调是唯一的落盘动作，
+由前端把纯计算得到的 LRC 全文交给已有的 `POST /api/track/save`，媒体层不新增写接口。
+`<audio>` 挂在根组件模板而非步骤组件里，保证切步骤不中断播放。完整契约、格式矩阵与分期见
+[media-player.md](media-player.md)。

@@ -8,6 +8,7 @@
     read_tags(path)          -> dict
     write_tags(path, t)      -> bool
     has_cover(path)          -> bool
+    read_cover(path)         -> (bytes, mime)，无封面为 (None, '')
     duration(path)           -> float
     missing_tag_fields(track) -> list
 """
@@ -388,6 +389,139 @@ def _guess_mime(data):
     if data[:8] == b'\x89PNG\r\n\x1a\n':
         return 'image/png'
     return 'image/jpeg'
+
+
+# ---------------- 封面读取（与 has_cover / write_cover 同一份格式分派） ----------------
+
+def _picture_pair(data, mime=''):
+    """把图片字节归一成 (bytes, mime)；mime 为空时按 PNG/JPEG 魔数猜"""
+    if not data:
+        return None
+    data = bytes(data)
+    return data, (mime or _guess_mime(data))
+
+
+def _cover_id3_data(audio):
+    tags = getattr(audio, 'tags', None)
+    if not tags:
+        return None
+    for frame in tags.getall('APIC'):
+        data = getattr(frame, 'data', b'')
+        if data:
+            return _picture_pair(data, getattr(frame, 'mime', '') or '')
+    return None
+
+
+def _cover_flac_data(audio):
+    for picture in (getattr(audio, 'pictures', None) or []):
+        data = getattr(picture, 'data', b'')
+        if data:
+            return _picture_pair(data, getattr(picture, 'mime', '') or '')
+    return None
+
+
+def _cover_vorbis_data(audio):
+    """ogg/opus 的封面是 base64 编码的 FLAC picture block，直接交给 mutagen 解析"""
+    import base64
+
+    from mutagen.flac import Picture
+
+    values = audio.get('metadata_block_picture') or []
+    if isinstance(values, str):
+        values = [values]
+    for value in values:
+        try:
+            picture = Picture(base64.b64decode(value))
+        except Exception:  # noqa: BLE001 - 坏块跳过，别让试听页挂掉
+            continue
+        data = getattr(picture, 'data', b'')
+        if data:
+            return _picture_pair(data, getattr(picture, 'mime', '') or '')
+    return None
+
+
+def _cover_ape_data(audio):
+    """APEv2 的 'Cover Art (Front)' 值格式：描述串 + \\0 + 图片字节"""
+    for key, value in (audio.tags or {}).items():
+        if not str(key).lower().startswith('cover art'):
+            continue
+        raw = getattr(value, 'value', b'')
+        if isinstance(raw, str):
+            raw = raw.encode('latin-1', 'replace')
+        sep = raw.find(b'\x00')
+        data = raw[sep + 1:] if sep >= 0 else raw
+        if data:
+            return _picture_pair(data)
+    return None
+
+
+def _cover_mp4_data(audio):
+    for cover in ((audio.tags or {}).get('covr') or []):
+        data = bytes(cover)
+        if data:
+            return _picture_pair(data)
+    return None
+
+
+def _asf_picture_pair(raw):
+    """WM/Picture 属性：1B 类型 + 4B LE MIME 长度 + MIME + 4B LE 描述长度
+    + 描述 + 4B LE 数据长度 + 数据。"""
+    import struct
+
+    pos = 1
+    mime_len = struct.unpack_from('<I', raw, pos)[0]
+    pos += 4
+    mime = raw[pos:pos + mime_len].decode('ascii', 'replace').rstrip('\x00')
+    pos += mime_len
+    desc_len = struct.unpack_from('<I', raw, pos)[0]
+    pos += 4 + desc_len
+    data_len = struct.unpack_from('<I', raw, pos)[0]
+    pos += 4
+    return _picture_pair(raw[pos:pos + data_len], mime)
+
+
+def _cover_asf_data(audio):
+    for item in ((audio.tags or {}).get('WM/Picture') or []):
+        raw = bytes(getattr(item, 'value', item))
+        try:
+            pair = _asf_picture_pair(raw)
+        except Exception:  # noqa: BLE001 - 坏属性跳过，别让试听页挂掉
+            pair = None
+        if pair:
+            return pair
+    return None
+
+
+_COVER_EXTRACTORS = {
+    '.mp3': _cover_id3_data,
+    '.wav': _cover_id3_data,
+    '.dsf': _cover_id3_data,
+    '.flac': _cover_flac_data,
+    '.ogg': _cover_vorbis_data,
+    '.opus': _cover_vorbis_data,
+    '.ape': _cover_ape_data,
+    '.m4a': _cover_mp4_data,
+    '.wma': _cover_asf_data,
+}
+
+
+def read_cover(path):
+    """读取内嵌封面，返回 ``(bytes, mime)``；无封面 / 不支持 / 读失败返回 ``(None, '')``
+
+    只认内嵌，不找同目录的 cover.jpg，与 ``has_cover()`` 的判定口径一致。
+    只读：不修改文件，不写缓存。
+    """
+    if not MUTAGEN_AVAILABLE:
+        return None, ''
+    ext = os.path.splitext(str(path or ''))[1].lower()
+    entry = _reader_for(ext)
+    extractor = _COVER_EXTRACTORS.get(ext)
+    if entry is None or extractor is None:
+        return None, ''
+    try:
+        return extractor(entry[0](path)) or (None, '')
+    except Exception:  # noqa: BLE001 - 标签库异常不该让试听整个挂掉
+        return None, ''
 
 
 def write_cover(path, data, desc='Cover'):

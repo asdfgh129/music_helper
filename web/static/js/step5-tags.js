@@ -26,7 +26,14 @@
         drawerBusy: false,
         drawerError: '',
         drawerNote: '',
+        // 编辑抽屉的歌词实时预览（解析仍由后端 core.lyrics 完成）
+        preview: null,
+        previewError: '',
+        previewTimer: null,
       };
+    },
+    watch: {
+      lyric: function () { this.schedulePreview(); },
     },
     computed: {
       fieldDefs: function () {
@@ -51,6 +58,9 @@
           return 0;
         });
         return rows;
+      },
+      auditionQueue: function () {
+        return this.sortedItems.map((item) => ({ path: item.path, name: item.name }));
       },
       selectedPaths: function () {
         return Object.keys(this.selected).filter((path) => this.selected[path]);
@@ -78,6 +88,10 @@
       },
     },
     mounted: function () { this.load(); },
+    beforeUnmount: function () {
+      if (this.previewTimer) clearTimeout(this.previewTimer);
+      this.restorePlayerLyric();
+    },
     methods: {
       async load(silent) {
         if (!silent) this.loading = true;
@@ -222,6 +236,9 @@
       async openEdit(item) {
         this.drawerError = '';
         this.drawerNote = '';
+        this.preview = null;
+        this.previewError = '';
+        if (this.previewTimer) { clearTimeout(this.previewTimer); this.previewTimer = null; }
         this.editing = { path: item.path, name: item.name, loading: true, consistency: item.consistency };
         this.form = {
           title: item.title || '',
@@ -242,7 +259,40 @@
       },
       closeEdit() {
         if (this.drawerBusy) return;
+        if (this.previewTimer) { clearTimeout(this.previewTimer); this.previewTimer = null; }
+        this.restorePlayerLyric();
+        this.preview = null;
         this.editing = null;
+      },
+      /* ---------------- 歌词实时预览（只解析，不写盘） ---------------- */
+      schedulePreview() {
+        if (this.previewTimer) clearTimeout(this.previewTimer);
+        this.previewTimer = setTimeout(() => this.previewLyric(), 250);
+      },
+      async previewLyric() {
+        this.previewTimer = null;
+        if (!this.editing || !this.editing.path) return;
+        this.previewError = '';
+        try {
+          const res = await MH.api.post('/api/media/lyric/parse', { text: this.lyric || '' });
+          this.preview = res;
+          window.dispatchEvent(new CustomEvent('mh-player-lyric', {
+            detail: { path: this.editing.path, lyric: res },
+          }));
+        } catch (err) {
+          this.previewError = err.message;
+        }
+      },
+      restorePlayerLyric() {
+        if (!this.editing || !this.editing.path) return;
+        window.dispatchEvent(new CustomEvent('mh-player-lyric', {
+          detail: { path: this.editing.path, lyric: null },
+        }));
+      },
+      auditionEdit() {
+        if (!this.editing || !this.editing.path) return;
+        this.playTrack(this.editing.path, this.editing.name, this.auditionQueue);
+        this.previewLyric();
       },
       async fetchOnline() {
         if (!this.editing || !this.editing.path) return;
@@ -285,6 +335,9 @@
             parts.push('以下字段不能置空，已保留原值：' + res.ignored.join('/'));
           }
           this.message(parts.length ? parts.join('；') : '没有变化');
+          if (this.previewTimer) { clearTimeout(this.previewTimer); this.previewTimer = null; }
+          this.restorePlayerLyric();
+          this.preview = null;
           this.editing = null;
           this.load(true);
         } catch (err) {
@@ -392,7 +445,7 @@
                   <span :class="rowState(item).cls" style="font-size:12px">{{ rowState(item).text }}</span>
                 </td>
                 <td>
-                  <button class="btn link" @click="playTrack(item.path, item.name)" title="试听并显示歌词">▶ 试听</button>
+                  <button class="btn link" @click="playTrack(item.path, item.name, auditionQueue)" title="试听并显示歌词">▶ 试听</button>
                   <button class="btn link" @click="openEdit(item)" :disabled="taskRunning">编辑</button>
                 </td>
               </tr>
@@ -473,12 +526,35 @@
                 <textarea v-model="lyric" rows="9" :disabled="drawerBusy"
                           placeholder="粘贴 LRC 歌词…"></textarea>
               </label>
+
+              <div class="lyric-preview">
+                <div class="lyric-preview-head">
+                  <span>实时预览（后端解析，不写盘）</span>
+                  <span class="dim" v-if="preview && preview.has_timing">
+                    {{ preview.lines.length }} 行 · 偏移 {{ preview.offset }} ms
+                    <span v-if="preview.meta.ti || preview.meta.ar">
+                      · {{ preview.meta.ti }} {{ preview.meta.ar }}
+                    </span>
+                  </span>
+                  <span class="dim" v-else-if="preview">无时间戳，静态全文</span>
+                </div>
+                <div class="note err" v-if="previewError">{{ previewError }}</div>
+                <div class="lyric-preview-body" v-if="preview && preview.has_timing">
+                  <div class="lyric-preview-line" v-for="(line, i) in preview.lines" :key="i">
+                    <span class="mono dim">{{ $fmt.duration(line.time) }}</span>
+                    <span>{{ line.text }}</span>
+                    <span class="dim" v-if="line.translation"> / {{ line.translation }}</span>
+                  </div>
+                </div>
+                <div class="lyric-preview-body" v-else-if="preview">{{ preview.plain || '（空）' }}</div>
+                <div class="lyric-preview-body dim" v-else>解析中…</div>
+              </div>
             </div>
             <footer>
               <button class="btn ghost" @click="fetchOnline" :disabled="drawerBusy">
                 <span v-if="drawerBusy" class="spin"></span> 在线取标签
               </button>
-              <button class="btn ghost" @click="playTrack(editing.path, editing.name)"
+              <button class="btn ghost" @click="auditionEdit()"
                       :disabled="!editing || !editing.path" title="试听并对照歌词校准时间轴">
                 试听并校准歌词
               </button>

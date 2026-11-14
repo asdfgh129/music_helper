@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""services.media 的单元测试：只读媒体层（白名单 / Range / MIME / 歌词接口）
+"""services.media 的单元测试：只读媒体层（白名单 / Range / MIME / 歌词 / 封面 / 偏移）
 
 只用 tempfile，不碰真实音乐库、网络、外部程序，也不需要 mutagen 或 Web 框架。
 """
@@ -189,6 +189,39 @@ class TestInfoAndLyric(MediaTestCase):
         self.assertFalse(payload['exists'])
         self.assertFalse(payload['has_timing'])
         self.assertEqual(payload['lines'], [])
+
+    def test_lyric_payload_includes_raw_text(self):
+        path = self._audio('workspace', 'a.flac')
+        with open(os.path.join(self.workspace, 'a.lrc'), 'w', encoding='utf-8') as handle:
+            handle.write('[offset:0]\n[00:01.00]晴天\n')
+        payload = media.lyric_payload(path)
+        self.assertIn('[00:01.00]晴天', payload['raw'])
+        self.assertEqual(payload['offset'], 0)
+
+    def test_writable_only_inside_workspace(self):
+        workspace_file = self._audio('workspace', 'a.mp3')
+        self.assertTrue(media.media_info(workspace_file)['writable'])
+        library_dir = os.path.join(self.root, 'unused', 'LIBRARY_DIR')
+        os.makedirs(library_dir, exist_ok=True)
+        library_file = self._audio('unused', 'LIBRARY_DIR', 'b.mp3')
+        self.assertFalse(media.media_info(library_file)['writable'])
+
+    def test_cover_payload_without_embedded_cover(self):
+        path = self._audio('workspace', 'a.mp3')
+        self.assertEqual(media.cover_payload(path), (None, ''))
+
+    def test_parse_lyric_text_is_pure_and_structured(self):
+        payload = media.parse_lyric_text('[00:01.00]晴天\n')
+        self.assertTrue(payload['ok'])
+        self.assertTrue(payload['has_timing'])
+        self.assertEqual(payload['lines'][0]['text'], '晴天')
+
+    def test_lyric_with_offset_clamps_and_rewrites(self):
+        result = media.lyric_with_offset('[00:01.00]x\n', 999999)
+        self.assertEqual(result['offset'], 60000)
+        self.assertIn('[offset:60000]', result['text'])
+        self.assertIn('[00:01.00]x', result['text'])
+        self.assertEqual(media.lyric_with_offset('', -999999)['offset'], -60000)
 
 
 if __name__ == '__main__':

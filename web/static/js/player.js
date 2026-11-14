@@ -38,6 +38,14 @@
         showLyrics: true,
         following: true,
         offsetMs: 0,
+        coverFailed: false,
+        queue: [],
+        queueIndex: -1,
+        saving: false,
+        // 编辑抽屉的直播预览：预览只覆盖解析结果，raw/exists 仍取自落盘版本
+        savedLyric: null,
+        lyricOverride: null,
+        lyricOverridePath: '',
       };
     },
     computed: {
@@ -45,6 +53,22 @@
       lyricLines: function () { return (this.lyric && this.lyric.lines) || []; },
       hasTiming: function () { return !!(this.lyric && this.lyric.has_timing); },
       hasLyric: function () { return !!(this.lyric && (this.lyric.exists || this.lyric.plain)); },
+      coverUrl: function () {
+        if (!this.path || !this.info || !this.info.has_cover) return '';
+        return '/api/media/cover?path=' + encodeURIComponent(this.path);
+      },
+      canWriteLyric: function () {
+        // 抽屉里有未保存的预览文本时不写盘，避免 ±0.5s 把未保存的编辑覆盖掉
+        const previewing = this.lyricOverride && this.lyricOverridePath === this.path;
+        return !!(this.info && this.info.writable && this.lyric && this.lyric.exists
+                  && !previewing);
+      },
+      hasQueue: function () { return this.queue.length > 1; },
+      canPrev: function () { return this.hasQueue && this.queueIndex > 0; },
+      canNext: function () { return this.hasQueue && this.queueIndex < this.queue.length - 1; },
+      queueLabel: function () {
+        return this.hasQueue ? (this.queueIndex + 1) + ' / ' + this.queue.length : '';
+      },
     },
     mounted: function () {
       audioEl = new Audio();
@@ -57,12 +81,30 @@
       audioEl.addEventListener('pause', this.onPauseState);
       this._playHandler = (event) => {
         const detail = event.detail || {};
-        this.play(detail.path, detail.name);
+        this.play(detail.path, detail.name, detail.queue);
+      };
+      /* 第 5 步编辑抽屉把「正在编辑的歌词」实时推进播放器；关抽屉时置空以恢复落盘版本 */
+      this._lyricHandler = (event) => {
+        const detail = event.detail || {};
+        if (!detail.path) return;
+        if (detail.lyric) {
+          this.lyricOverridePath = detail.path;
+          this.lyricOverride = detail.lyric;
+          if (detail.path === this.path && this.savedLyric) this.applyLyric();
+        } else {
+          if (this.lyricOverridePath === detail.path) {
+            this.lyricOverride = null;
+            this.lyricOverridePath = '';
+          }
+          if (detail.path === this.path) this.reloadLyric();
+        }
       };
       window.addEventListener('mh-play', this._playHandler);
+      window.addEventListener('mh-player-lyric', this._lyricHandler);
     },
     beforeUnmount: function () {
       window.removeEventListener('mh-play', this._playHandler);
+      window.removeEventListener('mh-player-lyric', this._lyricHandler);
       if (audioEl) {
         audioEl.pause();
         audioEl.removeAttribute('src');
@@ -70,14 +112,17 @@
       }
     },
     methods: {
-      async play(path, name) {
+      async play(path, name, queue) {
         if (!path) return;
         if (audioEl) audioEl.pause();
         this.visible = true;
         this.path = path;
         this.name = name || MH.fmt.baseName(path);
+        this.queue = Array.isArray(queue) ? queue.filter((item) => item && item.path) : [];
+        this.queueIndex = this.queue.findIndex((item) => item.path === path);
         this.info = null;
         this.lyric = null;
+        this.savedLyric = null;
         this.error = '';
         this.message = '';
         this.currentTime = 0;
@@ -85,6 +130,7 @@
         this.activeIndex = -1;
         this.following = true;
         this.playing = false;
+        this.coverFailed = false;
         this.busy = true;
         try {
           const results = await Promise.all([
@@ -92,9 +138,8 @@
             MH.api.get('/api/media/lyric', { path: path }),
           ]);
           this.info = results[0];
-          this.lyric = results[1];
-          this.offsetMs = Number(this.lyric.offset || 0);
-          this.duration = Number(this.info.duration || 0);
+          this.savedLyric = results[1];
+          this.applyLyric();
         } catch (err) {
           this.error = err.message;
           this.busy = false;
@@ -113,14 +158,39 @@
           this.message = '浏览器阻止了自动播放，点播放按钮继续（' + err.message + '）';
         }
       },
+      useLyric: function (payload) {
+        this.lyric = payload;
+        this.offsetMs = Number(payload.offset || 0);
+        this.activeIndex = -1;
+        this.syncLyric();
+      },
+      /* 解析结果可被抽屉预览覆盖，但 raw / exists / encoding 永远来自落盘版本 */
+      applyLyric: function () {
+        const override = this.lyricOverridePath === this.path ? this.lyricOverride : null;
+        this.useLyric(override ? Object.assign({}, this.savedLyric || {}, override)
+                               : (this.savedLyric || {}));
+      },
+      async reloadLyric() {
+        if (!this.path) return;
+        try {
+          this.savedLyric = await MH.api.get('/api/media/lyric', { path: this.path });
+          this.applyLyric();
+        } catch (err) {
+          this.error = err.message;
+        }
+      },
       toggle: function () {
         if (!this.playable || !audioEl) return;
         if (audioEl.paused) {
-          if (!audioEl.getAttribute('src')) { this.play(this.path, this.name); return; }
+          if (!audioEl.getAttribute('src')) { this.play(this.path, this.name, this.queue); return; }
           audioEl.play().catch((err) => { this.message = '播放失败：' + err.message; });
         } else {
           audioEl.pause();
         }
+      },
+      skip: function (step) {
+        const entry = this.queue[this.queueIndex + step];
+        if (entry) this.play(entry.path, entry.name, this.queue);
       },
       close: function () {
         if (audioEl) {
@@ -132,7 +202,12 @@
         this.playing = false;
         this.info = null;
         this.lyric = null;
+        this.savedLyric = null;
+        this.lyricOverride = null;
+        this.lyricOverridePath = '';
         this.path = '';
+        this.queue = [];
+        this.queueIndex = -1;
         this.currentTime = 0;
         this.duration = 0;
         this.activeIndex = -1;
@@ -148,7 +223,10 @@
           this.duration = audioEl.duration;
         }
       },
-      onEnded: function () { this.playing = false; },
+      onEnded: function () {
+        this.playing = false;
+        if (this.canNext) this.skip(1);
+      },
       onPlayState: function () { this.playing = true; },
       onPauseState: function () { this.playing = false; },
       onAudioError: function () {
@@ -195,6 +273,33 @@
         this.volume = Number(event.target.value);
         if (audioEl) audioEl.volume = this.volume;
       },
+      /* ±0.5s 微调：后端只做纯文本变换，落盘仍走既有的 /api/track/save */
+      async applyOffset(delta) {
+        if (!this.canWriteLyric || this.saving) return;
+        const next = Math.max(-60000, Math.min(60000, this.offsetMs + delta));
+        if (next === this.offsetMs) return;
+        this.saving = true;
+        this.error = '';
+        try {
+          const res = await MH.api.post('/api/media/lyric/offset', {
+            text: this.lyric.raw || '', offset: next,
+          });
+          const saved = await MH.api.post('/api/track/save', {
+            path: this.path, lyric: res.text,
+          });
+          if (!saved.ok) {
+            this.error = saved.error || '歌词偏移保存失败';
+            return;
+          }
+          this.offsetMs = next;
+          this.message = '歌词偏移已写入 ' + next + ' ms';
+          await this.reloadLyric();
+        } catch (err) {
+          this.error = err.message;
+        } finally {
+          this.saving = false;
+        }
+      },
       async openExternal() {
         try {
           await MH.api.post('/api/media/open', { path: this.path });
@@ -207,10 +312,17 @@
     template: `
       <div class="player" v-if="visible">
         <div class="player-bar">
+          <img class="player-cover" v-if="coverUrl && !coverFailed"
+               :src="coverUrl" @error="coverFailed = true" alt="封面">
+          <div class="player-cover player-cover-empty" v-else>无封面</div>
           <button class="player-toggle" @click="toggle" :disabled="!playable || busy"
                   :title="playable ? (playing ? '暂停' : '播放') : '浏览器无法解码此格式'">
             {{ playing ? '❚❚' : '▶' }}
           </button>
+          <button class="btn sm ghost" v-if="hasQueue" @click="skip(-1)" :disabled="!canPrev"
+                  title="上一曲">◀</button>
+          <button class="btn sm ghost" v-if="hasQueue" @click="skip(1)" :disabled="!canNext"
+                  title="下一曲">▶</button>
           <div class="player-meta">
             <div class="player-name" :title="path">{{ name }}</div>
             <div class="player-sub">
@@ -219,6 +331,7 @@
                 {{ info.ext }} · {{ $fmt.size(info.size) }}
                 <span v-if="info.has_cover"> · 有封面</span>
                 <span v-if="info.has_lrc"> · 有歌词</span>
+                <span v-if="queueLabel"> · {{ queueLabel }}</span>
               </span>
             </div>
           </div>
@@ -253,6 +366,13 @@
           <div class="player-lyrics-foot">
             <span class="dim" v-if="hasTiming">点歌词行跳转 · 歌词偏移 {{ offsetMs }} ms</span>
             <span class="dim" v-else-if="hasLyric">无时间戳，静态全文（不跟随进度）</span>
+            <span class="player-offset" v-if="hasTiming">
+              <button class="btn link" @click="applyOffset(-500)"
+                      :disabled="!canWriteLyric || saving" title="歌词提前 0.5 秒">-0.5s</button>
+              <button class="btn link" @click="applyOffset(500)"
+                      :disabled="!canWriteLyric || saving" title="歌词延后 0.5 秒">+0.5s</button>
+              <span class="dim" v-if="!canWriteLyric">只可试听；写回仅限工作区内的 .lrc</span>
+            </span>
             <span class="spacer"></span>
             <button class="btn link" v-if="hasTiming && !following" @click="resumeFollow">恢复跟随</button>
             <span class="dim" v-if="hasTiming && following">自动跟随中</span>

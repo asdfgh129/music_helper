@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
-"""单元测试 - 标签读取（一次读取三件事）与封面探测"""
+"""单元测试 - 标签读取（一次读取三件事）、封面探测、内嵌封面读取与写入"""
 
 import os
 import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -103,12 +104,84 @@ class TestCoverDetection(unittest.TestCase):
         self.assertFalse(tags.has_cover('x.txt'))
 
 
+class TestReadCover(unittest.TestCase):
+    """P1：内嵌封面读取，与 has_cover / write_cover 同源分派"""
+
+    PNG = b'\x89PNG\r\n\x1a\n' + b'\x00' * 20
+    JPEG = b'\xff\xd8\xff' + b'\x00' * 20
+
+    def test_extractor_and_detector_tables_match(self):
+        self.assertEqual(set(tags._COVER_EXTRACTORS), set(tags._COVER_READERS))
+
+    def test_missing_or_unknown_file(self):
+        self.assertEqual(tags.read_cover('no/such/file.mp3'), (None, ''))
+        self.assertEqual(tags.read_cover('notes.txt'), (None, ''))
+
+    def test_flac_roundtrip(self):
+        path = _copy_fixture()
+        try:
+            self.assertEqual(tags.read_cover(path), (None, ''))
+            self.assertTrue(tags.write_cover(path, self.PNG))
+            self.assertEqual(tags.read_cover(path), (self.PNG, 'image/png'))
+        finally:
+            shutil.rmtree(os.path.dirname(path), True)
+
+    def test_wav_id3_roundtrip(self):
+        wav = _make_wav()
+        try:
+            self.assertTrue(tags.write_cover(wav, self.JPEG))
+            self.assertEqual(tags.read_cover(wav), (self.JPEG, 'image/jpeg'))
+        finally:
+            shutil.rmtree(os.path.dirname(wav), True)
+
+    def test_id3_extractor_uses_frame_mime(self):
+        frame = mock.Mock(data=self.PNG, mime='image/png')
+        audio = mock.Mock()
+        audio.tags.getall.return_value = [frame]
+        self.assertEqual(tags._cover_id3_data(audio), (self.PNG, 'image/png'))
+        audio.tags.getall.assert_called_once_with('APIC')
+
+    def test_vorbis_extractor_decodes_picture_block(self):
+        if not tags.MUTAGEN_AVAILABLE:
+            self.skipTest('mutagen 未安装')
+        import base64
+
+        from mutagen.flac import Picture
+
+        picture = Picture()
+        picture.data, picture.mime, picture.type, picture.desc = self.PNG, 'image/png', 3, 'Cover'
+        block = base64.b64encode(picture.write()).decode('ascii')
+        audio = FakeAudio({'metadata_block_picture': [block]})
+        self.assertEqual(tags._cover_vorbis_data(audio), (self.PNG, 'image/png'))
+
+    def test_ape_extractor_strips_description_prefix(self):
+        value = mock.Mock(value=b'cover.jpg\x00' + self.PNG)
+        audio = FakeAudio(cover_tags={'Cover Art (Front)': value})
+        self.assertEqual(tags._cover_ape_data(audio), (self.PNG, 'image/png'))
+
+    def test_mp4_extractor_guesses_mime(self):
+        audio = FakeAudio(cover_tags={'covr': [self.JPEG]})
+        self.assertEqual(tags._cover_mp4_data(audio), (self.JPEG, 'image/jpeg'))
+
+    def test_asf_extractor_parses_wm_picture(self):
+        import struct
+
+        mime, desc = b'image/png', b'Cover'
+        raw = (b'\x03' + struct.pack('<I', len(mime)) + mime
+               + struct.pack('<I', len(desc)) + desc
+               + struct.pack('<I', len(self.PNG)) + self.PNG)
+        item = mock.Mock(value=raw)
+        audio = FakeAudio(cover_tags={'WM/Picture': [item]})
+        self.assertEqual(tags._cover_asf_data(audio), (self.PNG, 'image/png'))
+
+
 class TestFormatRegistry(unittest.TestCase):
     def test_every_audio_extension_has_a_reader(self):
         """能被扫描到的格式必须有读取器，否则整类文件会被判成「缺标签」"""
         for ext in config.AUDIO_EXTENSIONS:
             self.assertIn(ext, tags._READERS, f'{ext} 缺少读取器')
             self.assertIn(ext, tags._COVER_READERS, f'{ext} 缺少封面探测')
+            self.assertIn(ext, tags._COVER_EXTRACTORS, f'{ext} 缺少封面读取')
 
     def test_new_formats_registered(self):
         for ext in ('.opus', '.m4a', '.wma', '.dsf'):

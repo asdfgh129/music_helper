@@ -41,6 +41,14 @@
         }
         return this.items.filter((item) => item.status === this.filter);
       },
+      /* 试听队列：左栏按当前筛选，右栏按当前聚焦文件的库内副本 */
+      auditionQueue: function () {
+        return this.filtered.map((item) => ({ path: item.path, name: item.name }));
+      },
+      matchedQueue: function () {
+        return ((this.focus && this.focus.matched) || [])
+          .map((row) => ({ path: row.path, name: row.name }));
+      },
       focus: function () {
         if (!this.focusPath) return null;
         return this.items.find((item) => item.path === this.focusPath) || null;
@@ -388,6 +396,9 @@
                 <span class="name" :title="item.path">{{ item.name }}</span>
                 <span class="tag" :style="{ color: statusColor(item.status) }">{{ item.status_label }}</span>
                 <span class="meta">{{ item.quality }}</span>
+                <button class="btn link dedupe-play"
+                        @click.stop="playTrack(item.path, item.name, auditionQueue)"
+                        title="试听这份工作区文件">▶</button>
               </div>
               <div class="empty" v-if="loading">扫描工作区与库目录…（首次比对大库会慢一些）</div>
               <div class="empty" v-else-if="!filtered.length">这个筛选下没有文件</div>
@@ -420,6 +431,9 @@
                   <span class="name" :title="row.path">{{ row.name }}</span>
                   <span class="tag" :style="{ color: relationColor(row) }">{{ relationLabel(row) }}</span>
                   <span class="meta">{{ row.quality }}</span>
+                  <button class="btn link dedupe-play"
+                          @click.stop="playTrack(row.path, row.name, matchedQueue)"
+                          title="试听库里的这份副本">▶</button>
                 </div>
                 <div class="group-head" v-if="focus.status === 'upgrade'" style="position:static">
                   <button class="btn link" @click="toggleAllReplaces(true)">全勾</button>

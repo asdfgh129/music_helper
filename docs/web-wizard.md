@@ -220,15 +220,19 @@
 
 ### 5.4.1 试听与同步歌词
 
-表格每行与编辑抽屉都提供「试听」：调根组件的 `playTrack(path, name)`，由挂在
+表格每行与编辑抽屉都提供「试听」：调根组件的 `playTrack(path, name, queue)`，由挂在
 `web/static/js/app.js` 根模板里的全局播放器接管，**切到第 6、7 步不会中断播放**。
 播放器先取 `/api/media/info` 与 `/api/media/lyric`，再让 `<audio>` 指向 `/api/media/stream`；
-歌词高亮由 `timeupdate` 驱动，点歌词行会发起新的 Range 请求跳转进度。
+歌词高亮由 `timeupdate` 驱动，点歌词行会发起新的 Range 请求跳转进度。`queue` 是可选的
+曲目列表，有它才有上一曲/下一曲，播完自动续播；第 6 步左右两栏也各带一份试听队列。
 
-播放器本身**不写任何文件**：歌词偏移只存内存，写回仍走 `POST /api/track/save`，
-因此库目录里的文件只能听、不能改。`.ape/.wma/.dsf` 在 `info` 里被标为
-`browser_playable=false`，播放器明确提示并提供「用系统播放器打开」按钮，不静默失败。
-详见 [media-player.md](media-player.md)。
+播放器底部条显示内嵌封面（`/api/media/cover`），歌词栏提供 `±0.5s` 偏移微调：后端只做
+纯文本改写，落盘仍走 `POST /api/track/save`，所以**库目录里的文件只能听、不能改**
+（`info.writable=false` 时按钮置灰）。编辑抽屉的歌词框会实时调
+`POST /api/media/lyric/parse` 预览，并同步到正在播放同一文件的播放器；关抽屉即恢复落盘版本。
+
+`.ape/.wma/.dsf` 在 `info` 里被标为 `browser_playable=false`，播放器明确提示并提供
+「用系统播放器打开」按钮，不静默失败。详见 [media-player.md](media-player.md)。
 
 ### 5.5 判定来源
 
@@ -457,12 +461,14 @@
 | GET/POST | `/selfcheck/preview`、`/selfcheck/run` | 第 7 步 |
 | GET/POST | `/archive/preview`、`/archive/run` | 第 8 步 |
 | GET | `/workspace/files` | 工作区文件列表（拷贝/解密页右栏） |
-| GET | `/media/info`、`/media/lyric` | 试听前的只读元数据与结构化歌词 |
+| GET | `/media/info`、`/media/lyric`、`/media/cover` | 试听元数据、结构化歌词、内嵌封面 |
 | GET/HEAD | `/media/stream` | 音频字节流（支持 Range 206） |
+| POST | `/media/lyric/parse`、`/media/lyric/offset` | 歌词纯文本解析与 `[offset:]` 改写（不写盘） |
 | POST | `/media/open` | 用系统默认播放器打开不可播格式 |
 
-媒体接口不属于八步，全部只读（`/media/open` 只启动本机播放器，不改文件），也不进
-`web/tasks.py` 串行队列。契约与格式矩阵见 [media-player.md](media-player.md)。
+媒体接口不属于八步，全部不写文件（`/media/open` 只启动本机播放器，两个 `/media/lyric/*`
+是纯计算；歌词落盘仍走 `/track/save`），也不进 `web/tasks.py` 串行队列。
+契约与格式矩阵见 [media-player.md](media-player.md)。
 
 ## 11. 边界（明确不做）
 

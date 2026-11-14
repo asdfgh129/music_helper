@@ -205,6 +205,9 @@ Web 试听时的**读取与解析口径**统一在 `core/lyrics.py`（编码探�
 [media-player.md](media-player.md) §5。解析结果只用于展示与同步高亮，**不参与**待补全判定：
 `core.check.readiness_problems()` 从来不看歌词，这一条不因播放功能改变。
 
+P1 的 `±0.5s` 偏移微调只改 `[offset:]` 元数据行（`core.lyrics.set_offset()`），**不重写
+时间戳与歌词正文**；它是纯文本变换，落盘仍由 `save_track()` 完成，且只对工作区内文件开放。
+
 ### 2.10 单曲手工编辑
 
 `services/steps.py: save_track()`：
