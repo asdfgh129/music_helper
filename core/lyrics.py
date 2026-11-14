@@ -4,7 +4,7 @@
 除缺失 / 孤立判定外，本模块还是 LRC 读取与解析的**唯一实现**：
     lrc_path_for(path)   同名 .lrc 的实际路径（扩展名大小写不敏感）
     read_lrc_text(path)  (全文, 实际编码)，编码按 BOM / utf-8 / gb18030 回退
-    parse_lrc(text)      结构化歌词（时间戳、元数据、offset、双语、纯文本降级）
+    parse_lrc(text)      结构化歌词（时间戳、元数据、offset、双语、逐字、纯文本降级）
     set_offset(text, ms) 改 [offset:] 后的 LRC 全文（纯文本变换，不读写文件）
 
 Web 试听、单曲编辑与自检都复用这里，前端不再解析一遍 LRC。
@@ -20,8 +20,13 @@ MUSIC_EXTS = tuple(sorted(AUDIO_EXTENSIONS))
 MUSIC_EXTS_SET = set(MUSIC_EXTS)
 LRC_EXT = '.lrc'
 
-# [00:12.34] / [00:12:34] / [00:12]；一行允许多个时间戳
+# [00:12.34] / [00:12:34] / [00:12]；一行行首允许多个时间戳（合唱叠句）
 _TIME_TAG_RE = re.compile(r'\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]')
+# 增强 LRC 的行内（逐字）时间戳：<00:12.34> 或正文里的 [00:12.34]。
+# 两组捕获并存，_tag_seconds() 按「非空分组」取 mm / ss / frac，两种写法共用一套换算。
+_INLINE_TAG_RE = re.compile(
+    r'<(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?>'
+    r'|\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]')
 _META_RE = re.compile(r'^\[\s*(ti|ar|al|by|offset|re|ve)\s*:\s*([^\]]*)\]\s*$', re.I)
 _TRANS_MARK_RE = re.compile(r'^\[\s*(?:翻译|trans|translate|译文)\s*\]\s*$', re.I)
 _OFFSET_RE = re.compile(r'^[+-]?\d+(?:\.\d+)?$')
@@ -102,28 +107,91 @@ def read_lrc_text(path):
 
 
 def _tag_seconds(match):
-    """[mm:ss.xx] → 秒；两位小数当百分秒，三位当毫秒，语义都由位数决定"""
-    minutes = int(match.group(1))
-    seconds = int(match.group(2))
-    frac = match.group(3) or ''
+    """[mm:ss.xx] / <mm:ss.xx> → 秒；两位小数当百分秒，三位当毫秒
+
+    行内正则有两组并列捕获（尖括号 / 方括号），只取非空的前三组。
+    """
+    parts = [group for group in match.groups() if group is not None]
+    minutes = int(parts[0])
+    seconds = int(parts[1])
+    frac = parts[2] if len(parts) > 2 else ''
     value = minutes * 60 + seconds
     if frac:
         value += int(frac) / (10 ** len(frac))
     return round(value, 3)
 
 
+def _leading_time_tags(line):
+    """只认行首连续的时间戳，返回 ``(matches, 正文起点)``
+
+    旧实现用 ``finditer`` 全文找 ``[mm:ss.xx]``，遇到增强 LRC 会把正文里的逐字
+    时间戳也当成行首标签，正文只剩最后一个标签之后的几个字。行首与行内必须分开。
+    """
+    tags = []
+    pos = 0
+    while pos < len(line):
+        matched = _TIME_TAG_RE.match(line, pos)
+        if not matched:
+            break
+        tags.append(matched)
+        pos = matched.end()
+        while pos < len(line) and line[pos].isspace():
+            pos += 1
+    return tags, pos
+
+
+def _split_inline(content, line_time):
+    """拆增强 LRC 的正文，返回 ``(纯文本, syllables)``
+
+    ``syllables -> [{time, text}]``，time 是该片段开始唱的秒数，片段可能是一个字、
+    一个词或一句；保证 ``''.join(seg['text']) == 纯文本``，前端可以放心地只渲染片段。
+
+    常见写法 ``<00:12.00>晴<00:12.40>天`` 与正文里的 ``晴[00:12.40]天`` 都支持。
+    合唱叠句（``[00:01.00][00:31.00]`` 共用同一段逐字时间轴）里，若首个行内时间与
+    行时间相差超过 1 秒，整段按差值平移，否则保留原绝对时间。
+    """
+    matches = list(_INLINE_TAG_RE.finditer(content))
+    if not matches:
+        return content, []
+    first = _tag_seconds(matches[0])
+    base = first if line_time is None else line_time
+    delta = 0.0
+    if line_time is not None and abs(line_time - first) > 1.0:
+        delta = line_time - first
+
+    segments = []
+    cursor = 0
+    pending = base
+    for matched in matches:
+        before = content[cursor:matched.start()]
+        if before:
+            segments.append((pending, before))
+        moment = round(_tag_seconds(matched) + delta, 3)
+        pending = max(pending, moment)   # 时间倒流的文件不让前端二分查错行
+        cursor = matched.end()
+    tail = content[cursor:]
+    if tail:
+        segments.append((pending, tail))
+
+    plain = ''.join(part for _, part in segments)
+    syllables = [{'time': when, 'text': part} for when, part in segments]
+    return plain, syllables
+
+
 def parse_lrc(text):
     """把 LRC 全文解析成结构化歌词
 
-    返回 ``{has_timing, offset, meta, lines, plain}``：
-      lines -> [{time: float, text: str, translation: str}]，按时间稳定排序、去重；
+    返回 ``{has_timing, word_timing, offset, meta, lines, plain}``：
+      lines -> [{time, text, translation, syllables}]，按时间稳定排序、去重；
+      syllables -> [{time, text}]，逐字片段；普通 LRC 恒为 ``[]``；
+      word_timing -> 是否至少有一行带可用的逐字时间轴（片段数 > 1）；
       offset -> 毫秒（``[offset:±N]``）；
       plain -> 去掉时间戳与元数据后的全文，供无时间戳歌词静态展示。
     """
     meta = {'ti': '', 'ar': '', 'al': '', 'by': ''}
     offset = 0
-    timed = []          # 原文：(time, text)
-    translated = []     # [翻译] 段：(time, text)
+    timed = []          # 原文：(time, text, syllables)
+    translated = []     # [翻译] 段：同上，但逐字时间轴不参与前端高亮
     plain_parts = []    # 按原文顺序，去时间戳后的展示文本
     in_translation = False
 
@@ -142,22 +210,33 @@ def parse_lrc(text):
         if _TRANS_MARK_RE.match(line):
             in_translation = True
             continue
-        tags = list(_TIME_TAG_RE.finditer(line))
-        if not tags:
+        tags, body_start = _leading_time_tags(line)
+        content = line[body_start:].strip()
+        if not tags and not _INLINE_TAG_RE.search(content):
             plain_parts.append(line)
             continue
-        content = line[tags[-1].end():].strip()
-        if content:
-            plain_parts.append(content)
         target = translated if in_translation else timed
-        for tag in tags:
-            target.append((_tag_seconds(tag), content))
+        if tags:
+            plain = ''
+            for tag in tags:
+                seconds = _tag_seconds(tag)
+                plain, syllables = _split_inline(content, seconds)
+                target.append((seconds, plain, syllables))
+            if plain:   # 合唱叠句只记一次，保持旧版 plain 的语义
+                plain_parts.append(plain)
+        else:
+            # 没有行首时间戳的纯逐字行：用第一个片段的时间当行时间
+            plain, syllables = _split_inline(content, None)
+            if syllables:
+                target.append((syllables[0]['time'], plain, syllables))
+            if plain:
+                plain_parts.append(plain)
 
     # 排序 + 合并：同一时间戳的第二行视为译文，完全重复的行去掉
     lines = []
     index_of = {}
     seen = set()
-    for seconds, content in sorted(timed, key=lambda item: item[0]):
+    for seconds, content, syllables in sorted(timed, key=lambda item: item[0]):
         key = (seconds, content)
         if key in seen:
             continue
@@ -168,20 +247,23 @@ def parse_lrc(text):
                 row['translation'] = content
         else:
             index_of[seconds] = len(lines)
-            lines.append({'time': seconds, 'text': content, 'translation': ''})
+            lines.append({'time': seconds, 'text': content,
+                          'translation': '', 'syllables': syllables})
 
-    for seconds, content in sorted(translated, key=lambda item: item[0]):
+    for seconds, content, _syllables in sorted(translated, key=lambda item: item[0]):
         if seconds in index_of:
             row = lines[index_of[seconds]]
             if not row['translation']:
                 row['translation'] = content
         else:
-            lines.append({'time': seconds, 'text': '', 'translation': content})
+            lines.append({'time': seconds, 'text': '',
+                          'translation': content, 'syllables': []})
             index_of[seconds] = len(lines) - 1
     lines.sort(key=lambda row: row['time'])
 
     return {
         'has_timing': bool(lines),
+        'word_timing': any(len(row['syllables']) > 1 for row in lines),
         'offset': offset,
         'meta': meta,
         'lines': lines,

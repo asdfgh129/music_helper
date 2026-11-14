@@ -33,9 +33,9 @@ music_helper Web UI —— FastAPI 后端
 试听旁路（不属于八步，也不进后台任务队列；不改音乐库、不生成 Plan）：
   GET       /api/media/info    音频元数据 + 浏览器可播判定
   GET|HEAD  /api/media/stream  Range 206 字节流（transcode=1 时读派生 mp3 缓存）
-  GET       /api/media/lyric   结构化 LRC（编码探测 / 时间戳 / 双语）
+  GET       /api/media/lyric   结构化 LRC（编码探测 / 时间戳 / 双语 / 逐字）
   GET       /api/media/cover   内嵌封面字节（无封面 404）
-  POST      /api/media/lyric/parse   纯文本 -> 结构化歌词（抽屉实时预览，不写盘）
+  POST      /api/media/lyric/parse   纯文本 -> 结构化歌词（含逐字，抽屉实时预览，不写盘）
   POST      /api/media/lyric/offset  改写 [offset:] 后的全文（不写盘，落盘走 track/save）
   POST      /api/media/open    用系统默认播放器打开不可播格式
   GET       /api/media/transcode     查询本机解码状态（前端轮询）

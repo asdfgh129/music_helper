@@ -1,6 +1,6 @@
 # Web 试听与同步歌词
 
-> 本文负责：本机 Web 向导里的**只读媒体层**、LRC 解析口径、播放器交互、格式矩阵与分期。
+> 本文负责：本机 Web 向导里的**只读媒体层**、LRC 解析口径（含逐字）、播放器交互、格式矩阵与分期。
 > 不负责：判定规则（见 [rules.md](rules.md)）、八步流程（见 [workflow.md](workflow.md)）、
 > 向导操作细节（见 [web-wizard.md](web-wizard.md)）、未来纯服务器分支
 > （见 [browser-local-roadmap.md](browser-local-roadmap.md)）。
@@ -10,7 +10,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | P0 + P1 + P2 已实现：只读试听、Range 拖动、结构化歌词、同步高亮、内嵌封面、播放队列、歌词偏移写回、编辑抽屉实时预览，以及 `.ape/.wma/.dsf` 的本机解码内嵌试听 |
+| 状态 | P0 + P1 + P2 + P3 已实现：只读试听、Range 拖动、结构化歌词、同步高亮、增强 LRC 逐字高亮、内嵌封面、播放队列、歌词偏移写回、编辑抽屉实时预览，以及 `.ape/.wma/.dsf` 的本机解码内嵌试听 |
 | 日期 | 2026-11-14 |
 | 适用分支 | `master`（主干） |
 | 权威实现 | `services/media.py`、`services/transcode.py`、`core/lyrics.py`、`core/tags.py`、`web/static/js/player.js`、`web/api.py` |
@@ -46,7 +46,7 @@ FastAPI/uvicorn 服务，默认只监听 `127.0.0.1:8000`，Web 页面、音乐�
 
 | 层 | 新增职责 |
 |---|---|
-| `core/lyrics.py` | 纯解析：编码探测、LRC 结构化、同名歌词路径、`[offset:]` 改写（**唯一实现**） |
+| `core/lyrics.py` | 纯解析：编码探测、LRC 结构化、逐字时间轴、同名歌词路径、`[offset:]` 改写（**唯一实现**） |
 | `core/tags.py` | `duration()` / `has_cover()` / `read_cover()` 提供只读元数据，不改判定 |
 | `services/media.py` | 文件读取：路径白名单、Range 参数解析、分块迭代、MIME 矩阵、封面字节、LRC 纯文本变换、系统播放器调用（严格只读） |
 | `services/transcode.py` | **试听链路唯一写盘处**：FFmpeg 探测、派生 MP3 缓存、后台线程状态机与进度（见 §7） |
@@ -82,9 +82,9 @@ FastAPI/uvicorn 服务，默认只监听 `127.0.0.1:8000`，Web 页面、音乐�
 | `/api/media/info` | GET | `ok / path / name / ext / mime / size / duration / browser_playable / playable_reason / needs_transcode / has_lrc / has_cover / writable` |
 | `/api/media/stream` | GET / HEAD | `200` 或 `206`，带 `Accept-Ranges`、`Content-Range`、`Content-Length` |
 | `/api/media/stream?transcode=1` | GET / HEAD | 同上，但读派生 MP3；未就绪 `409`、格式无需转码 `400` |
-| `/api/media/lyric` | GET | `ok / exists / encoding / raw / has_timing / offset / meta / lines / plain` |
+| `/api/media/lyric` | GET | `ok / exists / encoding / raw / has_timing / word_timing / offset / meta / lines / plain`（`lines[]` 带 `syllables`） |
 | `/api/media/cover` | GET | 内嵌封面字节 + MIME；无封面 `404` |
-| `/api/media/lyric/parse` | POST `{text}` | 结构化歌词（编辑抽屉实时预览，纯计算） |
+| `/api/media/lyric/parse` | POST `{text}` | 结构化歌词（含逐字字段，编辑抽屉实时预览，纯计算） |
 | `/api/media/lyric/offset` | POST `{text, offset}` | `{ok, text, offset}`，改写 `[offset:]` 后的全文（纯计算） |
 | `/api/media/transcode` | GET | `ok / available / status / error / hint / decoded / size`（纯查询） |
 | `/api/media/transcode` | POST `{path}` | 同上，并幂等启动本机解码子进程 |
@@ -95,6 +95,7 @@ FastAPI/uvicorn 服务，默认只监听 `127.0.0.1:8000`，Web 页面、音乐�
 `services/media.py:in_workspace()`，`needs_transcode` 等价于 `!browser_playable`
 （三种不可播格式），都只是展示信息，不参与可入库判定。
 `lyric.raw` 是编码探测后的 LRC 全文，供偏移微调生成新文本；前端不自己解析 LRC。
+`word_timing` 与 `lines[].syllables` 是 P3 的逐字字段，口径见 §5.1。
 封面由 `core/tags.py:read_cover()` 读取，与 `has_cover()` / `write_cover()` 共用同一份
 格式分派（`_COVER_EXTRACTORS`），只读内嵌图、不找同目录 `cover.jpg`，响应带
 `Cache-Control: no-store`；读不出时前端显示「无封面」占位。
@@ -156,13 +157,13 @@ VIP / 暂存子目录。归档后文件位于库目录的 `<年代>/<年份>` �
   优先精确小写 `.lrc`，否则在实际目录项里找 `.LRC` 等变体。这修掉
   `Track.lrc_path` 只认小写 `.lrc`、而 `orphan_lrc()` 认 `.LRC` 的口径不一致。
 
-`parse_lrc(text)` 只返回 5 个解析字段：
+`parse_lrc(text)` 返回 6 个解析字段（P3 新增 `word_timing` 与 `lines[].syllables`）：
 
 ```json
 {
-  "has_timing": true, "offset": 0,
+  "has_timing": true, "word_timing": false, "offset": 0,
   "meta": {"ti": "晴天", "ar": "周杰伦", "al": "", "by": ""},
-  "lines": [{"time": 1.0, "text": "晴天", "translation": "Sunny"}],
+  "lines": [{"time": 1.0, "text": "晴天", "translation": "Sunny", "syllables": []}],
   "plain": ""
 }
 ```
@@ -176,6 +177,29 @@ VIP / 暂存子目录。归档后文件位于库目录的 `<年代>/<年份>` �
 不读写文件；`POST /api/media/lyric/offset` 把结果返回给前端，由前端再调
 `POST /api/track/save` 落盘。偏移限幅 ±60 秒（`services/media.py:lyric_with_offset()`），
 避免一次误点击把整首歌词推出音轨。
+
+### 5.1 增强 LRC 的逐字时间轴（P3）
+
+行内时间戳只在**行首时间戳之后的正文**里识别，支持尖括号与方括号两种写法：
+
+```text
+[00:12.00]<00:12.00>晴<00:12.40>天<00:12.80>的<00:13.20>小黄花
+[00:12.00]晴[00:12.40]天[00:12.80]的小黄花
+```
+
+- 行首 `[mm:ss.xx]` 只认**行首连续**的那一串（合唱叠句）。P0 用 `finditer` 全文找方括号
+  时间戳，会把正文里的逐字标记也当成行首标签、正文只剩最后一个标签之后的几个字；P3 顺带
+  修掉这个截断。没有行首时间戳、只有逐字标记的行，用第一个片段的时间当行时间。
+- `_split_inline()` 把正文切成 `[{time, text}]`，`time` 是该片段开始唱的秒数，片段可以是
+  一个字、一个词或一句。保证 `''.join(seg.text) == line.text`——前端只渲染片段也不会丢字。
+  行尾的收尾标记（`<00:14.00>` 后没有字）不生成空片段。
+- 每行新增 `syllables`（普通 LRC 恒为 `[]`），顶层 `word_timing` 表示**至少有一行**的片段数
+  大于 1；只有一段时不算逐字，前端按整行高亮。
+- 时间倒流的片段做单调钳制，避免前端二分查错；`[00:01.00][00:31.00]` 这类叠句复用同一段
+  逐字时间轴时，若首个行内时间与行时间相差超过 1 秒，整段按差值平移到该行。
+- 双语译文只保留纯文本，**不对译文做逐字高亮**；`[翻译]` 段与同一时间戳第二行的合并口径不变。
+- 逐字字段只用于展示，不参与 `readiness_problems()`，也不改变 `plain` 与 `set_offset()`
+  （后者只改 `[offset:]` 行，逐字标签原样保留）。
 
 ## 6. 格式矩阵
 
@@ -254,6 +278,10 @@ UI 退回 P0 的「用系统播放器打开」。
 - 同步逻辑只消费后端结构化歌词：`activeIndex = upperBound(lines, currentTime + offset/1000) - 1`，
   由 `timeupdate` 驱动高亮与自动居中滚动；用户手动滚动时暂停自动跟随；点击歌词行设
   `audio.currentTime`，由浏览器发起新的 Range 请求。
+- **逐字高亮**：`word_timing=true` 时，当前行（`activeIndex`）改用 `syllables` 渲染成
+  `<span class="player-word">`，`lyricTime >= seg.time` 的片段点亮；其余行仍是整行文本，
+  避免上百行 × 几十片段在每次 `timeupdate` 都参与 diff。整行高亮、点击跳转、`±0.5s` 偏移、
+  无时间戳降级全部不变。编辑抽屉预览抬头显示「逐字」，逐字行的 title 给出片段数。
 - **歌词偏移写回**是唯一落盘动作：`±0.5s` 按钮先调纯计算的
   `POST /api/media/lyric/offset` 拿到新全文，再交给既有的 `POST /api/track/save`。
   `info.writable=false`（库目录等非工作区文件）或抽屉里有未保存预览时按钮置灰，
@@ -284,16 +312,20 @@ UI 退回 P0 的「用系统播放器打开」。
 - **P2（已实现）**：`services/transcode.py` 本机 FFmpeg 解码子进程 + 派生缓存 +
   `/api/media/transcode` 状态机 + `stream?transcode=1` 复用 Range；播放器解码进度、失败重试
   与系统播放器降级。FFmpeg 为可选来源，不随仓库分发。
-- **未做（需另行决策）**：逐字歌词、桌面歌词。
+- **P3（已实现）**：增强 LRC 逐字时间轴（`core/lyrics.py:_split_inline()`）、
+  `word_timing` / `lines[].syllables` 字段、播放器当前行逐字高亮与抽屉预览标识；普通 LRC
+  与既有判定规则零改动，顺带修正行首 / 行内时间戳混用导致的正文截断。
+- **不实现**：桌面歌词（已明确排除；本机 Web 向导不做置顶窗口或全局钩子）。
 
 测试用 `tempfile`，不碰真实音乐库、网络与外部程序：`tests/test_lyrics.py` 覆盖多时间戳、
-翻译段、offset、GBK、BOM、无时间戳、大小写路径与 `set_offset()`；`tests/test_media.py`
+翻译段、offset、GBK、BOM、无时间戳、大小写路径、`set_offset()` 与逐字时间轴（尖括号 /
+正文方括号 / 叠句平移 / 单调钳制 / 拼接不丢字）；`tests/test_media.py`
 覆盖白名单越界、Range 三种写法与 416、MIME 表覆盖扩展名全集、`writable`、封面与纯文本
 变换；`tests/test_tags.py` 覆盖 9 种格式的封面读取表与 flac/wav 写读往返；
 `tests/test_media_api.py` 用 FastAPI TestClient 走真实路由和响应头（含 206 / 416 /
-404 / 409 / 纯计算不落盘）；`tests/test_transcode.py` 覆盖缓存 key、进度解析、命令参数、
+404 / 409 / 纯计算不落盘 / 逐字字段透传）；`tests/test_transcode.py` 覆盖缓存 key、进度解析、命令参数、
 状态机，并在 FFmpeg 可用时用真实生成的 WMA / DSF 样本端到端解码（缺 FFmpeg 自动 skip）；
 `tests/test_steps.py` 回归歌词读取；`tests/test_build_exe.py` 断言 FFmpeg 是可选工具。
 验收跑 `pytest -q`、`ruff check .`、`compileall`、`scripts/check_docs.py`、
 `scripts/build_docs_index.py --check`，再手工验：拖动进度条、大文件流式、切步骤不中断、
-GBK 歌词、`.ape/.wma/.dsf` 解码与失败提示。
+GBK 歌词、逐字歌词高亮、`.ape/.wma/.dsf` 解码与失败提示。

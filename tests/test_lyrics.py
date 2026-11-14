@@ -213,6 +213,101 @@ class TestParseLrc(unittest.TestCase):
         self.assertEqual(data['plain'], '')
 
 
+class TestWordTiming(unittest.TestCase):
+    """P3 增强 LRC：行内逐字时间戳（<mm:ss.xx> 或正文里的 [mm:ss.xx]）"""
+
+    def test_angle_brackets(self):
+        raw = ('[ti:晴天]\n'
+               '[00:12.00]<00:12.00>晴<00:12.40>天<00:12.80>的'
+               '<00:13.20>小<00:13.60>黄<00:14.00>花\n')
+        data = lyrics.parse_lrc(raw)
+        self.assertTrue(data['word_timing'])
+        self.assertEqual(len(data['lines']), 1)
+        row = data['lines'][0]
+        self.assertEqual(row['time'], 12.0)
+        self.assertEqual(row['text'], '晴天的小黄花')
+        self.assertEqual([seg['time'] for seg in row['syllables']],
+                         [12.0, 12.4, 12.8, 13.2, 13.6, 14.0])
+        self.assertEqual([seg['text'] for seg in row['syllables']],
+                         list('晴天的小黄花'))
+        # 前端只渲染片段，就不能丢字
+        self.assertEqual(''.join(seg['text'] for seg in row['syllables']), row['text'])
+        self.assertEqual(data['plain'], '晴天的小黄花')
+        self.assertNotIn('<00:', data['plain'])
+
+    def test_inline_square_brackets_in_body(self):
+        """正文里的方括号时间戳是逐字标记，不能被当成行首时间戳吃掉正文"""
+        data = lyrics.parse_lrc('[00:12.00]晴[00:12.40]天[00:12.80]好\n')
+        row = data['lines'][0]
+        self.assertEqual(len(data['lines']), 1)
+        self.assertEqual(row['text'], '晴天好')
+        self.assertEqual([seg['time'] for seg in row['syllables']],
+                         [12.0, 12.4, 12.8])
+        self.assertEqual(data['plain'], '晴天好')
+
+    def test_chorus_shares_word_axis_with_offset(self):
+        """[00:01.00][00:31.00] 复用同一段逐字时间轴时，第二行整体平移"""
+        data = lyrics.parse_lrc('[00:01.00][00:31.00]<00:01.00>晴<00:01.50>天\n')
+        self.assertEqual([row['time'] for row in data['lines']], [1.0, 31.0])
+        self.assertEqual([seg['time'] for seg in data['lines'][0]['syllables']],
+                         [1.0, 1.5])
+        self.assertEqual([seg['time'] for seg in data['lines'][1]['syllables']],
+                         [31.0, 31.5])
+        self.assertEqual(data['plain'], '晴天')   # 叠句只记一次
+
+    def test_trailing_marker_adds_no_empty_segment(self):
+        data = lyrics.parse_lrc('[00:12.00]<00:12.00>晴<00:12.40>天<00:12.80>\n')
+        row = data['lines'][0]
+        self.assertEqual(row['text'], '晴天')
+        self.assertEqual(len(row['syllables']), 2)
+
+    def test_word_line_without_leading_timestamp(self):
+        data = lyrics.parse_lrc('<00:05.00>只<00:05.50>有<00:06.00>逐字\n')
+        self.assertTrue(data['word_timing'])
+        self.assertEqual(data['lines'][0]['time'], 5.0)
+        self.assertEqual(data['lines'][0]['text'], '只有逐字')
+
+    def test_plain_lrc_has_no_syllables(self):
+        data = lyrics.parse_lrc('[00:01.00]故事的小黄花\n[00:03.50]从出生那年就飘着\n')
+        self.assertFalse(data['word_timing'])
+        for row in data['lines']:
+            self.assertEqual(row['syllables'], [])
+
+    def test_single_segment_is_not_word_timing(self):
+        data = lyrics.parse_lrc('[00:01.00]<00:01.00>一整句\n')
+        self.assertFalse(data['word_timing'])
+        self.assertEqual(data['lines'][0]['text'], '一整句')
+        self.assertEqual(len(data['lines'][0]['syllables']), 1)
+
+    def test_word_times_never_go_backwards(self):
+        data = lyrics.parse_lrc('[00:12.00]<00:12.00>晴<00:11.50>天<00:12.80>好\n')
+        moments = [seg['time'] for seg in data['lines'][0]['syllables']]
+        self.assertEqual(moments, sorted(moments))
+        self.assertTrue(data['word_timing'])
+
+    def test_translation_section_keeps_plain_text(self):
+        raw = ('[00:01.00]<00:01.00>晴<00:01.50>天\n\n[翻译]\n'
+               '[00:01.00]<00:01.00>Sun<00:01.50>ny\n')
+        data = lyrics.parse_lrc(raw)
+        self.assertTrue(data['word_timing'])
+        self.assertEqual(data['lines'][0]['text'], '晴天')
+        self.assertEqual(data['lines'][0]['translation'], 'Sunny')
+
+    def test_untimed_text_unchanged(self):
+        data = lyrics.parse_lrc('没有时间轴的歌词\n第二行\n')
+        self.assertFalse(data['word_timing'])
+        self.assertEqual(data['plain'], '没有时间轴的歌词\n第二行')
+
+    def test_offset_rewrite_keeps_word_tags(self):
+        raw = '[00:12.00]<00:12.00>晴<00:12.40>天\n'
+        shifted = lyrics.set_offset(raw, 500)
+        self.assertIn('<00:12.40>天', shifted)
+        data = lyrics.parse_lrc(shifted)
+        self.assertEqual(data['offset'], 500)
+        self.assertTrue(data['word_timing'])
+        self.assertEqual(data['lines'][0]['text'], '晴天')
+
+
 class TestSetOffset(unittest.TestCase):
     """P1 偏移微调：只做纯文本变换，不读写文件"""
 

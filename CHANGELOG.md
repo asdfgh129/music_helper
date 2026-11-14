@@ -38,6 +38,14 @@
   二进制不随仓库分发；`config.py` 增 `FFMPEG_EXE`，`scripts/build_exe.py` 把它列进
   `TOOLS_OPTIONAL_*`，`third_party/ffmpeg-build/README.md` 记构建配方与 GPL 许可取舍。
   播放器新增解码进度、失败原因与重试；`requirements-dev.txt` 加可选 `imageio-ffmpeg`。
+- **试听 P3：增强 LRC 逐字歌词**：`core/lyrics.py` 新增行内时间戳解析
+  （`<00:12.00>晴<00:12.40>天` 与正文里的 `[00:12.40]` 都支持），把正文切成
+  `[{time, text}]` 片段，新增 `word_timing` 与 `lines[].syllables` 字段，由
+  `/api/media/lyric` 与 `/api/media/lyric/parse` 透传；顺带修正行首 / 行内时间戳混用时
+  正文被截断的问题（旧实现用 `finditer` 全文找方括号标签）。播放器当前行按片段时间逐字
+  点亮，其余行仍是整行文本以避免大歌词表每帧全量 diff；普通 LRC、点击跳转、偏移微调与
+  无时间戳降级全部不变，编辑抽屉预览标识逐字行。逐字字段只用于展示，不参与待补全判定；
+  桌面歌词明确不实现。契约见 [docs/media-player.md](docs/media-player.md) §5.1。
 - **免 Python 绿色版打包**：新增 `scripts/build_exe.py` 与根目录 `build_exe.bat`，用
   PyInstaller onedir 把 CLI 与 Web 打进一个 exe，`dist/` 同时带上 `_internal/`（Python
   运行时与 requests / mutagen / frida / pycryptodomex / fastapi / uvicorn / pydantic /

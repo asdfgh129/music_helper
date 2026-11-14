@@ -576,6 +576,10 @@ table.grid th.sortable .arrow { font-style: normal; font-size: 10px; color: var(
 .player-line.active { color: var(--text); background: var(--accent-soft); font-size: 14px; }
 .player-line-trans { font-size: 11px; color: var(--dim); }
 .player-line.active .player-line-trans { color: var(--muted); }
+/* P3 逐字歌词：只有当前行渲染片段，唱过的字点亮，其余保持半透明 */
+.player-line-text { white-space: pre-wrap; }
+.player-word { color: inherit; opacity: 0.42; transition: color .12s linear, opacity .12s linear; }
+.player-line.active .player-word.sung { color: var(--accent); opacity: 1; }
 .player-plain {
   white-space: pre-wrap; text-align: left;
   color: var(--muted); font-size: 13px; line-height: 1.8;

@@ -216,6 +216,24 @@ class TestInfoAndLyric(MediaTestCase):
         self.assertTrue(payload['has_timing'])
         self.assertEqual(payload['lines'][0]['text'], '晴天')
 
+    def test_lyric_payload_exposes_word_segments(self):
+        """P3：逐字字段由 core.lyrics 透传到 GET /api/media/lyric，raw 仍是原文"""
+        path = self._audio('workspace', 'a.flac')
+        with open(os.path.join(self.workspace, 'a.lrc'), 'w', encoding='utf-8') as handle:
+            handle.write('[00:01.00]<00:01.00>晴<00:01.50>天\n')
+        payload = media.lyric_payload(path)
+        self.assertTrue(payload['word_timing'])
+        self.assertEqual(payload['lines'][0]['text'], '晴天')
+        self.assertEqual([s['time'] for s in payload['lines'][0]['syllables']],
+                         [1.0, 1.5])
+        self.assertIn('<00:01.50>天', payload['raw'])
+
+    def test_parse_lyric_text_exposes_word_segments(self):
+        payload = media.parse_lyric_text('[00:02.50]<00:02.50>晴<00:03.00>天\n')
+        self.assertTrue(payload['word_timing'])
+        self.assertEqual(payload['lines'][0]['syllables'],
+                         [{'time': 2.5, 'text': '晴'}, {'time': 3.0, 'text': '天'}])
+
     def test_lyric_with_offset_clamps_and_rewrites(self):
         result = media.lyric_with_offset('[00:01.00]x\n', 999999)
         self.assertEqual(result['offset'], 60000)

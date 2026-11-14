@@ -46,7 +46,7 @@
 | `core/scan.py` | 一次遍历建索引 | `scan(paths, month, month_from, month_to, with_tags, recursive, extensions)` |
 | `core/naming.py` | 文件名规则（唯一实现） | `parse_filename`、`canonicalize`、`format_filename`、`version_key` |
 | `core/tags.py` | 标签读写 + 封面 + 时长 + 音频规格（唯一实现） | `read_meta`、`read_tags`、`read_quality`、`write_tags`、`write_cover`、`has_cover`、`read_cover`、`duration` |
-| `core/lyrics.py` | 歌词缺失 / 孤立 + LRC 读取与解析（唯一实现） | `missing_lrc`、`orphan_lrc`、`lrc_path_for`、`read_lrc_text`、`parse_lrc` |
+| `core/lyrics.py` | 歌词缺失 / 孤立 + LRC 读取与解析（含逐字，唯一实现） | `missing_lrc`、`orphan_lrc`、`lrc_path_for`、`read_lrc_text`、`parse_lrc`、`set_offset` |
 | `core/dedupe.py` | 本地重复判定 + 跨集合比对（含声纹信号，唯一实现） | `find_by_tag`、`find_by_filename`、`find_duplicates`、`match_against`、`fingerprint_similarity`、`fingerprint_candidates`、`version_markers_conflict` |
 | `core/quality.py` | 音质比较（同一录音该留哪一份） | `is_lossless`、`compare`、`describe` |
 | `core/organize.py` | 年代/年份归档 | `plan_organize(tracks, base_dir, plan)` |

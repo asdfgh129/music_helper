@@ -1,7 +1,9 @@
 /* 全局试听播放器：挂在 app.js 根组件模板里，切步骤不中断播放。
    只消费后端的结构化歌词（core.lyrics.parse_lrc），前端不再解析一遍 LRC。
    P2：.ape/.wma/.dsf 由本机 ffmpeg 解码成派生 mp3，就绪后复用同一个 <audio>
-   与 Range 接口，歌词同步逻辑完全不用改。契约见 docs/media-player.md。 */
+   与 Range 接口，歌词同步逻辑完全不用改。
+   P3：增强 LRC 的逐字片段由后端解析，当前行按片段时间逐字点亮；普通 LRC 走整行高亮。
+   契约见 docs/media-player.md。 */
 (function (MH) {
   'use strict';
 
@@ -76,6 +78,10 @@
       },
       lyricLines: function () { return (this.lyric && this.lyric.lines) || []; },
       hasTiming: function () { return !!(this.lyric && this.lyric.has_timing); },
+      /* P3：后端判定是否有可用的逐字时间轴，前端不自己解析 LRC */
+      wordTiming: function () { return !!(this.lyric && this.lyric.word_timing); },
+      /* 歌词时间 = 播放时间 + [offset:]；逐字片段与整行高亮共用同一时基 */
+      lyricTime: function () { return this.currentTime + this.offsetMs / 1000; },
       hasLyric: function () { return !!(this.lyric && (this.lyric.exists || this.lyric.plain)); },
       coverUrl: function () {
         if (!this.path || !this.info || !this.info.has_cover) return '';
@@ -312,10 +318,13 @@
             : '浏览器无法解码该文件或读取失败（不是网络问题）';
         }
       },
+      /* 只有当前行渲染逐字 span：一首歌几百行，没必要让每行每帧都参与 diff */
+      isWordLine: function (line) {
+        return !!(this.wordTiming && line.syllables && line.syllables.length > 1);
+      },
       syncLyric: function () {
         if (!this.hasTiming || !this.showLyrics) return;
-        const time = this.currentTime + this.offsetMs / 1000;
-        const index = upperBound(this.lyricLines, time) - 1;
+        const index = upperBound(this.lyricLines, this.lyricTime) - 1;
         if (index !== this.activeIndex) {
           this.activeIndex = index;
           this.$nextTick(this.scrollToActive);
@@ -445,15 +454,21 @@
             <div class="player-plain" v-else-if="!hasTiming">{{ lyric.plain }}</div>
             <template v-else>
               <div v-for="(line, i) in lyricLines" :key="i"
-                   class="player-line" :class="{ active: i === activeIndex }"
+                   class="player-line"
+                   :class="{ active: i === activeIndex, 'word-line': isWordLine(line) }"
                    @click="seekTo(line)">
-                <div class="player-line-text">{{ line.text }}</div>
+                <div class="player-line-text" v-if="isWordLine(line) && i === activeIndex">
+                  <span v-for="(seg, k) in line.syllables" :key="k"
+                        class="player-word"
+                        :class="{ sung: lyricTime >= seg.time }">{{ seg.text }}</span>
+                </div>
+                <div class="player-line-text" v-else>{{ line.text }}</div>
                 <div class="player-line-trans" v-if="line.translation">{{ line.translation }}</div>
               </div>
             </template>
           </div>
           <div class="player-lyrics-foot">
-            <span class="dim" v-if="hasTiming">点歌词行跳转 · 歌词偏移 {{ offsetMs }} ms</span>
+            <span class="dim" v-if="hasTiming">点歌词行跳转<span v-if="wordTiming"> · 逐字</span> · 歌词偏移 {{ offsetMs }} ms</span>
             <span class="dim" v-else-if="hasLyric">无时间戳，静态全文（不跟随进度）</span>
             <span class="player-offset" v-if="hasTiming">
               <button class="btn link" @click="applyOffset(-500)"

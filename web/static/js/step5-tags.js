@@ -531,7 +531,7 @@
                 <div class="lyric-preview-head">
                   <span>实时预览（后端解析，不写盘）</span>
                   <span class="dim" v-if="preview && preview.has_timing">
-                    {{ preview.lines.length }} 行 · 偏移 {{ preview.offset }} ms
+                    {{ preview.lines.length }} 行<span v-if="preview.word_timing"> · 逐字</span> · 偏移 {{ preview.offset }} ms
                     <span v-if="preview.meta.ti || preview.meta.ar">
                       · {{ preview.meta.ti }} {{ preview.meta.ar }}
                     </span>
@@ -540,7 +540,9 @@
                 </div>
                 <div class="note err" v-if="previewError">{{ previewError }}</div>
                 <div class="lyric-preview-body" v-if="preview && preview.has_timing">
-                  <div class="lyric-preview-line" v-for="(line, i) in preview.lines" :key="i">
+                  <div class="lyric-preview-line" v-for="(line, i) in preview.lines" :key="i"
+                       :title="line.syllables && line.syllables.length > 1
+                               ? '逐字：' + line.syllables.length + ' 段' : ''">
                     <span class="mono dim">{{ $fmt.duration(line.time) }}</span>
                     <span>{{ line.text }}</span>
                     <span class="dim" v-if="line.translation"> / {{ line.translation }}</span>

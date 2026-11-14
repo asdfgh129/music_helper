@@ -168,6 +168,32 @@ class TestMediaApi(unittest.TestCase):
         with open(os.path.join(self.workspace, 'a.lrc'), encoding='utf-8') as handle:
             self.assertIn('[offset:0]', handle.read())
 
+    def test_lyric_endpoints_return_word_segments(self):
+        """P3：GET /api/media/lyric 与 POST .../parse 都带逐字字段，且不改磁盘"""
+        with open(os.path.join(self.workspace, 'a.lrc'), 'w', encoding='utf-8') as handle:
+            handle.write('[00:02.50]<00:02.50>晴<00:03.00>天\n')
+        from_disk = self.client.get('/api/media/lyric',
+                                   params={'path': self.audio}).json()
+        self.assertTrue(from_disk['word_timing'])
+        self.assertEqual(from_disk['lines'][0]['syllables'],
+                         [{'time': 2.5, 'text': '晴'}, {'time': 3.0, 'text': '天'}])
+        self.assertEqual(from_disk['lines'][0]['text'], '晴天')
+
+        parsed = self.client.post('/api/media/lyric/parse', json={
+            'text': '[00:02.50]<00:02.50>晴<00:03.00>天\n',
+        }).json()
+        self.assertTrue(parsed['word_timing'])
+        self.assertEqual(parsed['lines'][0]['syllables'],
+                         from_disk['lines'][0]['syllables'])
+        with open(os.path.join(self.workspace, 'a.lrc'), encoding='utf-8') as handle:
+            self.assertIn('<00:03.00>天', handle.read())
+
+    def test_lyric_without_word_timing_returns_empty_segments(self):
+        parsed = self.client.post('/api/media/lyric/parse',
+                                  json={'text': '[00:01.00]普通歌词\n'}).json()
+        self.assertFalse(parsed['word_timing'])
+        self.assertEqual(parsed['lines'][0]['syllables'], [])
+
     def test_whitelist_rejects_outside_and_non_audio(self):
         outside = os.path.join(self.root, 'outside.mp3')
         with open(outside, 'wb') as handle:

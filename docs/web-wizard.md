@@ -223,7 +223,10 @@
 表格每行与编辑抽屉都提供「试听」：调根组件的 `playTrack(path, name, queue)`，由挂在
 `web/static/js/app.js` 根模板里的全局播放器接管，**切到第 6、7 步不会中断播放**。
 播放器先取 `/api/media/info` 与 `/api/media/lyric`，再让 `<audio>` 指向 `/api/media/stream`；
-歌词高亮由 `timeupdate` 驱动，点歌词行会发起新的 Range 请求跳转进度。`queue` 是可选的
+歌词高亮由 `timeupdate` 驱动，点歌词行会发起新的 Range 请求跳转进度。增强 LRC
+（`<00:12.00>晴<00:12.40>天`，或正文里的 `[00:12.40]`）由后端解析成逐字片段，当前行
+按片段时间逐字点亮，普通 LRC 仍是整行高亮；口径见 [media-player.md](media-player.md) §5.1。
+`queue` 是可选的
 曲目列表，有它才有上一曲/下一曲，播完自动续播；第 6 步左右两栏也各带一份试听队列。
 
 播放器底部条显示内嵌封面（`/api/media/cover`），歌词栏提供 `±0.5s` 偏移微调：后端只做
@@ -466,9 +469,9 @@ FFmpeg 缺失时 `available=false`，界面显示可照做的安装提示并保�
 | GET/POST | `/selfcheck/preview`、`/selfcheck/run` | 第 7 步 |
 | GET/POST | `/archive/preview`、`/archive/run` | 第 8 步 |
 | GET | `/workspace/files` | 工作区文件列表（拷贝/解密页右栏） |
-| GET | `/media/info`、`/media/lyric`、`/media/cover` | 试听元数据、结构化歌词、内嵌封面 |
+| GET | `/media/info`、`/media/lyric`、`/media/cover` | 试听元数据、结构化歌词（含逐字）、内嵌封面 |
 | GET/HEAD | `/media/stream`、`/media/stream?transcode=1` | 音频字节流 / 派生 MP3（均支持 Range 206；未就绪 409） |
-| POST | `/media/lyric/parse`、`/media/lyric/offset` | 歌词纯文本解析与 `[offset:]` 改写（不写盘） |
+| POST | `/media/lyric/parse`、`/media/lyric/offset` | 歌词纯文本解析（含逐字）与 `[offset:]` 改写（不写盘） |
 | GET/POST | `/media/transcode` | 查询 / 启动本机解码状态机（`.ape/.wma/.dsf`） |
 | POST | `/media/open` | 用系统默认播放器打开不可播格式 |
 

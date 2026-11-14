@@ -201,8 +201,8 @@ m4a / wma / dsf。
 - 音频移动/改名时，`core.ops.Plan` 会同步搬运同名 `.lrc`（搬歌词失败不影响主文件）。
 
 Web 试听时的**读取与解析口径**统一在 `core/lyrics.py`（编码探测、`[mm:ss.xx]` 时间戳、
-一行多时间戳、`[offset:]`、双语 `[翻译]` 段、无时间戳降级），完整契约见
-[media-player.md](media-player.md) §5。解析结果只用于展示与同步高亮，**不参与**待补全判定：
+一行多时间戳、`[offset:]`、双语 `[翻译]` 段、增强 LRC 逐字时间轴、无时间戳降级），完整契约见
+[media-player.md](media-player.md) §5 / §5.1。解析结果只用于展示与同步高亮，**不参与**待补全判定：
 `core.check.readiness_problems()` 从来不看歌词，这一条不因播放功能改变。
 
 P1 的 `±0.5s` 偏移微调只改 `[offset:]` 元数据行（`core.lyrics.set_offset()`），**不重写

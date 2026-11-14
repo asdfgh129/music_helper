@@ -213,6 +213,7 @@ def lyric_payload(target):
     """结构化歌词；解析口径的唯一实现是 core.lyrics.parse_lrc
 
     ``raw`` 是编码探测后的 LRC 全文，供 P1 的 offset 微调生成新文本，
+    ``word_timing`` / ``lines[].syllables`` 是 P3 的逐字片段，
     前端不自己做 LRC 解析。
     """
     lrc_path = lyrics.lrc_path_for(target)
@@ -227,7 +228,7 @@ def lyric_payload(target):
 
 
 def parse_lyric_text(text):
-    """编辑抽屉的实时预览：纯文本 -> 结构化歌词，不读写任何文件"""
+    """编辑抽屉的实时预览：纯文本 -> 结构化歌词（含逐字），不读写任何文件"""
     return {'ok': True, **lyrics.parse_lrc(text)}
 
 
