@@ -1,6 +1,7 @@
 /* 全局试听播放器：挂在 app.js 根组件模板里，切步骤不中断播放。
    只消费后端的结构化歌词（core.lyrics.parse_lrc），前端不再解析一遍 LRC。
-   契约见 docs/media-player.md。 */
+   P2：.ape/.wma/.dsf 由本机 ffmpeg 解码成派生 mp3，就绪后复用同一个 <audio>
+   与 Range 接口，歌词同步逻辑完全不用改。契约见 docs/media-player.md。 */
 (function (MH) {
   'use strict';
 
@@ -46,10 +47,33 @@
         savedLyric: null,
         lyricOverride: null,
         lyricOverridePath: '',
+        // P2 本机解码状态（GET/POST /api/media/transcode 的结果）
+        transcode: null,
       };
     },
     computed: {
-      playable: function () { return !!(this.info && this.info.browser_playable); },
+      needsTranscode: function () {
+        return !!(this.info && this.info.needs_transcode);
+      },
+      transcodeReady: function () {
+        return !!(this.transcode && this.transcode.status === 'done');
+      },
+      playable: function () {
+        return !!(this.info && (this.info.browser_playable || this.transcodeReady));
+      },
+      streamUrl: function () {
+        if (!this.path) return '';
+        const base = '/api/media/stream?path=' + encodeURIComponent(this.path);
+        return this.transcodeReady ? base + '&transcode=1' : base;
+      },
+      transcodeBusy: function () {
+        return !!(this.transcode && this.transcode.status === 'running');
+      },
+      canRetryTranscode: function () {
+        return !!(this.needsTranscode && this.transcode
+                  && (this.transcode.status === 'failed'
+                      || this.transcode.status === 'unavailable'));
+      },
       lyricLines: function () { return (this.lyric && this.lyric.lines) || []; },
       hasTiming: function () { return !!(this.lyric && this.lyric.has_timing); },
       hasLyric: function () { return !!(this.lyric && (this.lyric.exists || this.lyric.plain)); },
@@ -103,6 +127,7 @@
       window.addEventListener('mh-player-lyric', this._lyricHandler);
     },
     beforeUnmount: function () {
+      this.stopPolling();
       window.removeEventListener('mh-play', this._playHandler);
       window.removeEventListener('mh-player-lyric', this._lyricHandler);
       if (audioEl) {
@@ -114,6 +139,7 @@
     methods: {
       async play(path, name, queue) {
         if (!path) return;
+        this.stopPolling();
         if (audioEl) audioEl.pause();
         this.visible = true;
         this.path = path;
@@ -123,6 +149,7 @@
         this.info = null;
         this.lyric = null;
         this.savedLyric = null;
+        this.transcode = null;
         this.error = '';
         this.message = '';
         this.currentTime = 0;
@@ -146,11 +173,58 @@
           return;
         }
         this.busy = false;
-        if (!this.playable) {
+        if (!this.info.browser_playable) {
+          // 三种格式：先给原因，再自动进入本机解码（用户点试听即表示想听）
           this.message = this.info.playable_reason || '浏览器无法解码此格式';
+          this.startTranscode();
           return;
         }
-        audioEl.src = '/api/media/stream?path=' + encodeURIComponent(path);
+        await this.setAudioSource();
+      },
+      /* ---- P2：本机解码子进程 ---- */
+      async startTranscode() {
+        if (!this.path || !this.needsTranscode) return;
+        try {
+          // POST 幂等：已完成的直接回 done，失败的重跑，running 的复用同一任务
+          this.transcode = await MH.api.post('/api/media/transcode', { path: this.path });
+          this.onTranscodeState();
+        } catch (err) {
+          this.error = err.message;
+        }
+      },
+      onTranscodeState() {
+        const state = this.transcode && this.transcode.status;
+        if (state === 'running') {
+          this.startPolling();
+        } else if (state === 'done') {
+          this.stopPolling();
+          this.setAudioSource();
+        } else {
+          this.stopPolling();
+        }
+      },
+      startPolling() {
+        if (this._pollTimer) return;
+        this._pollTimer = window.setInterval(async () => {
+          if (!this.path) { this.stopPolling(); return; }
+          try {
+            this.transcode = await MH.api.get('/api/media/transcode', { path: this.path });
+            this.onTranscodeState();
+          } catch (err) {
+            this.stopPolling();
+            this.error = err.message;
+          }
+        }, 800);
+      },
+      stopPolling() {
+        if (this._pollTimer) {
+          window.clearInterval(this._pollTimer);
+          this._pollTimer = null;
+        }
+      },
+      async setAudioSource() {
+        if (!audioEl || !this.path || !this.playable) return;
+        audioEl.src = this.streamUrl;
         audioEl.volume = this.volume;
         try {
           await audioEl.play();
@@ -182,7 +256,7 @@
       toggle: function () {
         if (!this.playable || !audioEl) return;
         if (audioEl.paused) {
-          if (!audioEl.getAttribute('src')) { this.play(this.path, this.name, this.queue); return; }
+          if (!audioEl.getAttribute('src')) { this.setAudioSource(); return; }
           audioEl.play().catch((err) => { this.message = '播放失败：' + err.message; });
         } else {
           audioEl.pause();
@@ -193,6 +267,7 @@
         if (entry) this.play(entry.path, entry.name, this.queue);
       },
       close: function () {
+        this.stopPolling();
         if (audioEl) {
           audioEl.pause();
           audioEl.removeAttribute('src');
@@ -205,6 +280,7 @@
         this.savedLyric = null;
         this.lyricOverride = null;
         this.lyricOverridePath = '';
+        this.transcode = null;
         this.path = '';
         this.queue = [];
         this.queueIndex = -1;
@@ -231,7 +307,9 @@
       onPauseState: function () { this.playing = false; },
       onAudioError: function () {
         if (audioEl && audioEl.getAttribute('src')) {
-          this.error = '浏览器无法解码该文件或读取失败（不是网络问题）';
+          this.error = this.transcodeReady
+            ? '派生 MP3 读取失败，可点「重新解码」再试一次'
+            : '浏览器无法解码该文件或读取失败（不是网络问题）';
         }
       },
       syncLyric: function () {
@@ -316,7 +394,7 @@
                :src="coverUrl" @error="coverFailed = true" alt="封面">
           <div class="player-cover player-cover-empty" v-else>无封面</div>
           <button class="player-toggle" @click="toggle" :disabled="!playable || busy"
-                  :title="playable ? (playing ? '暂停' : '播放') : '浏览器无法解码此格式'">
+                  :title="playable ? (playing ? '暂停' : '播放') : '等待本机解码或改用系统播放器'">
             {{ playing ? '❚❚' : '▶' }}
           </button>
           <button class="btn sm ghost" v-if="hasQueue" @click="skip(-1)" :disabled="!canPrev"
@@ -329,6 +407,8 @@
               <span v-if="busy">读取中…</span>
               <span v-else-if="info">
                 {{ info.ext }} · {{ $fmt.size(info.size) }}
+                <span v-if="transcodeBusy"> · 本机解码中</span>
+                <span v-else-if="transcodeReady"> · 解码副本试听</span>
                 <span v-if="info.has_cover"> · 有封面</span>
                 <span v-if="info.has_lrc"> · 有歌词</span>
                 <span v-if="queueLabel"> · {{ queueLabel }}</span>
@@ -345,9 +425,18 @@
         </div>
 
         <div class="player-alert err" v-if="error">{{ error }}</div>
-        <div class="player-alert" v-if="message">
-          {{ message }}
-          <button class="btn link" v-if="!playable && path" @click="openExternal">用系统播放器打开</button>
+        <div class="player-alert" v-if="message">{{ message }}</div>
+
+        <div class="player-alert transcode" v-if="needsTranscode && transcode">
+          <span v-if="transcodeBusy">
+            正在本机解码为 MP3… 已解码 {{ $fmt.duration(transcode.decoded) }}
+          </span>
+          <span v-else-if="transcodeReady">已生成试听副本，可拖动进度条、歌词照常同步</span>
+          <span v-else-if="transcode.status === 'failed'">{{ transcode.error }} {{ transcode.hint }}</span>
+          <span v-else-if="!transcode.available">{{ transcode.hint }}</span>
+          <span v-else-if="transcode.status === 'idle'">需要本机解码成 MP3 后才能内嵌试听</span>
+          <button class="btn link" v-if="canRetryTranscode" @click="startTranscode">重新解码</button>
+          <button class="btn link" v-if="!transcodeReady && path" @click="openExternal">用系统播放器打开</button>
         </div>
 
         <div class="player-lyrics-wrap" v-if="showLyrics">

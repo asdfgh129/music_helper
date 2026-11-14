@@ -89,6 +89,11 @@ TOOLS_MACOS = (
     'QQ 音乐 Mac 屏蔽升级.tar.gz',
 )
 
+# P2 本机解码的可选工具：二进制不随仓库分发（许可与构建配方见
+# third_party/ffmpeg-build/README.md），放进 tools/ 才复制，缺失不算缺工具、不进自检。
+TOOLS_OPTIONAL_WINDOWS = ('ffmpeg.exe',)
+TOOLS_OPTIONAL_MACOS = ('ffmpeg', 'ffmpeg-darwin-arm64', 'ffmpeg-darwin-amd64')
+
 # 重复打包时会被清掉的条目；config.ini 与 log/ 属于用户数据，特意不在其中
 OWNED_ENTRIES = {
     EXE_NAME, '_internal', 'tools', 'web', 'config.example.ini', 'LICENSE',
@@ -237,14 +242,19 @@ def copy_tools(all_tools):
     dst = DIST / 'tools'
     dst.mkdir(parents=True, exist_ok=True)
     names = sorted(p.name for p in src.iterdir() if p.is_file()) if all_tools else None
+    optional = []
     if names is None:
+        optional = list(TOOLS_OPTIONAL_WINDOWS if os.name == 'nt'
+                        else TOOLS_OPTIONAL_MACOS)
         names = list(TOOLS_COMMON) + list(
-            TOOLS_WINDOWS if os.name == 'nt' else TOOLS_MACOS)
+            TOOLS_WINDOWS if os.name == 'nt' else TOOLS_MACOS) + optional
     copied, missing = [], []
     for name in names:
         path = src / name
         if not path.is_file():
-            missing.append(name)
+            # 可选工具缺失是正常形态（P2 内嵌试听自动降级），只在必需工具缺失时告警
+            if name not in optional:
+                missing.append(name)
             continue
         shutil.copy2(path, dst / name)
         copied.append(name)
@@ -254,6 +264,10 @@ def copy_tools(all_tools):
             stale.unlink()
             log('移除上次打包留下的外部程序: ' + stale.name)
     log(f'外部程序 {len(copied)} 个（{human(dir_size(dst))}）：' + ', '.join(copied))
+    if optional:
+        bundled = [name for name in optional if name in copied]
+        log('可选 FFmpeg：' + (', '.join(bundled) if bundled
+                             else '未放置（.ape/.wma/.dsf 内嵌试听自动降级）'))
     if missing:
         log('警告：tools/ 里缺少 ' + ', '.join(missing))
     return missing

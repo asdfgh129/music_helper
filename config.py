@@ -16,7 +16,7 @@
     WORKSPACE_DIR     流水线工作区；标签完整的文件处理完后仍留在这里
     INCOMPLETE_DIR    标签不全 / 文件名矛盾，等待人工处理
     DUPLICATE_DIR     重复文件
-    TOOLS_DIR         外部程序（um.exe、soundalike、fpcalc、Frida hook）
+    TOOLS_DIR         外部程序（um.exe、soundalike、fpcalc、Frida hook、可选 ffmpeg）
 """
 
 import configparser
@@ -71,6 +71,22 @@ def _default_fpcalc():
     """fpcalc 默认路径：优先用随仓库分发的 tools/fpcalc，找不到再靠 PATH"""
     name = 'fpcalc.exe' if os.name == 'nt' else 'fpcalc'
     return os.path.join(TOOLS_DIR, name)
+
+
+def _default_ffmpeg():
+    """FFmpeg 默认路径（可选工具，P2 试听转码用）
+
+    与 fpcalc 一样，路径不存在时 ``services.transcode`` 会回落到系统 PATH 或
+    ``imageio-ffmpeg``；三者都没有只是试听转码不可用，不影响其它流程。
+    二进制本身**不随仓库分发**，见 third_party/ffmpeg-build/README.md。
+    """
+    if os.name == 'nt':
+        return os.path.join(TOOLS_DIR, 'ffmpeg.exe')
+    if sys.platform == 'darwin':
+        arch = _MACOS_ARCH.get(platform.machine().lower())
+        if arch:
+            return os.path.join(TOOLS_DIR, f'ffmpeg-darwin-{arch}')
+    return os.path.join(TOOLS_DIR, 'ffmpeg')
 
 
 def _default_um():
@@ -163,7 +179,7 @@ def reload():
     global NETEASE_DIR, NETEASE_VIP_DIR
     global QQ_DIR, QQ_VIP_DIR
     global DECRYPT_STAGING_DIR, NETEASE_STAGING_DIR, QQ_STAGING_DIR
-    global DB_PATH, UM_EXE, SOUNDALIKE_EXE, FPCALC_EXE, QQ_HOOK_JS
+    global DB_PATH, UM_EXE, SOUNDALIKE_EXE, FPCALC_EXE, FFMPEG_EXE, QQ_HOOK_JS
     global QQ_CLIENT_EXE, QQ_INSTALLER, QQ_UPDATE_PATCH, QQ_MAC_DMG, QQ_MAC_PATCH
     global QQ_LOGIN_TIMEOUT
     global QMC_MMKV, QMC_MMKV_KEY
@@ -208,6 +224,9 @@ def reload():
     SOUNDALIKE_EXE = _path('MUSIC_HELPER_SOUNDALIKE_EXE', 'tools', 'soundalike_exe',
                            _default_soundalike())
     FPCALC_EXE = _path('MUSIC_HELPER_FPCALC_EXE', 'tools', 'fpcalc_exe', _default_fpcalc())
+    # P2 试听转码的可选外部工具；缺了只是 .ape/.wma/.dsf 不能内嵌试听
+    FFMPEG_EXE = _path('MUSIC_HELPER_FFMPEG_EXE', 'tools', 'ffmpeg_exe',
+                       _default_ffmpeg())
     QQ_HOOK_JS = _path('MUSIC_HELPER_QQ_HOOK', 'tools', 'qq_hook',
                        os.path.join(TOOLS_DIR, 'hook_qq_music.js'))
     # QQ 音乐客户端（解密前置条件）：留空则按平台自动探测——Windows 查注册表

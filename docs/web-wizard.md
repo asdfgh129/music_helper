@@ -231,8 +231,13 @@
 （`info.writable=false` 时按钮置灰）。编辑抽屉的歌词框会实时调
 `POST /api/media/lyric/parse` 预览，并同步到正在播放同一文件的播放器；关抽屉即恢复落盘版本。
 
-`.ape/.wma/.dsf` 在 `info` 里被标为 `browser_playable=false`，播放器明确提示并提供
-「用系统播放器打开」按钮，不静默失败。详见 [media-player.md](media-player.md)。
+`.ape/.wma/.dsf` 在 `info` 里被标为 `browser_playable=false` / `needs_transcode=true`：
+播放器显示「浏览器无法解码」的原因，点「试听」即由本机 Python 进程起 FFmpeg 子进程
+（自动启动，POST 幂等），把结果落成 `log/_media_cache/` 下的派生 MP3，再让 `<audio>`
+指向 `/api/media/stream?transcode=1`，进度条与 Range 拖动照常可用；每 800ms 轮询
+`/api/media/transcode` 显示解码进度、失败原因与重试。
+FFmpeg 缺失时 `available=false`，界面显示可照做的安装提示并保留「用系统播放器打开」，
+不静默失败。详见 [media-player.md](media-player.md)。
 
 ### 5.5 判定来源
 
@@ -462,13 +467,15 @@
 | GET/POST | `/archive/preview`、`/archive/run` | 第 8 步 |
 | GET | `/workspace/files` | 工作区文件列表（拷贝/解密页右栏） |
 | GET | `/media/info`、`/media/lyric`、`/media/cover` | 试听元数据、结构化歌词、内嵌封面 |
-| GET/HEAD | `/media/stream` | 音频字节流（支持 Range 206） |
+| GET/HEAD | `/media/stream`、`/media/stream?transcode=1` | 音频字节流 / 派生 MP3（均支持 Range 206；未就绪 409） |
 | POST | `/media/lyric/parse`、`/media/lyric/offset` | 歌词纯文本解析与 `[offset:]` 改写（不写盘） |
+| GET/POST | `/media/transcode` | 查询 / 启动本机解码状态机（`.ape/.wma/.dsf`） |
 | POST | `/media/open` | 用系统默认播放器打开不可播格式 |
 
-媒体接口不属于八步，全部不写文件（`/media/open` 只启动本机播放器，两个 `/media/lyric/*`
-是纯计算；歌词落盘仍走 `/track/save`），也不进 `web/tasks.py` 串行队列。
-契约与格式矩阵见 [media-player.md](media-player.md)。
+媒体接口不属于八步：不碰源文件（`/media/open` 只启动本机播放器，两个 `/media/lyric/*`
+是纯计算；歌词落盘仍走 `/track/save`），只有 `/media/transcode` 在 `log/_media_cache/`
+写派生 MP3，也不进 `web/tasks.py` 串行队列。契约与格式矩阵见
+[media-player.md](media-player.md)。
 
 ## 11. 边界（明确不做）
 

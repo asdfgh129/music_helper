@@ -556,6 +556,11 @@ table.grid th.sortable .arrow { font-style: normal; font-size: 10px; color: var(
   border-top: 1px solid var(--border-soft); color: var(--muted);
 }
 .player-alert.err { color: var(--err); }
+/* P2 本机解码状态条：与错误提示区分，按钮与文案同一行排布 */
+.player-alert.transcode {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  color: var(--accent);
+}
 .player-lyrics-wrap { border-top: 1px solid var(--border-soft); }
 .player-lyrics {
   position: relative;

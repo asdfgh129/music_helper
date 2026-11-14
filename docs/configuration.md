@@ -90,6 +90,13 @@ Web 向导第一步改的目录会**直接写回 `config.ini` 的 `[paths]`** �
 | `fpcalc` | 指纹（补标签 + 查重） | `tools/fpcalc`（macOS 通用二进制）；没有则用 `PATH` | `tools.fpcalc_exe` / `MUSIC_HELPER_FPCALC_EXE` | 补标签降级为在线平台查询，声纹去重失败 |
 | `um` | 网易云 `.ncm`、QQ `.mflac/.mgg` 等离线解密 | Windows `tools/um.exe`；macOS `tools/um-darwin-{arm64,amd64}` | `tools.um_exe` / `MUSIC_HELPER_UM_EXE` | 网易云解密失败；QQ 仍可用旧版客户端 + `um` 离线解密 |
 | Frida hook | QQ 音乐解密（**仅 Windows**；macOS 固定走 `um`） | `tools/hook_qq_music.js` | `tools.qq_hook` / `MUSIC_HELPER_QQ_HOOK` | QQ 自动退回 `um` 离线解密 |
+| FFmpeg（**可选**） | `.ape/.wma/.dsf` 的本机解码试听（P2） | `tools/` 下按平台命名的 ffmpeg；找不到回落到系统 `PATH` 或可选的 `imageio-ffmpeg` 包 | `tools.ffmpeg_exe` / `MUSIC_HELPER_FFMPEG_EXE` | 三种格式退回「用系统播放器打开」，其余流程完全不受影响 |
+
+FFmpeg 是**唯一不随仓库分发**的外部程序：先查 `config.FFMPEG_EXE`，再查 `PATH`，
+最后查可选 Python 包 `imageio-ffmpeg`（`requirements-dev.txt` 已列，`pip install imageio-ffmpeg`
+即可启用）。三处都没有不是错误，只是 Web 播放器里这三种格式不能内嵌试听。精简构建配方与
+GPL/LGPL 许可取舍见 [ffmpeg-build/README.md](../third_party/ffmpeg-build/README.md)，
+派生 MP3 只写在 `log/_media_cache/`，详见 [media-player.md](media-player.md) §7。
 
 Windows 的 QQ 解密有两条途径：旧版 QQ（19.51 及以下）+ `um` 离线解密，或新版 QQ + Frida
 注入；macOS 只有旧版 QQ（20230903）+ `um` 这一条。
@@ -112,6 +119,8 @@ Windows 的 QQ 解密有两条途径：旧版 QQ（19.51 及以下）+ `um` 离�
 `um.exe`（Windows）、`um-darwin-arm64`、`um-darwin-amd64`（macOS，纯 Go 构建）、
 `hook_qq_music.js`。平台选择由 `config.SOUNDALIKE_EXE` / `config.UM_EXE` / `config.FPCALC_EXE`
 自动完成（`sys.platform` + `platform.machine()`），需要换程序时用环境变量覆盖即可。
+**FFmpeg 不在这个分发清单里**；`scripts/build_exe.py` 把它列在 `TOOLS_OPTIONAL_*`，
+只有用户自己把二进制放进 `tools/` 时才会被复制进绿色版。
 
 Windows 的 `fpcalc.exe` 一般已在 `C:\Windows\System32`，仓库里不再单独放一份；macOS 上
 `soundalike` 只按 `PATH` 找 `fpcalc`，所以调用时会临时把 `tools/` 前置进 `PATH`。

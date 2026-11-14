@@ -32,6 +32,33 @@ class TestToolLists(unittest.TestCase):
                      'QQMusic_Setup_1951.exe', 'Q音屏蔽更新.zip'):
             self.assertIn(name, names)
 
+    def test_optional_ffmpeg_is_not_a_required_tool(self):
+        """FFmpeg 可选、不随仓库分发，缺了不能让自检变红"""
+        optional = set(build.TOOLS_OPTIONAL_WINDOWS + build.TOOLS_OPTIONAL_MACOS)
+        required = set(build.TOOLS_COMMON + build.TOOLS_WINDOWS + build.TOOLS_MACOS)
+        self.assertTrue(optional)
+        self.assertFalse(optional & required)
+
+    def test_copy_tools_ignores_missing_optional_ffmpeg(self):
+        """copy_tools 只在必需工具缺失时告警；放了 ffmpeg 才复制"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root, dist = Path(tmp) / 'root', Path(tmp) / 'dist'
+            (root / 'tools').mkdir(parents=True)
+            with mock.patch.object(build, 'ROOT', root), \
+                 mock.patch.object(build, 'DIST', dist), \
+                 mock.patch.object(build, 'log'):
+                missing = build.copy_tools(False)
+                for name in (build.TOOLS_OPTIONAL_WINDOWS + build.TOOLS_OPTIONAL_MACOS):
+                    self.assertNotIn(name, missing)
+                self.assertEqual(list((dist / 'tools').iterdir()), [])
+
+                platform_names = (build.TOOLS_OPTIONAL_WINDOWS if os.name == 'nt'
+                                  else build.TOOLS_OPTIONAL_MACOS)
+                chosen = platform_names[0]
+                (root / 'tools' / chosen).write_bytes(b'fake ffmpeg')
+                build.copy_tools(False)
+                self.assertTrue((dist / 'tools' / chosen).is_file())
+
 
 class TestPyInstallerArgs(unittest.TestCase):
     def test_entry_and_dynamic_imports_are_collected(self):

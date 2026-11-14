@@ -10,7 +10,7 @@
 | 30 秒跑起来 | [../README.md](../README.md) | 参数细节 |
 | 照着界面一步步操作 | [web-guide.md](web-guide.md) | 判定规则原理 |
 | 用浏览器走一遍完整流程 | [web-wizard.md](web-wizard.md) | 单条判定规则 |
-| 改试听、歌词显示或媒体接口 | [media-player.md](media-player.md) | 判定规则、纯服务器分支方案 |
+| 改试听、歌词显示、媒体接口或本机解码 | [media-player.md](media-player.md)、[../third_party/ffmpeg-build/README.md](../third_party/ffmpeg-build/README.md) | 判定规则、纯服务器分支方案 |
 | 看一条文件从下载到入库的完整路径 | [workflow.md](workflow.md) | 单条规则的算法 |
 | 弄清「为什么这个文件被判重复/未入库」 | [rules.md](rules.md) | 流程顺序 |
 | 看某个判定背后的算法、公式、阈值与流程图 | [algorithms.md](algorithms.md) | 界面操作步骤 |
@@ -51,7 +51,7 @@
 | [usage.md](usage.md) | CLI 全参数、流程入口、参数优先级、退出码、使用禁忌 | 规则为什么这样定 |
 | [configuration.md](configuration.md) | 配置来源与优先级、目录语义、外部程序、阈值、扩展名 | 规则怎么使用这些配置 |
 | [web-wizard.md](web-wizard.md) | Web 向导八步做了什么、初始化判定、查重与自检、跳过/回退语义、接口与文件清单、um 跨盘核实结论 | 单条判定规则、CLI 参数 |
-| [media-player.md](media-player.md) | 本机临时 Web 服务的部署口径、只读媒体层、Range 流式、LRC 解析口径、封面与播放队列、歌词偏移写回、格式矩阵、播放器交互与分期 | 判定规则、未来纯服务器分支的解码方案 |
+| [media-player.md](media-player.md) | 本机临时 Web 服务的部署口径、只读媒体层、Range 流式、LRC 解析口径、封面与播放队列、歌词偏移写回、格式矩阵、`.ape/.wma/.dsf` 本机解码子进程与派生缓存、播放器交互与分期 | 判定规则、未来纯服务器分支的解码方案 |
 | [architecture.md](architecture.md) | 分层边界、模块职责、数据流、`Plan` 机制、扩展指南、设计决策 | 具体判定规则 |
 | [fingerprint.md](fingerprint.md) | 指纹原理、AcoustID/MusicBrainz、声纹查重（soundalike）的流程与算法、阈值、平台支持、同曲不同版本的碰撞策略与审核结论 | 本地查重流程 |
 | [troubleshooting.md](troubleshooting.md) | 症状 → 原因 → 处理、日志与 journal、数据恢复 | 正常流程说明 |

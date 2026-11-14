@@ -64,6 +64,7 @@
 | `services/soundalike.py` | 声纹去重、库一致性、建库/补库（`init_db` / `refresh_db`）、只读查询库指纹（`library_fingerprints`）、现场算指纹（`fingerprint_of`） | `tools/soundalike`（Windows 为 `soundalike.exe`）、`fpcalc` |
 | `services/steps.py` | Web 向导八步编排（CLI 与 Web 共用） | `core/*`、`services/*`、`tagger/` |
 | `services/media.py` | 试听只读媒体层：路径白名单、Range 解析、分块迭代、MIME 矩阵、封面字节、LRC 纯文本变换、系统播放器调用（见 [media-player.md](media-player.md)） | `core/tags.py`、`core/lyrics.py`、标准库 |
+| `services/transcode.py` | P2 本机解码子进程：FFmpeg 探测、派生 MP3 缓存、后台状态机与进度（试听链路唯一写盘处，只写 `log/_media_cache/`） | `config.py`、`utils.py`、外部 FFmpeg（可选） |
 | `services/settings_store.py` | `config.ini [paths]` 的唯一写入点（校验 + 落盘 + `config.reload()`） | 标准库 |
 
 ### `tagger/`
@@ -315,8 +316,10 @@ Web 不假设「只有 Windows 能解密」。`/api/platform` 返回运行平台
 送入浏览器，不是上传。因此 WASM 解码在主干没有立论，它属于
 [browser-local-roadmap.md](browser-local-roadmap.md) 那个「音频字节零上行」的未来分支。
 
-试听链路（`/api/media/*`）不写文件：不生成 `Plan`、不移动文件、不进 `web/tasks.py` 的
-单工作者队列（否则一首歌会堵住八步流水线）。P1 的歌词偏移微调是唯一的落盘动作，
-由前端把纯计算得到的 LRC 全文交给已有的 `POST /api/track/save`，媒体层不新增写接口。
-`<audio>` 挂在根组件模板而非步骤组件里，保证切步骤不中断播放。完整契约、格式矩阵与分期见
-[media-player.md](media-player.md)。
+试听链路（`/api/media/*`）不碰音乐文件：不生成 `Plan`、不移动/改写源文件、不进
+`web/tasks.py` 的单工作者队列（否则一首歌会堵住八步流水线）。`services/media.py`
+严格只读；P2 的 `services/transcode.py` 只在 `log/_media_cache/` 写派生 MP3，让
+`.ape/.wma/.dsf` 解码后复用同一套 Range 接口，FFmpeg 是可选外部工具、不随仓库分发。
+P1 的歌词偏移微调把纯计算得到的 LRC 全文交给已有的 `POST /api/track/save`，
+媒体层不为它新增写接口。`<audio>` 挂在根组件模板而非步骤组件里，保证切步骤不中断播放。
+完整契约、格式矩阵与分期见 [media-player.md](media-player.md)。

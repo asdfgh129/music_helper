@@ -178,6 +178,9 @@ python -m uvicorn web.api:app --host 127.0.0.1 --port 8000
 
 > `uvicorn` 通常不在 PATH，请用 `python -m uvicorn`。服务只绑定 `127.0.0.1`，不对外暴露。
 > 前端不依赖 CDN、不需要 Node 构建，Vue 运行时随仓库放在 `web/static/vendor/`。
+> `requirements-dev.txt` 里的 `imageio-ffmpeg` 只是可选的 FFmpeg 来源之一（给
+> `.ape/.wma/.dsf` 内嵌试听用），不装也能启动向导，这三种格式会退回系统播放器；
+> 详见 [media-player.md](media-player.md) §7。
 
 ### 8.2 向导接口
 

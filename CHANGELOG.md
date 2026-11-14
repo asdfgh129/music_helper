@@ -28,6 +28,16 @@
   播完自动续播、歌词 `±0.5s` 微调；第 6 步两栏加试听；第 5 步编辑抽屉歌词实时预览并联动
   底部播放器。`requirements-dev.txt` 补 `httpx`，新增 `tests/test_media_api.py` 走真实
   FastAPI 路由回归响应头与 206 / 416 / 404。
+- **试听 P2：`.ape/.wma/.dsf` 本机解码内嵌试听**：新增 `services/transcode.py`，
+  由本机 Python 进程起 FFmpeg 子进程把三种格式派生为临时 MP3（DSD 先转 PCM 再重采样），
+  落在 `log/_media_cache/` 后复用同一套 Range 接口，进度条可精确拖动；带缓存 key、
+  原子改名、LRU 清理、15 分钟看门狗与幂等状态机，不进八步串行队列、不碰原文件。
+  新增 `GET/POST /api/media/transcode` 与 `/api/media/stream?transcode=1`（未就绪 409、
+  可播格式 400），`info` 增 `needs_transcode`。FFmpeg 为**可选**来源：配置指定路径 →
+  系统 `PATH` → `imageio-ffmpeg` 包，三处都没有时明确提示并保留系统播放器降级，
+  二进制不随仓库分发；`config.py` 增 `FFMPEG_EXE`，`scripts/build_exe.py` 把它列进
+  `TOOLS_OPTIONAL_*`，`third_party/ffmpeg-build/README.md` 记构建配方与 GPL 许可取舍。
+  播放器新增解码进度、失败原因与重试；`requirements-dev.txt` 加可选 `imageio-ffmpeg`。
 - **免 Python 绿色版打包**：新增 `scripts/build_exe.py` 与根目录 `build_exe.bat`，用
   PyInstaller onedir 把 CLI 与 Web 打进一个 exe，`dist/` 同时带上 `_internal/`（Python
   运行时与 requests / mutagen / frida / pycryptodomex / fastapi / uvicorn / pydantic /

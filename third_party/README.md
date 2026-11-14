@@ -20,6 +20,12 @@
 | [soundalike/](soundalike/) | soundalike（声纹查重） | 0.1.5 | BSD-3-Clause | `tools/soundalike.exe`、`tools/soundalike-darwin-{arm64,amd64}` |
 | [chromaprint/](chromaprint/) | Chromaprint（`fpcalc` 的上游） | 1.6.2 | MIT（链接的 FFmpeg 为 LGPL） | `tools/fpcalc`、`tools/fpcalc.exe` |
 | [qqmusic/](qqmusic/) | QQ 音乐旧版客户端 | 19.51 (Win) / 8.8.0 (macOS) | 腾讯专有；安装包在 `tools/`，说明与 SHA256 在本目录 | 无（人工安装） |
+| [ffmpeg-build/](ffmpeg-build/) | FFmpeg 精简构建配方（P2 试听解码） | 7.x 配方 | 取决于 configure；启用 libmp3lame 后为 GPLv2，见该目录 README | **可选**、不入库：`tools/` 下的 ffmpeg 二进制 |
+
+最后一行与前几行不同：它只有配方文本，没有上游源码快照，也没有随仓库分发的产物。
+P2 解码子进程有三种 FFmpeg 来源（配置指定 / 系统 PATH / 可选 Python 包
+`imageio-ffmpeg`），二进制一个都不随项目分发，详见该目录 README 与
+`docs/media-player.md` §6。
 
 ### 关于 soundalike 的 0.1.5
 

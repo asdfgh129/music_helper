@@ -22,7 +22,7 @@ except ImportError:  # pragma: no cover - 未装开发依赖时 unittest discove
 _PATCHED_DIRS = (
     'LIBRARY_DIR', 'WORKSPACE_DIR', 'INCOMPLETE_DIR', 'DUPLICATE_DIR',
     'NETEASE_DIR', 'NETEASE_VIP_DIR', 'QQ_DIR', 'QQ_VIP_DIR',
-    'DECRYPT_STAGING_DIR',
+    'DECRYPT_STAGING_DIR', 'LOG_DIR',
 )
 
 
@@ -41,6 +41,8 @@ class TestMediaApi(unittest.TestCase):
                 value = self.workspace
             elif name == 'LIBRARY_DIR':
                 value = self.library
+            elif name == 'LOG_DIR':
+                value = os.path.join(self.root, 'log')
             else:
                 value = os.path.join(self.root, 'unused', name)
             patcher = mock.patch.object(config, name, value)
@@ -48,6 +50,9 @@ class TestMediaApi(unittest.TestCase):
             self.addCleanup(patcher.stop)
         lyrics_core.clear_lrc_cache()
         self.addCleanup(lyrics_core.clear_lrc_cache)
+        from services import transcode
+        transcode.clear_jobs()
+        self.addCleanup(transcode.clear_jobs)
 
         # 模块级 app 只创建一次；导入发生在目录被 patch 之后
         from web.api import app
@@ -181,6 +186,71 @@ class TestMediaApi(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.json()['launched'])
         opener.assert_called_once_with(os.path.realpath(self.audio))
+
+    def test_info_marks_unplayable_formats(self):
+        wma = os.path.join(self.workspace, 'a.wma')
+        with open(wma, 'wb') as handle:
+            handle.write(b'fake')
+        data = self.client.get('/api/media/info', params={'path': wma}).json()
+        self.assertFalse(data['browser_playable'])
+        self.assertTrue(data['needs_transcode'])
+        self.assertFalse(self.client.get('/api/media/info',
+                                         params={'path': self.audio}).json()['needs_transcode'])
+
+    def test_transcode_stream_rejects_playable_and_unready(self):
+        self.assertEqual(self.client.get(
+            '/api/media/stream', params={'path': self.audio, 'transcode': 1}).status_code, 400)
+        wma = os.path.join(self.workspace, 'a.wma')
+        with open(wma, 'wb') as handle:
+            handle.write(b'fake')
+        with mock.patch('services.transcode.ffmpeg_exe', return_value=''):
+            resp = self.client.get('/api/media/stream',
+                                   params={'path': wma, 'transcode': 1})
+        self.assertEqual(resp.status_code, 409)
+        self.assertIn('transcode', resp.json())
+        self.assertEqual(resp.json()['transcode']['status'], 'unavailable')
+
+    def test_transcode_stream_reuses_range_from_cache(self):
+        """伪造一份派生 MP3，验证 stream?transcode=1 仍走同一套 Range 与白名单"""
+        from services import transcode
+
+        wma = os.path.join(self.workspace, 'a.wma')
+        with open(wma, 'wb') as handle:
+            handle.write(b'fake')
+        cached = os.path.join(transcode.cache_dir(), transcode.cache_key(wma) + '.mp3')
+        with open(cached, 'wb') as handle:
+            handle.write(bytes(range(100)))
+
+        full = self.client.get('/api/media/stream',
+                               params={'path': wma, 'transcode': 1})
+        self.assertEqual(full.status_code, 200)
+        self.assertEqual(full.headers['content-type'], 'audio/mpeg')
+        self.assertEqual(full.content, bytes(range(100)))
+
+        part = self.client.get('/api/media/stream',
+                               params={'path': wma, 'transcode': 1},
+                               headers={'Range': 'bytes=20-29'})
+        self.assertEqual(part.status_code, 206)
+        self.assertEqual(part.headers['content-range'], 'bytes 20-29/100')
+        self.assertEqual(part.content, bytes(range(20, 30)))
+        # 派生文件只读，原文件一字节未动
+        with open(wma, 'rb') as handle:
+            self.assertEqual(handle.read(), b'fake')
+
+    def test_transcode_status_is_pure_query(self):
+        from services import transcode
+
+        wma = os.path.join(self.workspace, 'a.wma')
+        with open(wma, 'wb') as handle:
+            handle.write(b'fake')
+        with mock.patch('services.transcode.ffmpeg_exe', return_value=''):
+            data = self.client.get('/api/media/transcode',
+                                   params={'path': wma}).json()
+        self.assertTrue(data['ok'])
+        self.assertFalse(data['available'])
+        self.assertEqual(data['status'], 'unavailable')
+        self.assertIn('FFmpeg', data['hint'])
+        self.assertEqual(transcode.status(self.audio)['status'], 'not_needed')
 
 
 if __name__ == '__main__':

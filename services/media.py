@@ -3,7 +3,8 @@
 
 只做五件事：路径白名单、Range 参数解析、分块迭代、只读元数据与歌词封面、
 LRC 纯文本变换。**不写任何文件**，不生成 ``core.ops.Plan``，不进
-``web/tasks.py`` 串行队列。歌词落盘仍只走 ``services.steps.save_track()``。
+``web/tasks.py`` 串行队列。歌词落盘仍只走 ``services.steps.save_track()``；
+P2 派生 MP3 的写盘在 ``services/transcode.py``，本模块只读它生成的缓存文件。
 
 本模块只依赖标准库 + ``config`` / ``core``，不 import Web 框架：组装
 ``StreamingResponse`` 是 ``web/api.py`` 的职责。契约见 docs/media-player.md。
@@ -192,6 +193,8 @@ def media_info(target):
         'duration': duration,
         'browser_playable': ext in BROWSER_PLAYABLE,
         'playable_reason': NOT_PLAYABLE_REASON.get(ext, ''),
+        # P2：前端据此决定是否走 /api/media/transcode 的本机解码子进程
+        'needs_transcode': ext in NOT_PLAYABLE_REASON,
         'has_lrc': os.path.isfile(lyrics.lrc_path_for(target)),
         'has_cover': has_cover,
         'writable': in_workspace(target),

@@ -30,14 +30,16 @@ music_helper Web UI —— FastAPI 后端
   POST /api/archive/run       第 8 步执行 → 后台任务
   GET  /api/workspace/files   工作区文件列表（拷贝/解密页右栏）
 
-试听旁路（只读，不属于八步，也不进后台任务队列）：
+试听旁路（不属于八步，也不进后台任务队列；不改音乐库、不生成 Plan）：
   GET       /api/media/info    音频元数据 + 浏览器可播判定
-  GET|HEAD  /api/media/stream  Range 206 字节流（浏览器拖动进度条必需）
+  GET|HEAD  /api/media/stream  Range 206 字节流（transcode=1 时读派生 mp3 缓存）
   GET       /api/media/lyric   结构化 LRC（编码探测 / 时间戳 / 双语）
   GET       /api/media/cover   内嵌封面字节（无封面 404）
   POST      /api/media/lyric/parse   纯文本 -> 结构化歌词（抽屉实时预览，不写盘）
   POST      /api/media/lyric/offset  改写 [offset:] 后的全文（不写盘，落盘走 track/save）
   POST      /api/media/open    用系统默认播放器打开不可播格式
+  GET       /api/media/transcode     查询本机解码状态（前端轮询）
+  POST      /api/media/transcode     启动本机解码（唯一写 log/_media_cache 的入口）
 
 保留的旧接口（CLI 时代的仪表盘与脚本仍可用）：
   GET  /api/config /api/platform /api/scan /api/reports /api/reports/view
@@ -72,6 +74,7 @@ import core.scan as scanner  # noqa: E402
 import utils  # noqa: E402
 from services import media as media_service  # noqa: E402  顶层导入，PyInstaller 才扫得到
 from services import steps  # noqa: E402
+from services import transcode as transcode_service  # noqa: E402  同上，P2 解码子进程
 from web.tasks import manager, supported_actions  # noqa: E402
 
 PROJECT_DIR = config.PROJECT_DIR
@@ -186,6 +189,10 @@ class MkdirReq(BaseModel):
 
 
 class MediaOpenReq(BaseModel):
+    path: str = ""
+
+
+class MediaTranscodeReq(BaseModel):
     path: str = ""
 
 
@@ -604,7 +611,7 @@ def api_archive_run(req: ArchiveRunReq):
 # --------------------------------------------------------------------------- #
 
 def _media_target(path):
-    """四个媒体接口共用同一套白名单校验"""
+    """所有带 path 的媒体接口共用同一套白名单校验"""
     try:
         return media_service.resolve_media(path)
     except media_service.MediaError as exc:
@@ -617,15 +624,32 @@ def api_media_info(path: str = ""):
 
 
 @app.api_route("/api/media/stream", methods=["GET", "HEAD"])
-def api_media_stream(request: Request, path: str = ""):
+def api_media_stream(request: Request, path: str = "", transcode: int = 0):
     """自行实现 Range：Starlette 各版本 FileResponse 的行为不一致，指望不上。
 
     只返回单段 206；多段 Range 由 services.media.parse_range 取第一段。
     HEAD 只回响应头，不读文件体。流式响应不打逐块日志。
+
+    ``transcode=1`` 时读的是本机解码落盘的派生 MP3：路径仍由白名单校验原文件，
+    缓存路径完全由服务端按 cache_key 计算，前端无法指定任意文件。
     """
     target = _media_target(path)
-    size = os.path.getsize(target)
-    mime = media_service.mime_for(target)
+    if transcode:
+        ext = os.path.splitext(target)[1].lower()
+        if ext not in transcode_service.NEEDS_TRANSCODE:
+            raise HTTPException(status_code=400,
+                                detail='该格式浏览器可以直接播放，无需转码')
+        source = transcode_service.ready_path(target)
+        if not source:
+            return JSONResponse(
+                {'detail': '派生 MP3 尚未就绪，请先完成解码',
+                 'transcode': transcode_service.status(target)},
+                status_code=409)
+        mime = 'audio/mpeg'
+    else:
+        source = target
+        mime = media_service.mime_for(target)
+    size = os.path.getsize(source)
     headers = {
         "Accept-Ranges": "bytes",
         "Cache-Control": "no-store",
@@ -646,7 +670,7 @@ def api_media_stream(request: Request, path: str = ""):
     if partial:
         body_headers["Content-Range"] = f"bytes {start}-{end}/{size}"
     return StreamingResponse(
-        media_service.iter_chunks(target, start, end),
+        media_service.iter_chunks(source, start, end),
         status_code=206 if partial else 200,
         headers=body_headers,
     )
@@ -688,6 +712,23 @@ def api_media_open(req: MediaOpenReq):
     except OSError as exc:
         raise HTTPException(status_code=502, detail=f"打不开系统播放器: {exc}")
     return {"ok": True, "launched": True, "path": target}
+
+
+@app.get("/api/media/transcode")
+def api_media_transcode_status(path: str = ""):
+    """查询本机解码状态（前端轮询）；纯查询，不启动子进程"""
+    return {"ok": True, **transcode_service.status(_media_target(path))}
+
+
+@app.post("/api/media/transcode")
+def api_media_transcode_start(req: MediaTranscodeReq):
+    """启动本机解码，幂等：同一文件已有 running 任务时直接返回它的状态
+
+    试听链路里唯一的写盘入口，且只写 ``log/_media_cache/`` 下的派生 MP3；
+    不碰原文件、不进音乐库、不生成 ``Plan``。
+    """
+    return {"ok": True,
+            **transcode_service.status(_media_target(req.path), start=True)}
 
 
 # --------------------------------------------------------------------------- #

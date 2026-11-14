@@ -4,15 +4,16 @@
 > 不负责：判定规则（见 [rules.md](rules.md)）、八步流程（见 [workflow.md](workflow.md)）、
 > 向导操作细节（见 [web-wizard.md](web-wizard.md)）、未来纯服务器分支
 > （见 [browser-local-roadmap.md](browser-local-roadmap.md)）。
-> 权威来源：接口契约以本文为准，实现以 `services/media.py`、`core/lyrics.py`、
-> `web/static/js/player.js` 为准；判定口径仍以 `core/` 与 [rules.md](rules.md) 为准。
+> 权威来源：接口契约以本文为准，实现以 `services/media.py`、`services/transcode.py`、
+> `core/lyrics.py`、`web/static/js/player.js` 为准；判定口径仍以 `core/` 与
+> [rules.md](rules.md) 为准。
 
 | 项 | 值 |
 |---|---|
-| 状态 | P0 + P1 已实现：只读试听、Range 拖动、结构化歌词、同步高亮、不可播格式降级、内嵌封面、播放队列、歌词偏移写回、编辑抽屉实时预览 |
+| 状态 | P0 + P1 + P2 已实现：只读试听、Range 拖动、结构化歌词、同步高亮、内嵌封面、播放队列、歌词偏移写回、编辑抽屉实时预览，以及 `.ape/.wma/.dsf` 的本机解码内嵌试听 |
 | 日期 | 2026-11-14 |
 | 适用分支 | `master`（主干） |
-| 权威实现 | `services/media.py`、`core/lyrics.py`、`core/tags.py`、`web/static/js/player.js`、`web/api.py` |
+| 权威实现 | `services/media.py`、`services/transcode.py`、`core/lyrics.py`、`core/tags.py`、`web/static/js/player.js`、`web/api.py` |
 
 ---
 
@@ -35,6 +36,8 @@ FastAPI/uvicorn 服务，默认只监听 `127.0.0.1:8000`，Web 页面、音乐�
    缓存，且默认 ffmpeg.wasm core 不含 APE/WMA/DSD 解码器。WASM 只属于
    `feat/browser-local` 那个「Ubuntu Server + 用户浏览器分处两台机器、要求音频字节零上行」
    的未来分支，见 [browser-local-roadmap.md](browser-local-roadmap.md) §7 / P-04。
+   主干 P2 的 `.ape/.wma/.dsf` 内嵌试听因此走**本机 Python 进程起 native FFmpeg 子进程**，
+   不叫「服务端转码」，也没有 WASM（见 §7）。
 
 > `--web-host` 允许改成非回环地址。只有那时上述边界才变成真实网络边界，也正因如此
 > 媒体接口的路径白名单不能省。
@@ -45,19 +48,22 @@ FastAPI/uvicorn 服务，默认只监听 `127.0.0.1:8000`，Web 页面、音乐�
 |---|---|
 | `core/lyrics.py` | 纯解析：编码探测、LRC 结构化、同名歌词路径、`[offset:]` 改写（**唯一实现**） |
 | `core/tags.py` | `duration()` / `has_cover()` / `read_cover()` 提供只读元数据，不改判定 |
-| `services/media.py` | 文件读取：路径白名单、Range 参数解析、分块迭代、MIME 矩阵、封面字节、LRC 纯文本变换、系统播放器调用 |
+| `services/media.py` | 文件读取：路径白名单、Range 参数解析、分块迭代、MIME 矩阵、封面字节、LRC 纯文本变换、系统播放器调用（严格只读） |
+| `services/transcode.py` | **试听链路唯一写盘处**：FFmpeg 探测、派生 MP3 缓存、后台线程状态机与进度（见 §7） |
 | `web/api.py` | 只做参数校验、组装 `StreamingResponse` / `Response`、序列化 JSON |
 | `web/static/js/player.js` | 播放器组件与歌词同步，只消费后端结构化结果 |
 | `web/static/js/step5-tags.js` / `step6-dedupe.js` | 试听入口、播放队列、编辑抽屉实时预览 |
 
 硬约束（与 [AGENTS.md](../AGENTS.md) 一致）：
 
-- **媒体接口不写任何文件**：不生成 `core.ops.Plan`、不移动/删除任何文件。
-  `POST /api/media/lyric/parse` 与 `/api/media/lyric/offset` 是纯文本变换（连磁盘都不读），
-  `POST /api/media/open` 只启动外部播放器。歌词**落盘仍只走**已有的
-  `POST /api/track/save`（它自己校验工作区；`info.writable` 决定前端是否放开偏移按钮）。
-- **不进 `web/tasks.py` 串行队列**：试听与流式响应是同步短请求，塞进单工作者队列会让
-  一首歌堵住八步流水线。
+- **不碰音乐文件**：不生成 `core.ops.Plan`、不移动/删除/改写任何源文件。
+  `services/media.py` 严格只读；`POST /api/media/lyric/parse` 与 `/api/media/lyric/offset`
+  是纯文本变换（连磁盘都不读），`POST /api/media/open` 只启动外部播放器。
+  P2 的 `services/transcode.py` 是唯一例外：它只在 `log/_media_cache/` 写**派生 MP3**，
+  属于运行产物，绝不回写原文件。歌词**落盘仍只走**已有的 `POST /api/track/save`
+  （它自己校验工作区；`info.writable` 决定前端是否放开偏移按钮）。
+- **不进 `web/tasks.py` 串行队列**：试听与流式响应是同步短请求，解码在独立后台线程跑，
+  塞进单工作者队列会让一首歌堵住八步流水线。
 - **判定规则零改动**：歌词是否齐全、是否孤立、待补全判定都不受播放功能影响。
 - **一个功能只有一处实现**：LRC 解析只在 `core/lyrics.py`，前端不再解析一遍；
   同名歌词路径只在 `core/lyrics.py`，`core/model.py` 与 `services/steps.py` 复用它。
@@ -66,23 +72,28 @@ FastAPI/uvicorn 服务，默认只监听 `127.0.0.1:8000`，Web 页面、音乐�
 
 ## 3. 接口契约
 
-`info` / `stream` / `lyric` / `cover` 四个路径接受 `?path=<绝对路径>`（`stream` 另支持
-`HEAD`），经白名单校验；三个 POST 用 JSON body，其中只有 `open` 带 `path`。
-文件类路径校验都由 `services/media.py:resolve_media()` 统一完成。
+`info` / `stream` / `lyric` / `cover` / `transcode` 五个路径接受 `?path=<绝对路径>`
+（`stream` 另支持 `HEAD` 与 `transcode=1`），经白名单校验；五个 POST 用 JSON body，
+其中 `open` 与 `transcode` 带 `path`。文件类路径校验都由
+`services/media.py:resolve_media()` 统一完成。
 
 | 接口 | 方法 | 返回 |
 |---|---|---|
-| `/api/media/info` | GET | `ok / path / name / ext / mime / size / duration / browser_playable / playable_reason / has_lrc / has_cover / writable` |
+| `/api/media/info` | GET | `ok / path / name / ext / mime / size / duration / browser_playable / playable_reason / needs_transcode / has_lrc / has_cover / writable` |
 | `/api/media/stream` | GET / HEAD | `200` 或 `206`，带 `Accept-Ranges`、`Content-Range`、`Content-Length` |
+| `/api/media/stream?transcode=1` | GET / HEAD | 同上，但读派生 MP3；未就绪 `409`、格式无需转码 `400` |
 | `/api/media/lyric` | GET | `ok / exists / encoding / raw / has_timing / offset / meta / lines / plain` |
 | `/api/media/cover` | GET | 内嵌封面字节 + MIME；无封面 `404` |
 | `/api/media/lyric/parse` | POST `{text}` | 结构化歌词（编辑抽屉实时预览，纯计算） |
 | `/api/media/lyric/offset` | POST `{text, offset}` | `{ok, text, offset}`，改写 `[offset:]` 后的全文（纯计算） |
+| `/api/media/transcode` | GET | `ok / available / status / error / hint / decoded / size`（纯查询） |
+| `/api/media/transcode` | POST `{path}` | 同上，并幂等启动本机解码子进程 |
 | `/api/media/open` | POST `{path}` | `{ok, launched, path}`，用系统默认播放器打开该文件 |
 
 `info` 的 `duration` 来自 `core.tags.duration()`（mutagen 不可用或读不出时降级为 `0`），
 `has_cover` 来自 `core.tags.has_cover()`、`writable` 来自
-`services/media.py:in_workspace()`，都只是展示信息，不参与可入库判定。
+`services/media.py:in_workspace()`，`needs_transcode` 等价于 `!browser_playable`
+（三种不可播格式），都只是展示信息，不参与可入库判定。
 `lyric.raw` 是编码探测后的 LRC 全文，供偏移微调生成新文本；前端不自己解析 LRC。
 封面由 `core/tags.py:read_cover()` 读取，与 `has_cover()` / `write_cover()` 共用同一份
 格式分派（`_COVER_EXTRACTORS`），只读内嵌图、不找同目录 `cover.jpg`，响应带
@@ -121,6 +132,9 @@ VIP / 暂存子目录。归档后文件位于库目录的 `<年代>/<年份>` �
   避免一次拖动刷出几百行。
 - `services/media.py` 只返回 `(start, end, partial)` 与块迭代器，不依赖 Web 框架；
   组装 `StreamingResponse` 是 `web/api.py` 的事。
+- `transcode=1` 走的是**同一套** Range 逻辑，只是把 `source` 换成派生 MP3 的绝对路径、
+  MIME 固定 `audio/mpeg`。缓存路径由服务端按 `cache_key` 算出，前端无法指定；
+  缓存缺失返回 `409`（附当前转码状态），浏览器可直接播放的格式传 `transcode=1` 返回 `400`。
 
 ## 5. LRC 解析口径
 
@@ -179,16 +193,55 @@ VIP / 暂存子目录。归档后文件位于库目录的 `<年代>/<年份>` �
 
 MIME 表必须覆盖 `config.AUDIO_EXTENSIONS` 全集，`tests/test_media.py` 有断言，防止重演
 「只加扩展名、漏读取器」那类事故。三种不可播格式**明确提示**，不静默失败：
-`info` 返回 `browser_playable=false` 与 `playable_reason`，播放器不设置 `audio.src`，
-直接给出「浏览器无法解码，请用本地播放器」和「用系统播放器打开」按钮。
+`info` 返回 `browser_playable=false`、`needs_transcode=true` 与 `playable_reason`；
+播放器先显示解码入口，解码不可用时仍给「用系统播放器打开」，绝不假装可播。
 
-P2 若要内嵌播放，走**本机解码子进程**：Python 进程调用随 `tools/` 分发的精简
-FFmpeg，把结果落成临时 mp3 再复用同一套 Range 接口（管道流没有可映射的字节范围，
-浏览器拖不动进度条）。绝不回写原文件，缓存不进音乐库目录、不进 `Plan`。加二进制要遵守
-[AGENTS.md](../AGENTS.md) 第 9 条：`config.py` 的平台默认路径、`utils.tool_problem()`
-预检、`third_party` 下的构建配方与 LGPL 说明、同步打包工具清单。
+## 7. 本机解码子进程（P2）
 
-## 7. 前端播放器
+### 7.1 为什么落成文件而不是管道
+
+三种格式都由 FFmpeg 原生解码器覆盖：`ape`（Monkey's Audio）、
+`wmav1/wmav2/wmalossless/wmapro` + `asf` 解封装、
+`dsd_lsbf_planar/dsd_msbf_planar` + `dsf` 解封装（DSD64 的 1bit 流先转 PCM 再重采样）。
+一次引入、三种格式全解决；不需要自己写解码器，也不使用 WASM（见 §1）。
+
+**不把 ffmpeg 的 stdout 直接喂给浏览器**：MP3 容器需要总长度与 seek 表，管道流没有
+可映射的字节范围，浏览器拖不动进度条。所以先落到 `log/_media_cache/<key>.mp3`，
+再复用 §4 的 Range 实现，前端 `<audio>` 完全无感。
+
+### 7.2 FFmpeg 是可选的，三种来源
+
+`services/transcode.py:ffmpeg_exe()` 依次找 `config.FFMPEG_EXE`
+（`config.ini [tools] ffmpeg_exe` / `MUSIC_HELPER_FFMPEG_EXE` / `tools/` 下按平台命名的
+二进制）→ 系统 `PATH` → 可选 Python 包 `imageio-ffmpeg`。三处都没有**不是错误**：
+`GET /api/media/transcode` 返回 `available=false` 与一句可照做的 `hint`，
+UI 退回 P0 的「用系统播放器打开」。
+
+二进制**不随仓库分发**：避免几十 MB 体积与 GPL 传染。可复现的精简构建配方与许可说明在
+`third_party/ffmpeg-build/README.md`；`scripts/build_exe.py` 把 ffmpeg 列在
+`TOOLS_OPTIONAL_*`，放进 `tools/` 才复制，缺失不进自检告警。路径预检统一走
+`utils.tool_problem()`，符合 [AGENTS.md](../AGENTS.md) 第 9 条。
+
+### 7.3 状态机与缓存
+
+| 项 | 口径 |
+|---|---|
+| 参数 | `-c:a libmp3lame -b:a 192k -ar 44100 -ac 2 -map_metadata -1 -f mp3`；DSF 由 DSD→PCM 后重采样 |
+| 缓存 key | `sha256(realpath \| mtime_ns \| size \| CACHE_VERSION)[:32]`，源文件一改立即失效 |
+| 写入 | 先写 `<key>.part`，成功后原子改名 `<key>.mp3`；单文件上限 12 个 / 512 MiB，LRU 清理 |
+| 状态 | `not_needed` / `unavailable` / `idle` / `running` / `done` / `failed`，前端 800ms 轮询 |
+| 进度 | `-progress pipe:1` 的 `out_time_us` / `out_time_ms` 解析为已解码秒数（纯函数 `parse_progress`）；两个字段**都是微秒**，`out_time_ms` 按毫秒算会把 1 秒显示成 17 分钟，另支持 `out_time=HH:MM:SS.xx` 兜底 |
+| 看门狗 | 单次解码 15 分钟超时后 kill；`status` 保留失败原因供「重新解码」 |
+| 并发 | 独立后台线程 + 锁；同一 key 的 `POST` 幂等，**不进 `web/tasks.py` 串行队列** |
+
+`stream?transcode=1` 的 `path` 仍按白名单校验原文件，缓存路径完全由服务端计算；
+可播格式传 `transcode=1` 返回 `400`，缓存未就绪返回 `409`（附当前状态）。
+日志文件与派生缓存都在 `log/`，受 `.gitignore` 保护，不进音乐库、不进 `Plan`。
+
+**已知边界**：带 DRM 的 WMA 解不了，会显式报错并提示用系统播放器；解码只覆盖试听，
+不会把派生 MP3 当作新曲目参与任何判定。
+
+## 8. 前端播放器
 
 **`<audio>` 必须挂在 `web/static/js/app.js` 的根组件模板里**。向导用 `<component :is>`
 切换步骤组件，播放器若放在第 5 步组件内，切到第 6 步就被卸载、播放中断。
@@ -211,24 +264,36 @@ FFmpeg，把结果落成临时 mp3 再复用同一套 Range 接口（管道流�
   关抽屉或保存成功后发空事件，播放器重新 GET `/api/media/lyric` 恢复落盘版本。
 - 内嵌封面走 `/api/media/cover`，加载失败或 `has_cover=false` 时显示「无封面」占位。
 
-降级路径必须在 UI 里说清楚：`browser_playable=false`（提示用本地播放器）、
+- **不可播格式的解码 UI**：`info.needs_transcode=true` 时播放器先不设 `audio.src`，
+  显示「浏览器无法解码」的原因；点试听即视为想听，自动 `POST /api/media/transcode`
+  启动解码（幂等），随后每 800ms 轮询 `GET` 显示进度与状态；`done` 时把 `audio.src`
+  切到 `stream?transcode=1` 自动播放；`failed` 给原因与「重新解码」，`unavailable`
+  显示 `hint` 并保留「用系统播放器打开」。切换曲目时清掉定时器，避免旧状态覆盖新曲。
+  歌词仍按**原路径**取，与派生 MP3 无关。
+
+降级路径必须在 UI 里说清楚：`browser_playable=false`（提示本机解码或本地播放器）、
 `exists=false`（显示「无歌词」）、`has_timing=false`（静态全文）、`audio` 的 `error`
 事件（解码失败而非网络问题）、封面 `404`（占位图）。
 
-## 8. 分期与验收
+## 9. 分期与验收
 
 - **P0（已实现）**：`services/media.py` + 4 个媒体接口、`core/lyrics.py` 解析与编码回退、
   全局播放器与同步歌词、第 5 步试听入口、系统播放器降级、顺带修 GBK 与 `.LRC` 口径。
 - **P1（已实现）**：内嵌封面接口与展示、第 6 步两栏试听、歌词偏移写回、播放队列与
   上下曲（含播完自动续播）、编辑抽屉实时预览并联动播放器。
-- **P2（需决策）**：本机 ffmpeg 解码子进程覆盖 `.ape/.wma/.dsf`、逐字歌词、桌面歌词。
+- **P2（已实现）**：`services/transcode.py` 本机 FFmpeg 解码子进程 + 派生缓存 +
+  `/api/media/transcode` 状态机 + `stream?transcode=1` 复用 Range；播放器解码进度、失败重试
+  与系统播放器降级。FFmpeg 为可选来源，不随仓库分发。
+- **未做（需另行决策）**：逐字歌词、桌面歌词。
 
 测试用 `tempfile`，不碰真实音乐库、网络与外部程序：`tests/test_lyrics.py` 覆盖多时间戳、
 翻译段、offset、GBK、BOM、无时间戳、大小写路径与 `set_offset()`；`tests/test_media.py`
 覆盖白名单越界、Range 三种写法与 416、MIME 表覆盖扩展名全集、`writable`、封面与纯文本
 变换；`tests/test_tags.py` 覆盖 9 种格式的封面读取表与 flac/wav 写读往返；
 `tests/test_media_api.py` 用 FastAPI TestClient 走真实路由和响应头（含 206 / 416 /
-404 / 纯计算不落盘）；`tests/test_steps.py` 回归歌词读取。
+404 / 409 / 纯计算不落盘）；`tests/test_transcode.py` 覆盖缓存 key、进度解析、命令参数、
+状态机，并在 FFmpeg 可用时用真实生成的 WMA / DSF 样本端到端解码（缺 FFmpeg 自动 skip）；
+`tests/test_steps.py` 回归歌词读取；`tests/test_build_exe.py` 断言 FFmpeg 是可选工具。
 验收跑 `pytest -q`、`ruff check .`、`compileall`、`scripts/check_docs.py`、
 `scripts/build_docs_index.py --check`，再手工验：拖动进度条、大文件流式、切步骤不中断、
-GBK 歌词、`.ape` 提示。
+GBK 歌词、`.ape/.wma/.dsf` 解码与失败提示。

@@ -23,7 +23,7 @@ QQ 解密前的客户端安装 / 启动 / 登录检查在 `decrypto/qq_client.py
 | 改配置项 | [docs/configuration.md](docs/configuration.md) |
 | 写文档/移动文档 | [docs/README.md](docs/README.md)、[CONTRIBUTING.md](CONTRIBUTING.md) |
 | 开发「纯服务器 Web + 浏览器本机实现」分支 | [docs/browser-local-roadmap.md](docs/browser-local-roadmap.md)（基石文档、行为契约与待决决策） |
-| 改试听 / 歌词显示 / 媒体接口 | [docs/media-player.md](docs/media-player.md)（只读媒体层、LRC 口径、格式矩阵） |
+| 改试听 / 歌词显示 / 媒体接口 / 本机解码 | [docs/media-player.md](docs/media-player.md)（只读媒体层、LRC 口径、格式矩阵、FFmpeg 派生缓存）、[third_party/ffmpeg-build/README.md](third_party/ffmpeg-build/README.md)（可选二进制的构建配方与许可） |
 | 打包免 Python 绿色版 / 改项目路径定位 | [README.md](README.md)「绿色版」一节、[docs/usage.md](docs/usage.md) 第 9 节、`runtime_paths.py` | 流水线判定规则 |
 | 推不上 GitHub | [docs/git-proxy.md](docs/git-proxy.md)（`scripts/git_uplink.py`） |
 
