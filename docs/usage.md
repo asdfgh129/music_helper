@@ -231,3 +231,24 @@ music_helper.exe --web --no-browser     # 不自动打开浏览器
 `MUSIC_HELPER_WEB_PORT` 设定。外部程序在程序目录的 `tools/`，配置写在程序目录的
 config.ini，日志、报告与回收站写到程序目录的 `log/`；这些路径由
 `runtime_paths.py` 定位，与当前工作目录无关。
+
+### 9.1 绿色版的试听解码（可选 FFmpeg）
+
+Web 向导里 `.ape/.wma/.dsf` 的内嵌试听依赖 FFmpeg，而**它不随仓库、也不随绿色版分发**：
+`scripts/build_exe.py` 只把 `tools/` 下的 ffmpeg 当可选工具复制，缺了不告警、不影响打包。
+源码模式的第三档回落 `imageio-ffmpeg` 是动态导入，PyInstaller 静态分析扫不到，绿色版里
+也没有 pip，所以拷到一台没装 FFmpeg 的机器时，这三种格式只会退回 P0 的
+「用系统播放器打开」（UI 会给出明确提示），其它格式与八步流程完全不受影响。
+
+要在绿色版启用内嵌试听，三选一：
+
+1. 把编译好的 ffmpeg 放进 `dist/tools/`——Windows 用 `ffmpeg.exe`，macOS 用
+   `ffmpeg` 或 `ffmpeg-darwin-<arch>`；下次重新打包时脚本会自动带上。
+2. 在目标机器装系统级 ffmpeg 并确保在 `PATH` 里。
+3. 在 `dist/config.ini` 的 `[tools] ffmpeg_exe` 写绝对路径，或设环境变量
+   `MUSIC_HELPER_FFMPEG_EXE`。
+
+查找顺序、精简构建配方与 GPL/LGPL 取舍见
+[configuration.md](configuration.md)「外部程序」与
+[ffmpeg-build/README.md](../third_party/ffmpeg-build/README.md)；派生 MP3 只写在
+`dist/log/_media_cache/`，接口契约见 [media-player.md](media-player.md) §7。

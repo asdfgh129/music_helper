@@ -66,6 +66,10 @@
   试运行不写库，移入 `INCOMPLETE_DIR` 的不算入库；CLI `--manual-archive` 同步处理。
 - 新增配置 `fp_dedupe` / `fp_write_on_archive` / `fp_lookup_threshold` /
   `fp_match_threshold`（默认 `1 / 1 / 0.25 / 0.95`，与 soundalike 阈值一致）。
+- **八步向导新增 HTTP 层回归**：`tests/test_wizard_api.py` 用 FastAPI TestClient 覆盖
+  `/api/wizard/state`、目录设置与浏览、第 3~8 步的 `preview` / `run`、单曲编辑、任务队列、
+  工作区文件与旧版只读接口，断言状态码、请求模型校验（422 / 400）与任务入参。
+  `manager.submit` 全程替换成桩，绝不真的启动后台 worker 或触碰音乐库；目录一律用 tempfile。
 
 ### 修复
 
@@ -107,6 +111,12 @@
   「未分类」并在生成时告警；`docs/README.md`、`scripts/README.md` 同步登记分类表与维护约定。
 - 绿色版的打包与运行说明同步到 `README.md`、`docs/usage.md` 第 9 节、`CONTRIBUTING.md`、
   `scripts/README.md` 与 `AGENTS.md`（含项目根目录唯一判定约束）；`docs/index.html` 重新生成。
+- 补齐项目自述与测试覆盖矩阵：`README.md` 的「能力」与「代码结构」补上试听 P0–P3
+  （Range 流式、逐字歌词、封面 / 队列 / 偏移、`.ape/.wma/.dsf` 本机解码）并登记
+  `docs/media-player.md`；`docs/usage.md` 新增 §9.1，说明绿色版不分发 FFmpeg、
+  `imageio-ffmpeg` 动态导入不会被 PyInstaller 收进去，以及自备二进制 / 系统 PATH /
+  `tools.ffmpeg_exe` 三种启用方式与降级行为；`tests/README.md` 覆盖矩阵补全到全部 29 个
+  测试文件（原先只列 14 个）。
 
 ### 计划中
 

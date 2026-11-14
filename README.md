@@ -28,6 +28,12 @@ Python 音乐库流水线：**解密 → 去重 → 补标签 → 检查 → 分
 - **Web UI（Vue 3 八步向导）**：本机启动 FastAPI 服务，浏览器里按「目录设置 → 操作类型 →
   拷贝 → 解密 → 标签歌词 → 归档」走完整流程，每步都可先预览再执行，长任务有逐条进度与实时日志（见
   [docs/web-wizard.md](docs/web-wizard.md)）。解密能力随运行机器操作系统分支（Windows→Frida/um，macOS→um）。
+- **Web 试听与同步歌词**：挂在向导根组件的全局底部播放器，音频流自行实现 HTTP
+  Range（206 / 416 / HEAD）以支持拖动进度条，切步骤不中断；LRC 编码探测（UTF-8 / GB18030）、
+  多时间戳、双语、逐字歌词高亮与 `±0.5s` 偏移写回，内嵌封面、播放队列与播完自动续播。
+  `.ape/.wma/.dsf` 由本机 FFmpeg 子进程解码成派生 MP3 缓存后内嵌试听，缺 FFmpeg 时降级到
+  系统播放器。媒体层只读源文件、不生成 `Plan`、不进八步任务队列，详见
+  [docs/media-player.md](docs/media-player.md)。
 
 ## 快速开始
 
@@ -91,6 +97,12 @@ music_helper.exe --web --web-port 8001
 exe 验证版本、帮助与 Web 页面；`--all-tools` 附带全平台二进制、`--skip-verify` 跳过自检。
 构建机需要 Python 3.11+ 与上述依赖，产物本身不需要。
 
+> **绿色版的试听解码**：`.ape/.wma/.dsf` 内嵌试听需要 FFmpeg，它不随仓库或绿色版分发。
+> 请自备 `dist/tools/` 下的 `ffmpeg.exe`（macOS 为 `ffmpeg` 或 `ffmpeg-darwin-<arch>`），或在 `config.ini` 的
+> `[tools] ffmpeg_exe` / 环境变量 `MUSIC_HELPER_FFMPEG_EXE` 指定路径；源码模式还可回落到
+> 系统 `PATH` 与 `imageio-ffmpeg`。没有 FFmpeg 不影响其余功能，这三种格式会提示改用系统
+> 播放器。详见 [docs/usage.md](docs/usage.md) 第 9 节。
+
 ## 流水线
 
 ```
@@ -117,14 +129,17 @@ music_helper/
 │   ├── scan.py             # 单次遍历建索引
 │   ├── naming.py           # 文件名解析/生成（唯一实现）
 │   ├── tags.py             # 标签读写与封面（唯一实现）
-│   ├── lyrics.py           # 歌词检查
+│   ├── lyrics.py           # 歌词检查 + LRC 结构化解析（含逐字时间戳，唯一实现）
 │   ├── dedupe.py           # 本地重复判定
 │   ├── scoring.py          # 候选标签打分
 │   ├── organize.py         # 年代/年份归档
 │   ├── check.py            # 检查、修复计划、入库判定
 │   ├── report.py           # Markdown 报告 + CSV 清单
 │   └── ops.py              # Plan：移动/改名/回收 + journal
-├── services/               # 有副作用：外部程序
+├── services/               # 有副作用：外部程序 / 磁盘 / 网络
+│   ├── steps.py            # 八步向导的预览与执行（唯一业务出口）
+│   ├── media.py            # 试听只读媒体层：白名单、Range、LRC 与封面载荷
+│   ├── transcode.py        # .ape/.wma/.dsf 本机 FFmpeg 解码与派生 MP3 缓存
 │   ├── decrypt.py          # 网易云 / QQ 音乐解密编排
 │   └── soundalike.py       # 声纹去重（外部 exe 包装）
 ├── tagger/                 # 标签、封面、歌词服务
@@ -147,6 +162,7 @@ music_helper/
 | [docs/index.html](docs/index.html)                 | 全仓文档可浏览索引（可搜索、可离线打开） |
 | [docs/browser-local-roadmap.md](docs/browser-local-roadmap.md) | 下一分支：纯服务器 Web + 浏览器本机实现的路线与可行性研究 |
 | [docs/web-guide.md](docs/web-guide.md)             | 八步向导的操作说明（配图）        |
+| [docs/media-player.md](docs/media-player.md)       | 试听只读媒体层、Range 流式、LRC 逐字口径、封面/队列/偏移、格式矩阵与本机解码 |
 | [docs/workflow.md](docs/workflow.md)               | 端到端流程、状态迁移、失败处理    |
 | [docs/rules.md](docs/rules.md)                     | 全部判定规则                      |
 | [docs/algorithms.md](docs/algorithms.md)           | 去重/声纹/解密等算法的判定顺序、阈值与 UML 图 |
