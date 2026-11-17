@@ -184,6 +184,7 @@ def reload():
     global QQ_LOGIN_TIMEOUT
     global QMC_MMKV, QMC_MMKV_KEY
     global SUBPROCESS_TIMEOUT, FPCALC_LENGTH, FINGERPRINT_THRESHOLD
+    global TAG_CONCURRENCY, FPCALC_CONCURRENCY
     global DURATION_TOLERANCE, MAX_COVER_SIZE, ENCRYPTED_SOURCE_MODE
     global FP_DEDUPE_ENABLED, FP_WRITE_ON_ARCHIVE, FP_LOOKUP_THRESHOLD, FP_MATCH_THRESHOLD
     # 旧名兼容别名（下游脚本可能还在用；新代码请用上面的语义名）
@@ -252,6 +253,12 @@ def reload():
     SUBPROCESS_TIMEOUT = _int('MUSIC_HELPER_TIMEOUT', 'settings', 'subprocess_timeout', 3600)
     FPCALC_LENGTH = _int('MUSIC_HELPER_FPCALC_LENGTH', 'settings', 'fpcalc_length', 120)
     FINGERPRINT_THRESHOLD = _int('MUSIC_HELPER_FP_THRESHOLD', 'settings', 'fingerprint_threshold', 50)
+    # 并发度：标签补全是「fpcalc + 两个平台的网络请求」，声纹是 fpcalc 子进程；
+    # 两者每个工作单元互相独立，线程池并发只影响速度不影响判定结果。
+    # 平台限流敏感时把 tag_concurrency 调回 1（串行，与旧版行为一致）。
+    TAG_CONCURRENCY = _int('MUSIC_HELPER_TAG_CONCURRENCY', 'settings', 'tag_concurrency', 4)
+    FPCALC_CONCURRENCY = _int('MUSIC_HELPER_FPCALC_CONCURRENCY', 'settings',
+                              'fpcalc_concurrency', 4)
     # 工作区入库查重：声纹是「该不该入库」的必要信号，不是可选增强
     FP_DEDUPE_ENABLED = bool(_int('MUSIC_HELPER_FP_DEDUPE', 'settings', 'fp_dedupe', 1))
     # 归档成功后把新文件指纹增量补进 music.db

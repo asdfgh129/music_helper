@@ -11,12 +11,15 @@
 
 import errno
 import json
+import logging
 import os
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from core.naming import is_audio
+
+logger = logging.getLogger(__name__)
 
 MOVE = 'move'
 RENAME = 'rename'
@@ -196,8 +199,8 @@ class Plan:
         dst_lrc = _unique_path(os.path.splitext(dst)[0] + '.lrc')
         try:
             _move_file(src_lrc, dst_lrc)
-        except Exception:  # noqa: BLE001 - 歌词失败不影响主文件
-            pass
+        except Exception as exc:  # noqa: BLE001 - 歌词失败不影响主文件，但要留痕
+            logger.warning(f'歌词伴随移动失败（主文件不受影响）: {src_lrc}: {exc}')
 
     def _journal(self, op, ok, error):
         if not self.journal_path:

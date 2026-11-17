@@ -8,6 +8,7 @@
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -659,6 +660,86 @@ class TestFingerprintGate(StepsTestCase):
         self.assertEqual(data['blocked'][0]['status'], 'upgrade')
         self.assertTrue(os.path.isfile(path))
         refresh.assert_not_called()
+
+
+
+class TestFillTagsGuard(StepsTestCase):
+    """run_fill_tags 的路径白名单：工作区外的文件一律拒绝、不写盘"""
+
+    def test_run_fill_tags_rejects_paths_outside_workspace(self):
+        inside = self._touch('workspace', '甲 - 歌A.mp3')
+        outside = self._touch('outside', '乙 - 歌B.mp3')
+        real_build = steps.scanner.build_track
+
+        def guarded_build(path, with_tags=True):
+            # 工作区外的路径必须在白名单处被拦下，根本走不到构建
+            self.assertNotEqual(os.path.normcase(path), os.path.normcase(outside))
+            return real_build(path, with_tags=with_tags)
+
+        ok_result = mock.Mock(error='', updated=False, fields=[], source='',
+                             cover=False, lyric=False)
+        fake_tagger = mock.Mock()
+        fake_tagger.update.return_value = ok_result
+
+        with mock.patch.object(steps.scanner, 'build_track',
+                               side_effect=guarded_build),              mock.patch('tagger.Tagger', return_value=fake_tagger):
+            data = steps.run_fill_tags(paths=[inside, outside])
+
+        self.assertFalse(data['items'][0]['ok'])
+        self.assertIn('只允许操作工作区', data['items'][0]['message'])
+        self.assertEqual(os.path.normcase(data['items'][0]['path']),
+                         os.path.normcase(outside))
+        self.assertTrue(data['items'][1]['ok'])
+        self.assertEqual(data['failed'], 1)
+        self.assertEqual(data['updated'], 0)
+
+
+class TestWorkspaceFingerprintCache(StepsTestCase):
+    """第 6/8 步对同一批文件重复算指纹，缓存必须把三遍压成一遍"""
+
+    def setUp(self):
+        super().setUp()
+        steps.invalidate_library_cache()
+
+    def test_fingerprint_computed_once_per_content(self):
+        path = self._touch('workspace', '甲 - 歌A.flac', content='abcd')
+        track = Track(path=path, tags={})
+        calls = []
+
+        def fake_fingerprint_of(target):
+            calls.append(target)
+            return (('fp',), 0.0)
+
+        with mock.patch.object(steps.soundalike, 'fingerprint_of',
+                               side_effect=fake_fingerprint_of):
+            first = steps._cached_fingerprint(track)
+            second = steps._cached_fingerprint(track)
+        self.assertEqual(first, second)
+        self.assertEqual(len(calls), 1)
+
+        # 内容变化（mtime 变）→ 缓存键失效，重新计算
+        os.utime(path, (time.time() + 10, time.time() + 10))
+        with mock.patch.object(steps.soundalike, 'fingerprint_of',
+                               side_effect=fake_fingerprint_of):
+            steps._cached_fingerprint(track)
+        self.assertEqual(len(calls), 2)
+
+    def test_invalidate_clears_fingerprint_cache(self):
+        path = self._touch('workspace', '甲 - 歌A.flac', content='abcd')
+        track = Track(path=path, tags={})
+        calls = []
+
+        def fake_fingerprint_of(target):
+            calls.append(target)
+            return ((), 0.0)
+
+        with mock.patch.object(steps.soundalike, 'fingerprint_of',
+                               side_effect=fake_fingerprint_of):
+            steps._cached_fingerprint(track)
+            steps.invalidate_library_cache()
+            steps._cached_fingerprint(track)
+        self.assertEqual(len(calls), 2)
+
 
 
 if __name__ == '__main__':

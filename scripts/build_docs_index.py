@@ -101,14 +101,18 @@ DOC_CATEGORY_OF = {
     'docs/web-wizard.md': 'usage',
     'docs/media-player.md': 'usage',
     'docs/configuration.md': 'usage',
+    'docs/features/common-features.md': 'usage',
+    'docs/features/kernel-features.md': 'usage',
     'docs/architecture.md': 'dev',
     'docs/rules.md': 'dev',
     'docs/algorithms.md': 'dev',
     'docs/fingerprint.md': 'dev',
+    'docs/audit/2026-11-audit.md': 'dev',
     'docs/self-check.md': 'ops',
     'docs/troubleshooting.md': 'ops',
     'docs/git-proxy.md': 'ops',
     'docs/browser-local-roadmap.md': 'plan',
+    'docs/audit/next-steps.md': 'plan',
 }
 
 QUICK_LINKS = (

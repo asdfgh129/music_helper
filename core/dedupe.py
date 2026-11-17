@@ -13,6 +13,7 @@
 
 import os
 import re
+import struct
 from dataclasses import dataclass, field
 
 from core import quality
@@ -267,27 +268,77 @@ def fingerprint_similarity(left, right):
 
     与 `third_party/soundalike/scan.go` 的 `compareFingerprints` 同一公式。
     输入是 `fpcalc -raw -json` 的 uint32 数组；声纹库里以小端 BLOB 存放。
+
+    实现说明：逐词循环在 1 万首库里是显著热点，这里把两条指纹各打包成一个大
+    整数（第 i 个词落在 [32i, 32(i+1)) 位），偏移变成整数右移，「逐词统计匹配
+    位数」变成「整段异或后一次 bit_count」——异或的逐词 popcount 之和等于整体
+    popcount，公式与结果与逐词实现完全一致。
     """
     if not left or not right:
         return 0.0
 
-    def matching(a, b):
-        return sum(32 - (a[i] ^ b[i]).bit_count() for i in range(min(len(a), len(b))))
+    left_len, right_len = len(left), len(right)
+    x_left = _words_to_int(left)
+    x_right = _words_to_int(right)
 
-    best = matching(left, right)
-    for offset in range(1, len(left)):
-        best = max(best, matching(left[offset:], right))
-    for offset in range(1, len(right)):
-        best = max(best, matching(left, right[offset:]))
-    return best / (32 * max(len(left), len(right)))
+    def matching(shift_words, n_words, x_shifted, x_fixed):
+        """固定侧与「移位侧右移 shift_words 个词」的前 n_words 个词比对"""
+        differing = ((x_shifted >> (32 * shift_words)) ^ x_fixed) & _word_mask(n_words)
+        return 32 * n_words - differing.bit_count()
+
+    best = matching(0, min(left_len, right_len), x_left, x_right)
+    for offset in range(1, left_len):
+        best = max(best, matching(offset, min(left_len - offset, right_len),
+                                  x_left, x_right))
+    for offset in range(1, right_len):
+        # left[i] 对 right[o+i]：这次该右移的是 right 侧
+        best = max(best, matching(offset, min(right_len - offset, left_len),
+                                  x_right, x_left))
+    return best / (32 * max(left_len, right_len))
 
 
-def fingerprint_candidates(target_fp, pool, lookup_threshold=None, match_threshold=None):
+def _words_to_int(words):
+    """uint32 序列 -> 大整数（小端打包：第 i 个词占 [32i, 32(i+1)) 位）"""
+    return int.from_bytes(struct.pack(f'<{len(words)}I', *words), 'little')
+
+
+def _word_mask(n_words):
+    """保留前 n_words 个 32 位词的掩码（按词数缓存，避免每次重建大整数）"""
+    mask = _WORD_MASKS.get(n_words)
+    if mask is None:
+        mask = (1 << (32 * n_words)) - 1
+        _WORD_MASKS[n_words] = mask
+    return mask
+
+
+_WORD_MASKS = {}
+
+
+def build_fingerprint_index(pool):
+    """为指纹池建 16 位截断倒排表
+
+    建表要遍历全部指纹（1 万首 ≈ 百万次 dict 操作），是每轮比对的最大固定开销；
+    `match_against` 对一批待入库文件共用同一个池，表建一次反复查即可。
+    """
+    table = {}
+    for index, (_track, fp) in enumerate(pool):
+        for value in fp:
+            key = (value >> 16) & 0xFFFF
+            bucket = table.setdefault(key, {})
+            bucket[index] = bucket.get(index, 0) + 1
+    return table
+
+
+def fingerprint_candidates(target_fp, pool, lookup_threshold=None, match_threshold=None,
+                           index=None):
     """在库指纹池里找同一录音：16 位截断倒排筛选 → 逐位精算
 
     `pool` 是 `[(Track, fingerprint), ...]`。返回 `[(Track, score)]`，按分数降序。
     名称与标签完全不参与判定——这正是声纹相对「歌手+歌名」「文件名」两条
     本地规则多出来的能力：不同文件名、不同标签的同一录音也能命中。
+
+    `index` 是 `build_fingerprint_index(pool)` 的结果；批量比对时由调用方
+    建一次传入，不传则现场建（单文件查询的兼容路径）。
     """
     if not target_fp or not pool:
         return []
@@ -295,29 +346,25 @@ def fingerprint_candidates(target_fp, pool, lookup_threshold=None, match_thresho
     lookup_threshold = default_lookup if lookup_threshold is None else lookup_threshold
     match_threshold = default_match if match_threshold is None else match_threshold
 
-    table = {}
-    for index, (_track, fp) in enumerate(pool):
-        for value in fp:
-            key = (value >> 16) & 0xFFFF
-            bucket = table.setdefault(key, {})
-            bucket[index] = bucket.get(index, 0) + 1
+    if index is None:
+        index = build_fingerprint_index(pool)
 
     hits = {}
     for value in target_fp:
         key = (value >> 16) & 0xFFFF
-        for index, count in table.get(key, {}).items():
-            seen = hits.setdefault(index, {})
+        for index_id, count in index.get(key, {}).items():
+            seen = hits.setdefault(index_id, {})
             if seen.get(key, 0) < count:
                 seen[key] = seen.get(key, 0) + 1
 
     needed = int(len(target_fp) * lookup_threshold)
     scored = []
-    for index, seen in hits.items():
+    for index_id, seen in hits.items():
         if sum(seen.values()) < needed:
             continue
-        score = fingerprint_similarity(target_fp, pool[index][1])
+        score = fingerprint_similarity(target_fp, pool[index_id][1])
         if score >= match_threshold:
-            scored.append((pool[index][0], score))
+            scored.append((pool[index_id][0], score))
     return sorted(scored, key=lambda item: -item[1])
 
 
@@ -369,6 +416,9 @@ def match_against(targets, pool, tolerance=None, probe=None, fp_pool=None):
     tolerance = default_tolerance() if tolerance is None else tolerance
     by_tag, by_name = _build_index(pool)
     cache = {}
+    # 倒排表整轮共用：批量查重时它只依赖 fp_pool，每个待入库文件各建一遍
+    # 是第 6/8 步最大的隐性热点（1 万首池子建一次就要百万次 dict 操作）
+    fp_index = build_fingerprint_index(fp_pool) if fp_pool is not None else None
 
     def info_of(track):
         return _probe_info(track, probe, cache)
@@ -390,7 +440,7 @@ def match_against(targets, pool, tolerance=None, probe=None, fp_pool=None):
         if fp_pool is not None:
             target_fp = getattr(track, 'fingerprint', ()) or ()
             if target_fp:
-                fp_hits = fingerprint_candidates(target_fp, fp_pool)
+                fp_hits = fingerprint_candidates(target_fp, fp_pool, index=fp_index)
         fp_paths = {other.path for other, _score in fp_hits}
         if fp_hits:
             kind = '声纹'

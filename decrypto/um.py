@@ -156,9 +156,25 @@ def build_command(exe, input_path, output_dir, mmkv='', key='', overwrite=False)
     return cmd
 
 
+def _display_command(cmd):
+    """日志用的命令行展示形式：16 位密钥是随账号下发的凭据，不能写进日志文件"""
+    parts = [str(part) for part in cmd]
+    masked = []
+    hide_next = False
+    for part in parts:
+        if hide_next:
+            masked.append('***')
+            hide_next = False
+            continue
+        masked.append(part)
+        if part == '--qmc-mmkv-key':
+            hide_next = True
+    return ' '.join(masked)
+
+
 def _exec(cmd, logger=None):
     if logger:
-        logger.info(f'执行命令: {" ".join(str(part) for part in cmd)}')
+        logger.info(f'执行命令: {_display_command(cmd)}')
     try:
         completed = subprocess.run(
             [str(part) for part in cmd],

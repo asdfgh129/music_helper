@@ -12,6 +12,17 @@
 
 ### 新增
 
+- **全量审计（2026-11）与修复**：安全（Web Origin 同源中间件拦跨站写、
+  `run_fill_tags` 工作区白名单、um 命令行日志打码 qmc 密钥、路径白名单统一
+  `realpath` 口径）、架构（`decrypto/qq.py` 改用 `runtime_paths.project_dir()`
+  定位 log，冻结后不再落错目录；伴随歌词移动失败记日志；独立 CLI 日志初始化
+  与主程序统一）、性能（声纹倒排索引整轮建一次、相似度大整数实现 14 倍提速、
+  工作区指纹缓存 + `fpcalc_concurrency` 并发、标签补全文件级并发
+  `tag_concurrency`、`media_info` 复用 `read_meta`、热路径正则预编译；判定行为
+  全部不变）、文档（操作指引补试听章节、`check_docs.py` 豁免 `dist/` 产物）。
+  审计报告与功能清单见 [docs/audit/2026-11-audit.md](docs/audit/2026-11-audit.md)、
+  [docs/features/](docs/features/common-features.md)，配套 12 项新增测试。
+
 - **Web 试听与同步歌词**：新增只读媒体层 `services/media.py` 与四个接口
   `/api/media/{info,stream,lyric,open}`，音频流自行实现 HTTP Range（206 / 416 / HEAD、
   1 MiB 分块）以支持拖动进度条，路径经白名单 + `realpath` + `commonpath` 校验。

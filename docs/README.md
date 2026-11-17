@@ -22,6 +22,8 @@
 | 出问题了 / 文件找不到了 | [troubleshooting.md](troubleshooting.md) | 正常运行说明 |
 | 跑测试 | [../tests/README.md](../tests/README.md) | 项目整体使用 |
 | 推不上 GitHub | [git-proxy.md](git-proxy.md) | 音乐流水线 |
+| 看项目实现了哪些功能（公共 / 各解密途径独有） | [features/common-features.md](features/common-features.md)、[features/kernel-features.md](features/kernel-features.md) | 判定规则的原理 |
+| 看最近一次全量审计的结论与遗留问题 | [audit/2026-11-audit.md](audit/2026-11-audit.md) | 单篇功能细节 |
 | 规划「纯服务器 Web + 浏览器本机实现」分支 | [browser-local-roadmap.md](browser-local-roadmap.md) | 主干现有行为 |
 | 浏览项目文档（侧栏直达、首页总览、状态看板、离线阅读） | [index.html](index.html) | 单篇规则细节、第三方源码自带文档 |
 | 打包免 Python 绿色版 / 查绿色版参数 | [../README.md](../README.md)「绿色版」一节、[usage.md](usage.md) 第 9 节 | 源码模式安装依赖 |
@@ -29,15 +31,15 @@
 
 ## 项目文档分类
 
-[index.html](index.html) 的侧栏把 `docs/` 下 15 篇文档按用途分成四类，首页状态表也有「分类」列与
+[index.html](index.html) 的侧栏把 `docs/` 下 19 篇文档按用途分成四类，首页状态表也有「分类」列与
 分类筛选。分类映射的唯一来源是 `scripts/build_docs_index.py` 的 `DOC_CATEGORY_OF`。
 
 | 分类 | 面向 | 文档 |
 |---|---|---|
-| 使用与操作 | 跑流程、点界面、查参数、改配置 | [README.md](README.md)、[workflow.md](workflow.md)、[usage.md](usage.md)、[web-guide.md](web-guide.md)、[web-wizard.md](web-wizard.md)、[media-player.md](media-player.md)、[configuration.md](configuration.md) |
-| 开发与规则 | 改代码、改判定规则、查算法与声纹原理 | [architecture.md](architecture.md)、[rules.md](rules.md)、[algorithms.md](algorithms.md)、[fingerprint.md](fingerprint.md) |
+| 使用与操作 | 跑流程、点界面、查参数、改配置 | [README.md](README.md)、[workflow.md](workflow.md)、[usage.md](usage.md)、[web-guide.md](web-guide.md)、[web-wizard.md](web-wizard.md)、[media-player.md](media-player.md)、[configuration.md](configuration.md)、[features/](features/common-features.md) |
+| 开发与规则 | 改代码、改判定规则、查算法与声纹原理 | [architecture.md](architecture.md)、[rules.md](rules.md)、[algorithms.md](algorithms.md)、[fingerprint.md](fingerprint.md)、[audit/2026-11-audit.md](audit/2026-11-audit.md) |
 | 排错与运维 | 自检、故障排查、推拉失败 | [self-check.md](self-check.md)、[troubleshooting.md](troubleshooting.md)、[git-proxy.md](git-proxy.md) |
-| 规划与路线 | 下一个分支的路线与待决决策 | [browser-local-roadmap.md](browser-local-roadmap.md) |
+| 规划与路线 | 下一个分支的路线与待决决策 | [browser-local-roadmap.md](browser-local-roadmap.md)、[audit/next-steps.md](audit/next-steps.md) |
 
 ## 每篇文档的边界
 
@@ -56,6 +58,10 @@
 | [fingerprint.md](fingerprint.md) | 指纹原理、AcoustID/MusicBrainz、声纹查重（soundalike）的流程与算法、阈值、平台支持、同曲不同版本的碰撞策略与审核结论 | 本地查重流程 |
 | [troubleshooting.md](troubleshooting.md) | 症状 → 原因 → 处理、日志与 journal、数据恢复 | 正常流程说明 |
 | [git-proxy.md](git-proxy.md) | GitHub 推拉失败时的本地代理 | 音乐库流水线 |
+| [features/common-features.md](features/common-features.md) | 与解密途径无关的公共功能清单（流水线/执行安全/标签/声纹/八步向导/试听/配置/打包），条目附实现位置 | 判定规则的原理与阈值 |
+| [features/kernel-features.md](features/kernel-features.md) | 三条解密途径（网易云 um / QQ Frida / QQ um 离线）各自独有的能力与平台差异、能力矩阵速查 | 公共功能（见上） |
+| [audit/2026-11-audit.md](audit/2026-11-audit.md) | 2026-11 全量审计：范围与方法、已修复清单（安全/架构/性能/文档）、遗留清单、验证记录 | 修复的实施细节（看对应提交） |
+| [audit/next-steps.md](audit/next-steps.md) | 审计产出的开发路线：性能/安全/功能增强三梯队、暂不做项的评估结论、工程健康建议 | 已定行为的定义 |
 | [browser-local-roadmap.md](browser-local-roadmap.md) | 下一个分支（纯服务器 Web + 浏览器本机实现）的目标、可行性、问题与方案、分期路线、验收与待决决策 | 主干行为定义、具体算法与阈值 |
 
 同一事实只在一个地方写完整版，其余文档链接过去。

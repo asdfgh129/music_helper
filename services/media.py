@@ -180,8 +180,10 @@ def media_info(target):
     ext = os.path.splitext(target)[1].lower()
     stat = os.stat(target)
     try:
-        duration = round(float(tags_reader.duration(target)), 2)
-        has_cover = bool(tags_reader.has_cover(target))
+        # 一次打开同时读 duration 与封面状态，别绕过 read_meta 把文件解析两遍
+        _tags, duration, has_cover = tags_reader.read_meta(target)
+        duration = round(float(duration), 2)
+        has_cover = bool(has_cover)
     except Exception:  # noqa: BLE001 - 标签库异常不该让试听整个挂掉
         duration, has_cover = 0.0, False
     return {

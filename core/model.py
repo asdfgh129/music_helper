@@ -2,9 +2,13 @@
 """数据模型 - 全项目统一的音乐文件抽象"""
 
 import os
+import re
 from dataclasses import dataclass, field
 
 from core.naming import version_key
+
+# 年份提取：模块级预编译（year_int 在检查与归档路径上每个文件至少走一次）
+_YEAR_RE = re.compile(r'(\d{4})')
 
 
 @dataclass
@@ -85,8 +89,7 @@ class Track:
     @property
     def year_int(self):
         """解析出的四位年份，无法解析返回 0"""
-        import re
-        match = re.search(r'(\d{4})', self.year)
+        match = _YEAR_RE.search(self.year)
         if not match:
             return 0
         year = int(match.group(1))

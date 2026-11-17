@@ -354,6 +354,25 @@ class TestWizardApi(unittest.TestCase):
         self.assertEqual(scan['count'], 1)
         self.assertEqual(self.client.get('/api/reports').json()['reports'], [])
 
+
+    # ---------------- 跨站请求防护（CSRF） ----------------
+
+    def test_cross_origin_write_is_rejected(self):
+        response = self.client.post('/api/check', json={'target': 'workspace'},
+                                    headers={'Origin': 'https://evil.example'})
+        self.assertEqual(response.status_code, 403)
+
+    def test_same_origin_write_passes(self):
+        response = self.client.post('/api/check', json={'target': 'workspace'},
+                                    headers={'Origin': 'http://testserver'})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['ok'])
+
+    def test_write_without_origin_passes(self):
+        # CLI / 脚本 / TestClient 不带 Origin：不是浏览器发起的写请求
+        response = self.client.post('/api/check', json={'target': 'workspace'})
+        self.assertEqual(response.status_code, 200)
+
     def test_pages_and_unknown_route(self):
         self.assertEqual(self.client.get('/').status_code, 200)
         self.assertEqual(self.client.get('/legacy').status_code, 200)

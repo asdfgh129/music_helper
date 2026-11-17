@@ -32,7 +32,8 @@ SKIP_FILES = {'CHANGELOG.md'}
 # 引用的是别的仓库或运行期产物，本仓库里本来就没有
 EXTERNAL_PREFIXES = ('log/', 'nodes/', 'runtime/', '.workbuddy/', 'src/', '~/',
                      'available_', 'pool_', 'conversion_log.csv',
-                     'Doc/')  # 历史归档里记录的「原文件名」
+                     'Doc/',  # 历史归档里记录的「原文件名」
+                     'dist/')  # scripts/build_exe.py 打包后才出现的产物（如 dist/config.ini）
 CHECK_EXTS = {'.py', '.md', '.yml', '.yaml', '.toml', '.txt', '.json',
               '.bat', '.exe', '.js', '.flac', '.cfg', '.ini'}
 

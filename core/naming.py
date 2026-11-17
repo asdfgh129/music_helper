@@ -34,12 +34,17 @@ _VERSION_ALIASES = (
 
 _AUDIO_EXTS = AUDIO_EXTENSIONS
 
+# 热路径正则预编译：normalize_text 是全项目调用频率最高的函数之一
+# （文件名解析、标签一致性、查重分桶都会走），内联 re.sub 每次要查缓存
+_WHITESPACE = re.compile(r'\s+')
+_MARKER_PUNCT = re.compile(r'[\s._\-·•]+')
+
 
 def normalize_text(text):
     """标准化文本：去掉全部空白，转小写（用于文件名/标签一致性比较）"""
     if not text:
         return ''
-    return re.sub(r'\s+', '', str(text)).lower()
+    return _WHITESPACE.sub('', str(text)).lower()
 
 
 def normalize_key(text):
@@ -51,7 +56,7 @@ def normalize_key(text):
 
 def _normalize_marker(text):
     """版本词匹配：去掉空白与常见标点，避免 ft. / ft 之类的写法差异"""
-    return re.sub(r'[\s._\-·•]+', '', str(text).lower())
+    return _MARKER_PUNCT.sub('', str(text).lower())
 
 
 def version_markers(text):

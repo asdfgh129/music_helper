@@ -201,23 +201,18 @@ def _copy_normal_files(month, args, dry_run=False):
 
 
 def _update_tags(tracks, args):
+    """补全标签（并发度见 config.TAG_CONCURRENCY，与 Web 第 5 步共用同一实现）"""
+    from services.steps import _update_tag_tracks
+
     service = tagger.Tagger(dry_run=args.dry_run,
                             with_fingerprint=not args.skip_fingerprint)
-    processed = updated = 0
-    for track in _limited(tracks, args):
-        result = service.update(track)
-        processed += 1
-        if result.updated:
-            updated += 1
-            utils.main_logger.info(
-                f'标签更新 {track.filename} <- {result.source or "本地"} '
-                f'{[f for f in result.fields]}{" +封面" if result.cover else ""}'
-                f'{" +歌词" if result.lyric else ""}'
-            )
-        elif result.error:
-            utils.main_logger.warning(f'{track.filename}: {result.error}')
-    utils.main_logger.info(f'标签更新完成: 处理 {processed}，变更 {updated}')
-    return processed, updated
+    items, updated, _failed = _update_tag_tracks(
+        _limited(tracks, args), service, logger=utils.main_logger)
+    for item in items:
+        if not item['ok']:
+            utils.main_logger.warning(f'{item["name"]}: {item["message"]}')
+    utils.main_logger.info(f'标签更新完成: 处理 {len(items)}，变更 {updated}')
+    return len(items), updated
 
 
 def _check(directories, args, title, allow_fix, report=None, move_bad=False,

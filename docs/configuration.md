@@ -175,6 +175,8 @@ Windows 的 `fpcalc.exe` 一般已在 `C:\Windows\System32`，仓库里不再单
 | `duration_tolerance` | `3.0` 秒 | `MUSIC_HELPER_DURATION_TOLERANCE` | 标签/文件名查重允许的时长误差 |
 | `max_cover_size` | `5242880` 字节 | `MUSIC_HELPER_MAX_COVER_SIZE` | 封面下载上限，超过直接放弃 |
 | `encrypted_source_mode` | `return` | `MUSIC_HELPER_ENCRYPTED_MODE` | 解密成功后加密原文件去向 |
+| `tag_concurrency` | `4` | `MUSIC_HELPER_TAG_CONCURRENCY` | 标签补全的文件级并发度；每个文件的在线查询与写盘互相独立，只影响速度不影响判定。平台限流敏感时调回 `1`（串行） |
+| `fpcalc_concurrency` | `4` | `MUSIC_HELPER_FPCALC_CONCURRENCY` | 工作区指纹计算（fpcalc 子进程）的并发度，第 6/8 步共用同一份结果缓存 |
 
 `encrypted_source_mode` 的可选值：
 

@@ -12,6 +12,7 @@
 """
 
 import os
+import threading
 from dataclasses import dataclass, field
 
 import config
@@ -282,39 +283,48 @@ class Tagger:
         self._qq = None
         self._netease = None
         self._online_ready = False
+        # 文件级并发时多个线程共用同一个 Tagger 实例，懒加载要防竞态
+        self._lazy_lock = threading.Lock()
 
     # ---------- 延迟加载 ----------
 
     def _get_fingerprint(self):
         if self._fingerprint_ready:
             return self._fingerprint
-        self._fingerprint_ready = True
-        if not self.with_fingerprint:
-            return None
-        try:
-            from fingerprint import FingerprintMatcher
-            # tools/fpcalc 存在时优先用它，否则回退到 PATH 查找
-            self._fingerprint = FingerprintMatcher(fpcalc_path=_fpcalc_hint())
-        except Exception:  # noqa: BLE001 - 缺 acoustid/fpcalc 时降级
-            self._fingerprint = None
-        return self._fingerprint
+        with self._lazy_lock:
+            if self._fingerprint_ready:
+                return self._fingerprint
+            if not self.with_fingerprint:
+                self._fingerprint_ready = True
+                return None
+            try:
+                from fingerprint import FingerprintMatcher
+                # tools/fpcalc 存在时优先用它，否则回退到 PATH 查找
+                self._fingerprint = FingerprintMatcher(fpcalc_path=_fpcalc_hint())
+            except Exception:  # noqa: BLE001 - 缺 acoustid/fpcalc 时降级
+                self._fingerprint = None
+            self._fingerprint_ready = True
+            return self._fingerprint
 
     def _get_online(self):
         if self._online_ready:
             return self._qq, self._netease
-        self._online_ready = True
-        # 两个平台各自独立降级：netease 缺 pycryptodomex 不影响 QQ 音乐
-        try:
-            from .platforms.qqmusic import QQMusicApi
-            self._qq = QQMusicApi()
-        except Exception:  # noqa: BLE001
-            self._qq = None
-        try:
-            from .platforms.netease import NetEaseMusicClient
-            self._netease = NetEaseMusicClient()
-        except Exception:  # noqa: BLE001
-            self._netease = None
-        return self._qq, self._netease
+        with self._lazy_lock:
+            if self._online_ready:
+                return self._qq, self._netease
+            # 两个平台各自独立降级：netease 缺 pycryptodomex 不影响 QQ 音乐
+            try:
+                from .platforms.qqmusic import QQMusicApi
+                self._qq = QQMusicApi()
+            except Exception:  # noqa: BLE001
+                self._qq = None
+            try:
+                from .platforms.netease import NetEaseMusicClient
+                self._netease = NetEaseMusicClient()
+            except Exception:  # noqa: BLE001
+                self._netease = None
+            self._online_ready = True
+            return self._qq, self._netease
 
     # ---------- 主流程 ----------
 

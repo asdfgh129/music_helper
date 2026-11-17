@@ -125,5 +125,26 @@ class TestEncryptedSourceHandling(unittest.TestCase):
         self.assertFalse(os.listdir(self.out_dir))
 
 
+
+class TestUmDisplayCommand(unittest.TestCase):
+    """qmc 16 位密钥是随账号下发的凭据，不能原样写进日志"""
+
+    def test_qmc_key_is_masked(self):
+        from decrypto import um
+        cmd = ['um.exe', '-i', 'a.mflac', '-o', 'out',
+               '--qmc-mmkv', 'C:/mmkv/MMKVStreamEncryptId',
+               '--qmc-mmkv-key', '0123456789abcdef']
+        text = um._display_command(cmd)
+        self.assertNotIn('0123456789abcdef', text)
+        self.assertIn('***', text)
+        self.assertIn('C:/mmkv/MMKVStreamEncryptId', text)
+
+    def test_command_without_key_is_unchanged(self):
+        from decrypto import um
+        self.assertEqual(um._display_command(['um.exe', '-i', 'a.ncm', '-o', 'out']),
+                         'um.exe -i a.ncm -o out')
+
+
+
 if __name__ == '__main__':
     unittest.main()

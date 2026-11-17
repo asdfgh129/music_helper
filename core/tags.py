@@ -130,9 +130,13 @@ def _reader_for(ext):
     return entry
 
 
+# 与 core.model._YEAR_RE 同口径；这里独立编译避免 core.tags -> core.model 的导入耦合
+_YEAR_RE = re.compile(r'(\d{4})')
+
+
 def _normalize_year(tags):
     if tags.get('year'):
-        match = re.search(r'(\d{4})', tags['year'])
+        match = _YEAR_RE.search(tags['year'])
         tags['year'] = match.group(1) if match else ''
     return tags
 

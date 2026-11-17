@@ -10,6 +10,7 @@
 每个长任务都接受 `progress(done, total, item)` 回调，供前端画逐条进度。
 """
 
+import concurrent.futures
 import os
 import time
 
@@ -52,9 +53,12 @@ def _in_dir(path, directory):
     if not directory:
         return False
     try:
-        return os.path.commonpath([os.path.abspath(path), os.path.abspath(directory)]) \
-            == os.path.abspath(directory)
-    except ValueError:
+        # realpath 与 services.media.resolve_media 同一口径：目录里的符号链接 /
+        # junction 指向外面时，按真实落点判，不让它骗过白名单
+        left = os.path.realpath(os.path.abspath(path))
+        right = os.path.realpath(os.path.abspath(directory))
+        return os.path.commonpath([left, right]) == right
+    except (ValueError, OSError):
         return False
 
 
@@ -429,6 +433,8 @@ def run_fill_tags(paths=None, with_fingerprint=True, write_cover=True,
     免得两边规则不一致。
 
     Args:
+        paths: 要处理的文件；来自 Web 的路径不再被信任——工作区外的路径按
+            失败条目回显、不写盘（与单曲编辑 `_audio_in_workspace` 同一口径）。
         fields: 允许写入的标签键；None 表示全部。空列表表示只补封面/歌词。
     """
     import tagger as tagger_service
@@ -436,27 +442,58 @@ def run_fill_tags(paths=None, with_fingerprint=True, write_cover=True,
     logger = _log()
     if not paths:
         paths = [item['path'] for item in tag_candidates()['items']]
+
+    items = []
+    tracks = []
+    for path in paths:
+        try:
+            target = _audio_in_workspace(path)
+        except ValueError as exc:
+            items.append({'name': os.path.basename(str(path)), 'path': str(path),
+                          'ok': False, 'fields': [], 'cover': False, 'lyric': False,
+                          'message': str(exc), 'updated': False})
+            continue
+        try:
+            tracks.append(scanner.build_track(target, with_tags=True))
+        except OSError as exc:
+            items.append({'name': os.path.basename(target), 'path': target,
+                          'ok': False, 'fields': [], 'cover': False, 'lyric': False,
+                          'message': f'读取失败: {exc}', 'updated': False})
+
     service = tagger_service.Tagger(with_fingerprint=with_fingerprint,
                                     write_cover=write_cover,
                                     write_lyrics=write_lyrics,
                                     fields=fields)
     total = len(paths)
-    items = []
-    updated = failed = 0
-    for index, path in enumerate(paths, 1):
-        try:
-            track = scanner.build_track(path, with_tags=True)
-        except OSError as exc:
-            item = {'name': os.path.basename(path), 'path': path, 'ok': False,
-                    'fields': [], 'cover': False, 'lyric': False, 'message': f'读取失败: {exc}'}
-            failed += 1
-            items.append(item)
-            _emit(progress, index, total, item)
-            continue
+    offset = len(items)
+    for index, item in enumerate(items, 1):
+        _emit(progress, index, total, item)
+    processed, processed_updated, processed_failed = _update_tag_tracks(
+        tracks, service, progress=progress, logger=logger,
+        offset=offset, total=total)
+    items.extend(processed)
+    updated = sum(1 for item in items if item.get('updated'))
+    failed = sum(1 for item in items if not item.get('ok'))
+    return {'total': total, 'updated': updated, 'failed': failed,
+            'items': items, 'preview': False}
+
+
+def _update_tag_tracks(tracks, service, progress=None, logger=None,
+                       offset=0, total=None):
+    """并发补全一批已构建好的 Track；返回 (items, updated, failed)
+
+    每个文件的「在线查询 + 写盘」互相独立，线程池只影响速度不影响判定结果；
+    `tagger.Tagger` 的懒加载初始化自带锁，多线程共用一个实例是安全的。
+    并发度取 `config.TAG_CONCURRENCY`（默认 4，平台限流敏感可调回 1）。
+    结果按提交顺序回填，进度条不会跳。
+    """
+    workers = max(1, min(config.TAG_CONCURRENCY, len(tracks)))
+
+    def _one(track):
         result = service.update(track)
         item = {
             'name': track.filename,
-            'path': path,
+            'path': track.path,
             'ok': not result.error,
             'fields': list(result.fields),
             'source': result.source,
@@ -465,17 +502,30 @@ def run_fill_tags(paths=None, with_fingerprint=True, write_cover=True,
             'message': result.error or ('已更新' if result.updated else '无需更新'),
             'updated': bool(result.updated),
         }
-        if result.updated:
-            updated += 1
-        if result.error:
-            failed += 1
-        items.append(item)
-        _emit(progress, index, total, item)
         if logger and result.updated:
-            logger.info(f'标签更新 {track.filename} <- {result.source or "本地"} {result.fields}')
+            logger.info(
+                f'标签更新 {track.filename} <- {result.source or "本地"} '
+                f'{list(result.fields)}{" +封面" if result.cover else ""}'
+                f'{" +歌词" if result.lyric else ""}')
+        return item
 
-    return {'total': total, 'updated': updated, 'failed': failed,
-            'items': items, 'preview': False}
+    done_total = total if total is not None else offset + len(tracks)
+    items = []
+    if workers <= 1 or len(tracks) <= 1:
+        for index, track in enumerate(tracks, offset + 1):
+            item = _one(track)
+            items.append(item)
+            _emit(progress, index, done_total, item)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            # executor.map 按提交顺序产出：进度单调，items 顺序与输入一致
+            for index, item in enumerate(pool.map(_one, tracks), offset + 1):
+                items.append(item)
+                _emit(progress, index, done_total, item)
+
+    updated = sum(1 for item in items if item.get('updated'))
+    failed = sum(1 for item in items if not item.get('ok'))
+    return items, updated, failed
 
 
 # ---------------- 单曲编辑（第 5 步的「编辑」抽屉） ----------------
@@ -615,6 +665,46 @@ _library_cache = {'dir': '', 'tracks': None}
 # 音频规格只在命中候选后按需读取，单独缓存：重建库索引不必连带丢掉
 _quality_cache = {}
 
+# 工作区指纹缓存：键是 (路径, size, mtime_ns)，内容一变键就失效，无需主动清理。
+# 第 6 步预览、第 6 步执行、第 8 步入库闸门会对同一批文件各算一遍指纹，
+# 不缓存的话一轮向导要付三倍 fpcalc 时间。
+_fingerprint_cache = {}
+
+
+def _cached_fingerprint(track):
+    """带内容键缓存的 fpcalc 现场指纹（与 `soundalike.fingerprint_of` 同结果）"""
+    try:
+        stat = os.stat(track.path)
+        key = (os.path.normcase(track.path), stat.st_size, stat.st_mtime_ns)
+    except OSError:
+        key = (os.path.normcase(track.path), -1, -1)
+    cached = _fingerprint_cache.get(key)
+    if cached is not None:
+        return cached
+    fingerprint, _duration = soundalike.fingerprint_of(track.path)
+    _fingerprint_cache[key] = fingerprint
+    return fingerprint
+
+
+def _fill_fingerprints(tracks):
+    """给工作区曲目并发算指纹（fpcalc 是独立子进程，线程池只负责等结果）
+
+    并发度取 `config.FPCALC_CONCURRENCY`（默认 4）；已有指纹的曲目直接跳过。
+    """
+    pending = [track for track in tracks if not getattr(track, 'fingerprint', ())]
+    if not pending:
+        return
+    workers = max(1, min(config.FPCALC_CONCURRENCY, len(pending)))
+    if workers <= 1:
+        for track in pending:
+            track.fingerprint = _cached_fingerprint(track)
+        return
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_cached_fingerprint, track): track
+                   for track in pending}
+        for future in concurrent.futures.as_completed(futures):
+            futures[future].fingerprint = future.result()
+
 
 def _quality_probe(track):
     """按需读取音频规格（采样率 / 位深 / 码率）
@@ -645,10 +735,11 @@ def _fingerprint_pool(refresh=False):
 
 
 def invalidate_library_cache():
-    """库目录或配置变了，丢弃查重用的三份缓存（含声纹指纹池）"""
+    """库目录或配置变了，丢弃查重用的四份缓存（含声纹指纹池与工作区指纹）"""
     _library_cache['dir'] = ''
     _library_cache['tracks'] = None
     _quality_cache.clear()
+    _fingerprint_cache.clear()
     soundalike.invalidate_fingerprint_cache()
 
 
@@ -714,9 +805,7 @@ def dedupe_preview(refresh=False, with_fingerprint=True):
                              'reason': '声纹库为空但库目录已有文件：请先在初始化或自检时补建声纹库'}
             else:
                 fp_pool = pool
-                for track in workspace:
-                    fingerprint, _duration = soundalike.fingerprint_of(track.path)
-                    track.fingerprint = fingerprint
+                _fill_fingerprints(workspace)
     fp_ready = fp_status['status'] == 'ready'
     fp_reason = '' if fp_ready else fp_status['reason']
 

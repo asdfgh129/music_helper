@@ -52,8 +52,10 @@ def _hook_path():
 
 
 HOOK_PATH = _hook_path()
-# 转换流水写进仓库统一的 log/，不落进包目录（包目录混入运行产物会被误提交）
-LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "log")
+# 转换流水写进仓库统一的 log/，不落进包目录（包目录混入运行产物会被误提交）。
+# 项目根的唯一判定是 runtime_paths.project_dir()（冻结后指向 exe 所在目录），
+# 不要用 __file__ 拼——打包后会指到 _internal/，日志就落进依赖目录了。
+LOG_DIR = os.path.join(_PROJECT_DIR, "log")
 
 
 def _default_download_dir():
@@ -367,11 +369,17 @@ def _run_frida(input_dir, output_dir, log, files=None):
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    # 与 main.py 同一套日志初始化（文件 + 控制台双 handler）；本文件被单独运行时
+    # sys.path[0] 是 decrypto/，import utils 可能失败，此时退回 basicConfig 兜底
+    try:
+        import utils
+        utils.setup_logging()
+    except Exception:  # noqa: BLE001 - 脱离项目根单独运行时的兜底
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
 
     parser = argparse.ArgumentParser(description="QQ 音乐加密文件（.mflac/.mgg）解密")
     parser.add_argument("-l", "--list", action="store_true", help="只列出下载目录里的歌曲")

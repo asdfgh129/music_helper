@@ -2,6 +2,7 @@
 """单元测试 - 重复判定与年份归档"""
 
 import os
+import random
 import sys
 import unittest
 from unittest import mock
@@ -10,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
 from core.dedupe import (
+    build_fingerprint_index,
     find_by_filename,
     find_by_tag,
     find_duplicates,
@@ -396,6 +398,64 @@ class TestFingerprintSignals(unittest.TestCase):
                                fp_pool=[(library, fp)])
         self.assertTrue(version_markers_conflict(workspace, library))
         self.assertEqual(result[0].status, 'unknown')
+
+
+
+class TestFingerprintSimilarityEquivalence(unittest.TestCase):
+    """大整数实现必须与逐词参考实现逐位一致（公式同 scan.go compareFingerprints）"""
+
+    @staticmethod
+    def _naive(left, right):
+        if not left or not right:
+            return 0.0
+
+        def matching(a, b):
+            return sum(32 - (a[i] ^ b[i]).bit_count() for i in range(min(len(a), len(b))))
+
+        best = matching(left, right)
+        for offset in range(1, len(left)):
+            best = max(best, matching(left[offset:], right))
+        for offset in range(1, len(right)):
+            best = max(best, matching(left, right[offset:]))
+        return best / (32 * max(len(left), len(right)))
+
+    def test_matches_naive_reference(self):
+        random.seed(20261117)
+        for trial in range(120):
+            left = tuple(random.getrandbits(32) for _ in range(random.randint(1, 80)))
+            right = tuple(random.getrandbits(32) for _ in range(random.randint(1, 80)))
+            if trial % 3 == 0:
+                # 高相似对：前半段相同，覆盖偏移命中高分的路径
+                cut = max(1, len(left) // 2)
+                right = left[:cut] + tuple(random.getrandbits(32)
+                                           for _ in range(max(0, len(right) - cut)))
+            self.assertAlmostEqual(self._naive(left, right),
+                                   fingerprint_similarity(left, right), places=12)
+
+    def test_empty_fingerprint_scores_zero(self):
+        self.assertEqual(fingerprint_similarity((), (1, 2)), 0.0)
+        self.assertEqual(fingerprint_similarity((1, 2), ()), 0.0)
+
+    def test_identical_fingerprints_score_one(self):
+        fp = tuple(range(1, 51))
+        self.assertAlmostEqual(fingerprint_similarity(fp, fp), 1.0)
+
+
+class TestFingerprintIndexReuse(unittest.TestCase):
+    """倒排索引建一次复用，结果必须与现场建表完全一致"""
+
+    def test_prebuilt_index_same_result(self):
+        random.seed(7)
+        pool = []
+        for i in range(30):
+            fp = tuple(random.getrandbits(32) for _ in range(40))
+            pool.append((Track(path=f'/tmp/{i}.flac', tags={}), fp))
+        target = pool[5][1]
+        with_index = fingerprint_candidates(target, pool,
+                                            index=build_fingerprint_index(pool))
+        without = fingerprint_candidates(target, pool)
+        self.assertEqual(with_index, without)
+
 
 
 if __name__ == '__main__':

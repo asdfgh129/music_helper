@@ -55,6 +55,7 @@ import os
 import sys
 from datetime import datetime
 from typing import Optional  # noqa: F401  （保留给旧接口的类型注解）
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
@@ -94,6 +95,36 @@ LEGACY_INDEX = os.path.join(WEB_DIR, "index.html")
 
 app = FastAPI(title="music_helper Web UI", version="0.4")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+# --------------------------------------------------------------------------- #
+# 跨站请求防护（CSRF）                                                        #
+# --------------------------------------------------------------------------- #
+
+@app.middleware("http")
+async def _same_origin_guard(request: Request, call_next):
+    """拒绝浏览器跨站提交的写请求
+
+    本服务没有登录态，破坏性端点（移动/改名/写标签/建目录）的最后一道闸就是
+    「只能从自己的页面调」。浏览器发的 POST/PUT/DELETE/PATCH 都会带 Origin 头：
+    - 同源（用户自己的向导页面）：Origin 的 host 与请求 Host 一致，放行；
+    - 跨站（恶意网页诱导浏览器向 127.0.0.1 提交表单/beacon）：Origin 是攻击者
+      的站点，与 Host 对不上，直接 403；
+    - 无 Origin（CLI、脚本、TestClient、同源 GET）：不是浏览器发起的写请求，
+      放行——监听地址默认 127.0.0.1，这正是 docs/web-guide.md 声明的口径。
+    """
+    if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+        origin = request.headers.get("origin")
+        if origin:
+            host = request.headers.get("host", "")
+            try:
+                origin_host = urlsplit(origin).netloc
+            except ValueError:
+                origin_host = ""
+            if not host or origin_host.lower() != host.lower():
+                return JSONResponse({"detail": "已拒绝跨站写请求"}, status_code=403)
+    return await call_next(request)
+
 
 # 单进程内缓存最近一次检查结果：target -> CheckResult（供预览/执行复用，避免重复扫描大库）
 _last_check = {}
