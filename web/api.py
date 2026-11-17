@@ -30,6 +30,9 @@ music_helper Web UI —— FastAPI 后端
   POST /api/archive/run       第 8 步执行 → 后台任务
   GET  /api/workspace/files   工作区文件列表（拷贝/解密页右栏）
 
+播放器首页（根路径 /，不属于八步；只列曲目，播放复用试听旁路）：
+  GET  /api/library/tracks    音乐库曲目列表（只读，可按 q 搜索 / limit 限制）
+
 试听旁路（不属于八步，也不进后台任务队列；不改音乐库、不生成 Plan）：
   GET       /api/media/info    音频元数据 + 浏览器可播判定
   GET|HEAD  /api/media/stream  Range 206 字节流（transcode=1 时读派生 mp3 缓存）
@@ -788,6 +791,53 @@ def api_workspace_files():
     return {"ok": True, **_workspace_files()}
 
 
+def _library_tracks(q="", limit=5000):
+    """播放器首页的曲目来源：只读扫描 LIBRARY_DIR（不读标签，秒级返回）
+
+    **不读标签**：库动辄上万首，mutagen 逐个解析会让首页卡几十秒；列表只从文件名
+    解析歌手/歌名（`core.naming.parse_filename`），封面/时长等重字段留到点播时由
+    `/api/media/info` 现读单曲。``q`` 对文件名/解析出的歌手歌名做子串筛选，
+    ``limit`` 防止超大库一次把浏览器撑爆。返回的 path 交给 /api/media/* 时还会
+    再走一次白名单校验（resolve_media），这里只列目录，不给写操作开口子。
+    """
+    from core.naming import parse_filename
+
+    directory = config.LIBRARY_DIR
+    if not os.path.isdir(directory):
+        return {"dir": directory, "exists": False, "tracks": [], "total": 0}
+    # with_tags=False：跳过逐文件标签解析，这是大库能秒开的关键
+    tracks = scanner.scan([directory], with_tags=False, recursive=True)
+    needle = str(q or '').strip().lower()
+    rows = []
+    for t in tracks:
+        artist, title = parse_filename(t.filename)
+        rows.append((t, artist, title or t.stem))
+    if needle:
+        rows = [r for r in rows if needle in (
+            r[1] + ' ' + r[2] + ' ' + r[0].filename).lower()]
+    total = len(rows)
+    rows.sort(key=lambda r: (r[1].lower(), r[2].lower(), r[0].path.lower()))
+    size = max(1, min(int(limit or 5000), 20000))
+    # has_lrc 是逐文件 exists 判断，只对真正返回给前端的那批算
+    items = [{
+        "path": t.path,
+        "name": t.filename,
+        "title": title,
+        "artist": artist,
+        "ext": t.ext,
+        "size": t.size,
+        "has_lrc": t.has_lrc,
+    } for t, artist, title in rows[:size]]
+    return {"dir": directory, "exists": True, "tracks": items,
+            "total": total, "truncated": total > size}
+
+
+@app.get("/api/library/tracks")
+def api_library_tracks(q: str = "", limit: int = 5000):
+    """播放器首页曲目列表（只读）；返回绝对路径供 /api/media/* 使用"""
+    return {"ok": True, **_library_tracks(q=q, limit=limit)}
+
+
 # --------------------------------------------------------------------------- #
 # 旧接口（保留：仪表盘与脚本还在用）                                          #
 # --------------------------------------------------------------------------- #
@@ -977,17 +1027,28 @@ def api_task_get(task_id: str):
 # 页面                                                                        #
 # --------------------------------------------------------------------------- #
 
-@app.get("/", response_class=HTMLResponse)
-def index():
-    path = os.path.join(STATIC_DIR, "index.html")
+def _serve_html(path, label):
+    """读取打包/源码同构的静态页；冻结后静态资源在 exe 旁的 web/ 目录"""
     try:
         with open(path, "r", encoding="utf-8") as handle:
             return handle.read()
     except OSError:
-        return "<h1>web/static/index.html 未找到</h1>"
+        return f"<h1>{label} 未找到</h1>"
+
+
+@app.get("/", response_class=HTMLResponse)
+def index():
+    """首页 = 音乐库播放器（选歌 + 试听，不执行任何文件流程）"""
+    return _serve_html(os.path.join(STATIC_DIR, "player.html"), "web/static/player.html")
+
+
+@app.get("/wizard", response_class=HTMLResponse)
+def wizard_index():
+    """八步归档整理向导（原首页，迁到 /wizard 给播放器让位）"""
+    return _serve_html(os.path.join(STATIC_DIR, "index.html"), "web/static/index.html")
 
 
 @app.get("/legacy", response_class=HTMLResponse)
 def legacy_index():
-    """旧版仪表盘（配置状态 / 报告 / 任务日志），排查问题时仍然好用"""
+    """旧版仪表盘（配置状态 / 报告 / 任务日志），仅保留直接访问，首页与向导都不再链接"""
     return FileResponse(LEGACY_INDEX)

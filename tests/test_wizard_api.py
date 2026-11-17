@@ -354,6 +354,35 @@ class TestWizardApi(unittest.TestCase):
         self.assertEqual(scan['count'], 1)
         self.assertEqual(self.client.get('/api/reports').json()['reports'], [])
 
+    def test_library_tracks_readonly_list_and_search(self):
+        empty = self.client.get('/api/library/tracks').json()
+        self.assertTrue(empty['exists'])
+        self.assertEqual(empty['tracks'], [])
+
+        for name in ('02 - Beta.mp3', '01 - Alpha.flac'):
+            with open(os.path.join(self.library, name), 'wb') as handle:
+                handle.write(b'x')
+        data = self.client.get('/api/library/tracks').json()
+        self.assertEqual(data['total'], 2)
+        self.assertEqual([t['name'] for t in data['tracks']],
+                         ['01 - Alpha.flac', '02 - Beta.mp3'])
+        self.assertTrue(os.path.isabs(data['tracks'][0]['path']))
+        self.assertIn('title', data['tracks'][0])
+        # q 对文件名子串筛选（没有标签时用文件名兜底）
+        found = self.client.get('/api/library/tracks', params={'q': 'alpha'}).json()
+        self.assertEqual(found['total'], 1)
+        self.assertEqual(found['tracks'][0]['name'], '01 - Alpha.flac')
+        # limit 上限生效且不报错
+        limited = self.client.get('/api/library/tracks', params={'limit': 1}).json()
+        self.assertEqual(len(limited['tracks']), 1)
+        self.assertTrue(limited['truncated'])
+
+    def test_library_tracks_missing_dir(self):
+        with mock.patch.object(config, 'LIBRARY_DIR', os.path.join(self.root, 'nope')):
+            data = self.client.get('/api/library/tracks').json()
+        self.assertFalse(data['exists'])
+        self.assertEqual(data['tracks'], [])
+
 
     # ---------------- 跨站请求防护（CSRF） ----------------
 
@@ -375,8 +404,33 @@ class TestWizardApi(unittest.TestCase):
 
     def test_pages_and_unknown_route(self):
         self.assertEqual(self.client.get('/').status_code, 200)
+        self.assertEqual(self.client.get('/wizard').status_code, 200)
         self.assertEqual(self.client.get('/legacy').status_code, 200)
         self.assertEqual(self.client.get('/api/does-not-exist').status_code, 404)
+
+    def test_home_is_player_and_wizard_is_eight_steps(self):
+        import web.api as api
+        # 首页指向播放器页面（含 home.js），向导页迁到 /wizard（含 app.js）
+        home = self.client.get('/').text
+        self.assertIn('home.js', home)
+        self.assertIn('player.js', home)
+        self.assertNotIn('step1-dirs.js', home)
+        wizard = self.client.get('/wizard').text
+        self.assertIn('app.js', wizard)
+        self.assertIn('step1-dirs.js', wizard)
+        # 冻结后静态页仍在 exe 旁的 web/ 目录，缺文件时给出可读提示而不是 500
+        with mock.patch.object(api, 'STATIC_DIR', os.path.join(self.root, 'missing')):
+            self.assertIn('未找到', self.client.get('/').text)
+
+    def test_wizard_page_links_home_not_legacy(self):
+        import web.api as api
+        app_js = os.path.join(api.STATIC_DIR, 'js', 'app.js')
+        with open(app_js, 'r', encoding='utf-8') as handle:
+            source = handle.read()
+        self.assertIn('href="/"', source)
+        self.assertIn('播放页面', source)
+        self.assertNotIn('href="/legacy"', source)
+        self.assertNotIn('旧版面板', source)
 
 
 if __name__ == '__main__':

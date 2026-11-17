@@ -22,7 +22,7 @@ dist/ 布局：
     ├── music_helper.exe        CLI 主程序（--web 也是它）
     ├── _internal/              Python 运行时 + 全部第三方 Python 依赖
     ├── tools/                  外部程序（um / soundalike / fpcalc / Frida hook / QQ 安装包）
-    ├── web/                    Web 八步向导的 index.html + static/
+    ├── web/                    播放器首页（/）+ 八步向导（/wizard）页面 + static/
     ├── log/                    日志、报告、journal、回收站
     ├── config.ini / config.example.ini
     ├── 使用说明.txt / 使用文档.html / LICENSE
@@ -277,7 +277,7 @@ def copy_web_assets():
     dst = DIST / 'web'
     shutil.copytree(ROOT / 'web' / 'static', dst / 'static', dirs_exist_ok=True)
     shutil.copy2(ROOT / 'web' / 'index.html', dst / 'index.html')
-    log('Web 静态资源已复制（web/index.html + web/static/）')
+    log('Web 静态资源已复制（播放器首页 + 八步向导 + web/static/）')
 
 
 def copy_support_files():
@@ -302,8 +302,9 @@ def write_launchers():
     if os.name == 'nt':
         web_bat = '''@echo off
 cd /d "%~dp0"
-title Music Helper - Web 八步向导
-echo 正在启动 Web 八步向导，浏览器会自动打开 http://127.0.0.1:8000/
+title Music Helper - 音乐库播放器
+echo 正在启动 Web 服务，浏览器会自动打开播放器首页 http://127.0.0.1:8000/
+echo 八步归档整理在 http://127.0.0.1:8000/wizard
 echo 关闭本窗口或按 Ctrl+C 即可停止服务。
 echo.
 "music_helper.exe" --web
@@ -314,7 +315,7 @@ cd /d "%~dp0"
 echo Music Helper 命令行（本窗口已切到程序目录）
 echo   music_helper.exe --help              查看全部参数
 echo   music_helper.exe --dry-run           只出计划，不动文件
-echo   music_helper.exe --web               启动 Web 八步向导
+echo   music_helper.exe --web               启动 Web 服务（播放器首页 + 八步向导）
 echo.
 cmd /k
 '''
@@ -348,8 +349,10 @@ def write_readme(all_tools, tool_count):
 【怎么用】
 1. 用记事本打开 config.ini，把 [paths] 下的音乐库 / 工作区目录改成自己的路径。
    也可以不改配置，直接用 Web 向导第 1 步在界面里设置（会写回本文件）。
-2. 运行「{web_launcher}」：服务只监听 127.0.0.1:8000，浏览器自动打开八步向导；
-   关掉黑窗口或按 Ctrl+C 即停止。若 8000 被占用，用
+2. 直接双击 {EXE_NAME}（无参数）或运行「{web_launcher}」：只启动 Web 服务并打开浏览器首页
+   ——首页是音乐库播放器（/），点歌试听、不动文件；顶部「八步归档整理」进 /wizard 做整理。
+   服务只监听 127.0.0.1:8000，关掉黑窗口或按 Ctrl+C 即停止。要跑命令行流程需显式带参数
+   （如 --archive）。若 8000 被占用，用
        {EXE_NAME} --web --web-port 8001
 3. 命令行：运行「{cli_launcher}」，或直接在 {shell} 里执行
        {EXE_NAME} --help          查看全部参数
@@ -366,7 +369,7 @@ def write_readme(all_tools, tool_count):
                      fpcalc（指纹）、hook_qq_music.js（Frida 注入）、
                      QQ 音乐旧版安装包与屏蔽更新补丁
                      {'（已包含全部平台二进制）' if all_tools else '（仅当前平台所需）'}
-  web/               八步向导的页面与 Vue 运行时，无 CDN、无需 Node
+  web/               播放器首页（/）与八步向导（/wizard）页面，Vue 运行时，无 CDN、无需 Node
   config.ini         本机配置；重复打包不会被覆盖
   log/               运行产物
 
@@ -429,8 +432,10 @@ def verify():
         path = DIST / 'tools' / name
         if not path.is_file() or path.stat().st_size == 0:
             raise BuildError(f'外部程序缺失或为空: {path}')
-    if not (DIST / 'web' / 'static' / 'index.html').is_file():
-        raise BuildError('Web 静态资源缺失: web/static/index.html')
+    for asset in ('index.html', 'player.html', 'js/app.js', 'js/home.js', 'js/player.js'):
+        path = DIST / 'web' / 'static' / asset
+        if not path.is_file():
+            raise BuildError(f'Web 静态资源缺失: web/static/{asset}')
 
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
@@ -447,11 +452,14 @@ def verify():
                 output = proc.stdout.read() if proc.stdout else ''
                 break
             try:
+                # 首页播放器与 /wizard 向导都要返回 200
                 with urllib.request.urlopen(f'http://127.0.0.1:{port}/', timeout=1) as resp:
-                    body = resp.read(4096).lower()
-                    ok = resp.status == 200 and b'<html' in body
-                    if ok:
-                        break
+                    home = resp.read(4096).lower()
+                with urllib.request.urlopen(f'http://127.0.0.1:{port}/wizard', timeout=1) as resp:
+                    wizard = resp.read(4096).lower()
+                ok = (resp.status == 200 and b'<html' in home and b'<html' in wizard)
+                if ok:
+                    break
             except (urllib.error.URLError, OSError, TimeoutError):
                 time.sleep(0.4)
     finally:
@@ -461,9 +469,9 @@ def verify():
         except subprocess.TimeoutExpired:
             proc.kill()
     if not ok:
-        raise BuildError('Web 服务自检未通过（页面没返回 200）：\n'
+        raise BuildError('Web 服务自检未通过（首页 / 向导没都返回 200）：\n'
                          + '\n'.join(output.splitlines()[-30:]))
-    log(f'自检通过：exe 可运行、外部程序齐全、Web 向导 http://127.0.0.1:{port}/ 返回 200')
+    log(f'自检通过：exe 可运行、外部程序齐全、播放器 / 八步向导 http://127.0.0.1:{port}/ 均返回 200')
 
 
 def main(argv=None):

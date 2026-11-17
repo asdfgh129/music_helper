@@ -6,7 +6,7 @@
 ## 项目是什么
 
 Python 音乐库流水线：解密 → 去重 → 补标签 → 检查 → 分流 → 归档 → 人工确认入库。
-入口 `python main.py`。主要目标平台 Windows 与 macOS（QQ 解密在 Windows 有两条途径：
+入口 `python main.py`（**无参数只启动 Web 服务并打开播放器首页，不跑流程**；播放器首页列音乐库曲目只读试听，八步向导在 `/wizard`；跑完整流水线用 `--archive`）。主要目标平台 Windows 与 macOS（QQ 解密在 Windows 有两条途径：
 旧版 QQ 19.51 及以下 + `um`、新版 QQ + Frida；macOS 用旧版 QQ 20230903 + `um`），Python 3.11+。
 QQ 解密前的客户端安装 / 启动 / 登录检查在 `decrypto/qq_client.py`，改动解密流程时先看它。
 

@@ -4,7 +4,7 @@
 > 本文不负责：流程内部细节（见 [workflow.md](workflow.md)）、判定规则（见 [rules.md](rules.md)）、
 > 配置项与环境变量（见 [configuration.md](configuration.md)）。
 
-入口只有一个：`python main.py`。
+入口只有一个：`python main.py`（绿色版为 `music_helper.exe`）。不带任何参数时默认启动 Web 服务、打开浏览器里的**播放器首页**（`/`，只读试听），**不执行任何文件流程**；八步向导在 `/wizard`，要跑命令行流程必须显式带参数。
 
 ## 1. 全局参数
 
@@ -21,9 +21,13 @@
 
 ## 2. 三条主流程
 
+**无参数运行不执行任何文件流程**：等价于 `--web`，只启动 Web 服务并打开浏览器里的播放器首页（`/`）。
+命令行流程必须显式带参数。
+
 | 命令 | 作用 | 终点 |
 |---|---|---|
-| `python main.py` / `python main.py --archive` | `WORKSPACE_DIR` 完整流水线 | 完整文件留在 `WORKSPACE_DIR`（按年代/年份整理）；`INCOMPLETE_DIR` 等待人工 |
+| `python main.py` / `python main.py --web` | 启动 Web 服务并打开播放器首页（`/`）；八步整理在 `/wizard` | 本地服务 `127.0.0.1:8000`，按 Ctrl+C 退出 |
+| `python main.py --archive` | `WORKSPACE_DIR` 完整流水线 | 完整文件留在 `WORKSPACE_DIR`（按年代/年份整理）；`INCOMPLETE_DIR` 等待人工 |
 | `python main.py --check` | 检查 `LIBRARY_DIR` | 报告；`--fix` 时按规则修复 |
 | `python main.py --manual-archive` | 人工确认后入库 | `WORKSPACE_DIR` → `LIBRARY_DIR` |
 
@@ -96,6 +100,7 @@ MSVC 修饰导出名），实际解密固定走 `um` 离线；登录态无法程
 `main()` 按以下顺序判断，命中即返回，**后面的参数不会再生效**：
 
 ```
+--web（无参数时自动注入，命中后不执行下面任何流程）
 --init
 --checkdb
 --soundalike
@@ -106,10 +111,10 @@ MSVC 修饰导出名），实际解密固定走 `um` 离线；登录态无法程
 --only-archive
 --manual-archive
 --check
-默认流水线
+默认流水线（需显式带流程参数，如 --archive / --dry-run）
 ```
 
-例如同时传 `--check --manual-archive` 时只执行手动归档。
+例如同时传 `--check --manual-archive` 时只执行手动归档；不带任何参数则先命中 `--web`。
 
 ## 5. 退出码
 
@@ -119,13 +124,14 @@ MSVC 修饰导出名），实际解密固定走 `um` 离线；登录态无法程
 | 1 | 参数/月份格式错误；`--check` / `--only-check-file-name` 的目标目录不存在；`--init` / `--checkdb` / `--soundalike` 的外部工具失败；未处理异常 |
 | 130 | 用户 Ctrl-C |
 
-`--check` 与默认流水线即使发现「需要人工处理」的文件也返回 0——报告里有数量，
+`--check` 与完整流水线（`--archive`）即使发现「需要人工处理」的文件也返回 0——报告里有数量，
 是否失败由使用者判断；外部程序失败、或目标目录根本不存在才会反映到退出码。
 
 ## 6. 场景速查
 
 | 我想… | 命令 |
 |---|---|
+| 打开播放器首页，什么都不做 | `python main.py`（无参数） |
 | 先看计划，不动文件 | `python main.py --dry-run` |
 | 处理指定月份 | `python main.py --month 202406` |
 | 只解密 | `python main.py --only-decrypt` |
@@ -160,11 +166,17 @@ MSVC 修饰导出名），实际解密固定走 `um` 离线；登录态无法程
 5. **`LIBRARY_DIR` 不要等于 `WORKSPACE_DIR` / `DUPLICATE_DIR`**：`soundalike` 会拒绝相同目录，且容易自我搬运。
 6. **`--month` 不筛选标签/检查**：它只按修改时间筛选解密与拷贝；后续步骤处理工作区全部文件。
 
-## 8. Web UI（八步向导）
+## 8. Web UI（播放器首页 + 八步向导）
 
-除 CLI 外，本项目提供一个 Vue 3 写的八步向导（FastAPI 后端）：目录设置 → 操作类型 →
-拷贝 → 解密 → 标签歌词 → 查重 → 工作区自检 → 归档。每一步都能先看「将要发生什么」再执行，
-长任务有逐条进度与实时日志。**完整说明见 [web-wizard.md](web-wizard.md)**，本节只给启动方式与接口索引。
+除 CLI 外，本项目提供一个 Vue 3 写的 Web 界面（FastAPI 后端），两个页面：
+
+| 路径 | 页面 | 作用 |
+|---|---|---|
+| `/` | **音乐库播放器**（首页） | 列出 `LIBRARY_DIR` 曲目，点歌试听（封面/歌词/进度/队列），**只播放不动文件**；顶部「八步归档整理」跳 `/wizard` |
+| `/wizard` | 八步归档整理向导 | 目录设置 → 操作类型 → 拷贝 → 解密 → 标签歌词 → 查重 → 工作区自检 → 归档；顶部「播放页面」跳回首页 |
+
+每一步都能先看「将要发生什么」再执行，长任务有逐条进度与实时日志。
+**完整说明见 [web-wizard.md](web-wizard.md)**，播放器见 [media-player.md](media-player.md)，本节只给启动方式与接口索引。
 
 ### 8.1 启动
 
@@ -172,9 +184,11 @@ MSVC 修饰导出名），实际解密固定走 `um` 离线；登录态无法程
 pip install -r requirements-dev.txt      # 仅需首次：安装 fastapi / uvicorn / httpx（接口测试）
 cd /path/to/music_helper
 python -m uvicorn web.api:app --host 127.0.0.1 --port 8000
-# 浏览器打开 http://127.0.0.1:8000/         八步向导
-#            http://127.0.0.1:8000/legacy  旧版仪表盘（配置/报告/任务日志）
+# 浏览器打开 http://127.0.0.1:8000/         音乐库播放器（首页）
+#            http://127.0.0.1:8000/wizard  八步归档整理向导
 ```
+
+> 旧版仪表盘 `/legacy` 仍可直接访问（配置/报告/任务日志），但首页与向导页都不再链接它。
 
 > `uvicorn` 通常不在 PATH，请用 `python -m uvicorn`。服务只绑定 `127.0.0.1`，不对外暴露。
 > 前端不依赖 CDN、不需要 Node 构建，Vue 运行时随仓库放在 `web/static/vendor/`。
@@ -186,6 +200,7 @@ python -m uvicorn web.api:app --host 127.0.0.1 --port 8000
 
 | 步骤 | 接口 | 说明 |
 |---|---|---|
+| 播放器首页 | `GET /api/library/tracks` | 音乐库曲目列表（只读，支持 `q` 搜索、`limit` 限制）；播放复用下方试听接口 |
 | 全局 | `GET /api/wizard/state` | 目录设置 + 库状态 + 平台能力 + 月份列表 |
 | 1 目录 | `POST /api/wizard/dirs` | 写 `config.ini [paths]` 并热重载；有任务在跑时 409 |
 | 1 目录 | `GET /api/fs/list`、`POST /api/fs/mkdir` | 选目录弹窗用；只列目录，不读文件内容 |
@@ -219,14 +234,17 @@ python -m uvicorn web.api:app --host 127.0.0.1 --port 8000
 主程序自带 Python 运行时与全部依赖，参数与本手册的 `python main.py` 完全一致：
 
 ```text
+music_helper.exe                        # 双击/无参数：打开播放器首页，不动文件（八步在 /wizard）
 music_helper.exe --help
 music_helper.exe --dry-run
-music_helper.exe --web                  # 启动八步向导，自动打开浏览器
+music_helper.exe --archive              # 跑完整流水线（无参数已不再跑）
+music_helper.exe --web                  # 启动 Web 服务，自动打开播放器首页
 music_helper.exe --web --web-port 8001  # 8000 被占用时换端口
 music_helper.exe --web --no-browser     # 不自动打开浏览器
 ```
 
-源码模式启动 Web 用 `python -m uvicorn ...`（见 8.1），绿色版一律用 `--web`。
+源码模式不带参数（`python main.py`）同样打开播放器首页；也可用 `python -m uvicorn ...`
+（见 8.1）。绿色版双击 exe 即打开播放器首页，显式写法是 `--web`。
 `--web-host` / `--web-port` 也可用环境变量 `MUSIC_HELPER_WEB_HOST` /
 `MUSIC_HELPER_WEB_PORT` 设定。外部程序在程序目录的 `tools/`，配置写在程序目录的
 config.ini，日志、报告与回收站写到程序目录的 `log/`；这些路径由

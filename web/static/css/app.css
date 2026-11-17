@@ -620,3 +620,50 @@ table.grid th.sortable .arrow { font-style: normal; font-size: 10px; color: var(
 
 /* 第 6 步两栏比对里的行内试听按钮 */
 .dedupe-play { flex: 0 0 auto; padding: 0 4px; font-size: 11px; }
+
+/* ---------------- 播放器首页（根路径） ---------------- */
+
+.home-nav { flex: 1; }
+.home-tag { font-size: 12px; color: var(--muted); }
+.topbar .actions a.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 7px 14px; border-radius: 8px; font-size: 13px;
+  border: 1px solid var(--accent); background: var(--accent);
+  color: #06111f; font-weight: 600; text-decoration: none;
+}
+.topbar .actions a.btn:hover { filter: brightness(1.08); }
+
+.home-main { padding-bottom: 130px; }
+.home-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.home-head h2 { margin: 0; font-size: 19px; font-weight: 600; }
+.home-dir { font-size: 11.5px; margin-top: 2px; max-width: 70vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.home-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.home-tools .input {
+  flex: 1; min-width: 200px; padding: 8px 11px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; color: var(--text); font: inherit; font-size: 13px;
+}
+.home-tools .input:focus { outline: none; border-color: var(--accent); }
+.home-count { font-size: 12px; white-space: nowrap; }
+
+.home-list {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--panel); overflow: hidden;
+}
+.track {
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 14px; border-bottom: 1px solid var(--border-soft);
+  cursor: pointer; transition: background 0.14s;
+}
+.track:last-child { border-bottom: 0; }
+.track:hover { background: rgba(79, 156, 249, 0.07); }
+.track.current { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.track-no { color: var(--dim); font-size: 11px; flex: 0 0 34px; }
+.track-play { color: var(--accent); flex: 0 0 16px; text-align: center; font-size: 12px; }
+.track-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.track-title { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-sub { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-flags { display: flex; gap: 5px; flex: 0 0 auto; }
+.track-time { font-size: 11.5px; color: var(--muted); flex: 0 0 62px; text-align: right; }
+.track-ext { font-size: 10.5px; flex: 0 0 42px; text-align: right; }

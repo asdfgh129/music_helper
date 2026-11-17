@@ -2,10 +2,15 @@
 """
 音乐文件管理系统 - 主程序入口
 
-三条流程：
-    默认 / --archive     WORKSPACE_DIR 流水线：解密 → 去重 → 标签 → 检查 → 移出待补全 → 年份归档
+启动方式：
+    无参数 / --web       启动 Web 服务并打开播放器首页（默认，不执行任何文件流程）
+    --archive            WORKSPACE_DIR 流水线：解密 → 去重 → 标签 → 检查 → 移出待补全 → 年份归档
     --check              LIBRARY_DIR 检查
     --manual-archive     WORKSPACE_DIR 人工确认后按年份并入 LIBRARY_DIR
+
+完全不带参数时等价于 --web：只起本地服务、打开播放器首页，不执行解密/去重/标签/检查/归档等任何文件流程。
+要跑命令行流程必须显式带参数（如 --archive / --check / --dry-run），
+避免双击 exe 时误跑完整流水线。
 
 所有破坏性动作都会先形成计划（--dry-run 可预览），统一写入 log/journal.jsonl，
 删除一律进 log/_trash 而不是真正删除。
@@ -29,8 +34,9 @@ from services import decrypt, soundalike
 
 EPILOG = '''
 使用示例:
-  python main.py                         # WORKSPACE_DIR 完整流水线（当前月份）
-  python main.py --month 202406          # 指定月份
+  python main.py                         # 无参数：启动 Web 服务并打开播放器首页（默认）
+  python main.py --archive               # WORKSPACE_DIR 完整流水线（当前月份）
+  python main.py --month 202406          # 指定月份（需配合 --archive 等流程参数）
   python main.py --dry-run               # 只出计划，不动文件
   python main.py --check                 # 检查最终库 LIBRARY_DIR
   python main.py --check --fix           # 检查并执行修复（重命名/移动不一致文件）
@@ -42,7 +48,7 @@ EPILOG = '''
   python main.py --init                  # 初始化/更新声纹库
   python main.py --checkdb               # 检查声纹库与文件一致性
   python main.py --soundalike-report     # 只列出重复候选组，不移动文件
-  python main.py --web                   # 启动 Web 八步向导（127.0.0.1:8000）
+  python main.py --web                   # 启动 Web 八步向导（127.0.0.1:8000；无参数亦同）
 '''
 
 
@@ -86,6 +92,19 @@ def run_web(host, port, open_browser=True):
     return 0
 
 
+def _effective_argv(argv=None):
+    """没有带任何参数时默认进入 Web 向导。
+
+    双击 exe 只有程序名、没有参数，等价于 ``[]``。这时只启动本地服务、打开播放器首页，
+    不执行任何文件流程，避免误改动用户文件。带任意参数则原样返回，
+    保持既有 CLI 语义（要跑完整流水线请显式用 ``--archive``）。
+    """
+    if argv is None:
+        argv = sys.argv[1:]
+    argv = list(argv)
+    return ['--web'] if not argv else argv
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description=f'音乐文件管理系统 v{config.__version__}',
@@ -117,7 +136,8 @@ def build_parser():
     parser.add_argument('--soundalike-report', action='store_true',
                         help='只列出声纹候选组，不移动文件（会刷新声纹库缓存）')
     parser.add_argument('--checkdb', action='store_true', help='检查声纹库与目录文件一致性')
-    parser.add_argument('--archive', action='store_true', help='WORKSPACE_DIR 归档（等同于默认流程）')
+    parser.add_argument('--archive', action='store_true',
+                        help='WORKSPACE_DIR 完整流水线（无参数时默认启动 Web，跑流程需显式指定）')
     parser.add_argument('--archive-manual', '--manual-archive', dest='manual_archive',
                         action='store_true', help='手动归档：WORKSPACE_DIR → 按年份并入 LIBRARY_DIR')
     parser.add_argument('--only-decrypt', action='store_true', help='只执行解密')
@@ -496,7 +516,7 @@ def flow_manual_archive(args):
 def main(argv=None):
     _ensure_console_encoding()
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(_effective_argv(argv))
 
     if args.web:
         return run_web(host=args.web_host, port=args.web_port,

@@ -52,7 +52,8 @@ FastAPI/uvicorn 服务，默认只监听 `127.0.0.1:8000`，Web 页面、音乐�
 | `services/transcode.py` | **试听链路唯一写盘处**：FFmpeg 探测、派生 MP3 缓存、后台线程状态机与进度（见 §7） |
 | `web/api.py` | 只做参数校验、组装 `StreamingResponse` / `Response`、序列化 JSON |
 | `web/static/js/player.js` | 播放器组件与歌词同步，只消费后端结构化结果 |
-| `web/static/js/step5-tags.js` / `step6-dedupe.js` | 试听入口、播放队列、编辑抽屉实时预览 |
+| `web/static/player.html` / `web/static/js/home.js` | **播放器首页**（根路径 `/`）：调 `GET /api/library/tracks` 列出音乐库曲目，点击后复用同一个 `MH.Player` 播放 |
+| `web/static/js/step5-tags.js` / `step6-dedupe.js` | 八步向导（`/wizard`）里的试听入口、播放队列、编辑抽屉实时预览 |
 
 硬约束（与 [AGENTS.md](../AGENTS.md) 一致）：
 

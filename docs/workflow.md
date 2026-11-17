@@ -140,7 +140,7 @@ soundalike -db <DB_PATH> -fpcalc-length <FPCALC_LENGTH> -file-regexp <RE> \
 4. 完整文件按年代/年份移入 `LIBRARY_DIR`，未达标文件移入 `INCOMPLETE_DIR`；
 5. 统计 `INCOMPLETE_DIR` 剩余数量并在日志中提醒。
 
-这是一步**显式确认**：默认流水线不会把文件并入最终库。
+这是一步**显式确认**：完整流水线（`--archive`）不会把文件并入最终库。
 
 ## 4. 最终库检查（`--check`）
 

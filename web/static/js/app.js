@@ -188,7 +188,7 @@
 
           <div class="actions">
             <span class="pill warn" v-if="busy">有任务在跑</span>
-            <a class="btn ghost" href="/legacy" target="_blank" rel="noopener">旧版面板</a>
+            <a class="btn ghost" href="/" title="回到音乐库播放器">播放页面</a>
             <button class="btn sm" @click="loadState" :disabled="loading">刷新</button>
           </div>
         </header>

@@ -2,7 +2,7 @@
 
 Python 音乐库流水线：**解密 → 去重 → 补标签 → 检查 → 分流 → 归档 → 人工确认入库**。
 
-面向「下载目录只是中转、最终库才是长期资产」的使用方式：默认流水线只把文件整理到工作区，
+面向「下载目录只是中转、最终库才是长期资产」的使用方式：流水线（`--archive`）只把文件整理到工作区，
 不会自动并入最终库；所有破坏性动作先出计划、写流水，删除一律进回收站。
 
 | 项目     | 说明                                                                                                                                                                   |
@@ -51,10 +51,13 @@ python main.py --help
 # 4. 只出计划，不动任何文件
 python main.py --dry-run
 
-# 5. 跑完整流水线
-python main.py
+# 5. 启动 Web 界面（无参数运行 python main.py 时同样效果，不改动任何文件）
+python main.py --web
 
-# 6. 人工确认工作区后，按年份并入最终库
+# 6. 跑完整流水线（无参数不会跑流程，需显式 --archive）
+python main.py --archive
+
+# 7. 人工确认工作区后，按年份并入最终库
 python main.py --manual-archive
 ```
 
@@ -78,7 +81,7 @@ dist/
 ├── music_helper.exe        CLI 与 Web 共用的主程序，参数同 python main.py
 ├── _internal/              自带 Python 运行时 + 全部第三方 Python 依赖
 ├── tools/                  当前平台所需外部程序（um / soundalike / fpcalc / Frida hook / QQ 安装包）
-├── web/                    八步向导页面与 Vue 运行时
+├── web/                    播放器首页（/）+ 八步向导（/wizard）页面与 Vue 运行时
 ├── config.ini              本机配置（重复打包不覆盖）
 ├── log/                    日志、报告、journal、回收站
 ├── 启动Web向导.bat / 命令行.bat
@@ -88,8 +91,10 @@ dist/
 常用命令（在 `dist/` 目录里执行）：
 
 ```text
+music_helper.exe                        # 双击运行 = 无参数 = 打开播放器首页，不动文件
 music_helper.exe --help
 music_helper.exe --dry-run
+music_helper.exe --archive              # 跑完整流水线（无参数已不再跑流程）
 music_helper.exe --web --web-port 8001
 ```
 

@@ -9,15 +9,23 @@
 `web/static/vendor/vue.global.prod.js`），后端是 `web/api.py` + `web/tasks.py`。
 业务编排在 `services/steps.py`，判定在 `core/`——`web/` 里没有任何文件操作。
 
+**页面结构**：根路径 `/` 是音乐库播放器（`web/static/player.html` + `home.js`，只读，
+列曲目并复用试听组件），本向导迁到 `/wizard`（`web/static/index.html` + `app.js`），
+两页通过顶部按钮互跳。播放器首页不执行任何文件流程。
+
 > 随仓库分发的 `vue.global.prod.js` 是 Vue **3.5.13** 的 production 全局构建
 > （MIT 许可，取自 npm 包 `vue` 的 dist 目录同名文件）。选它而不是 CDN，
 > 是为了断网也能打开向导、也避免每次加载都依赖外网。升级时直接替换该文件即可，
 > 页面无需改动。
 
 ```
+播放器首页 /  →  web/static/player.html + home.js（列曲目，复用试听组件，只读）
+                        │  顶部「八步归档整理」
+                        ▼
+八步向导   /wizard  →  web/static/index.html + app.js
 浏览器（Vue 3）──HTTP──> web/api.py ──> services/steps.py ──> core/*（判定 + Plan）
                                    └──> web/tasks.py（串行队列，逐条进度）
-旧版仪表盘：/legacy（web/index.html，仍可用）
+旧版仪表盘 /legacy（web/index.html，仅保留直接访问，不再从页面链接）
 ```
 
 ## 0. 流程总览
